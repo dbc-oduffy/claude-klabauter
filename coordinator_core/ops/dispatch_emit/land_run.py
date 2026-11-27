@@ -60,6 +60,7 @@ from coordinator_core import ipc as _ipc
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import land_run_contract as contract
+from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import EMPTY_STAGE_RESUME_FIELD
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     LEG_FOOTPRINT_FILE,
     OUTSIDE_ROW_FOOTPRINT,
@@ -180,16 +181,31 @@ def test_leg_failure(inline_review: object) -> Optional[str]:
     return None
 
 
+_STALE_MEASURE_PREFIXES = ("measured-rev-drift", "measure_unavailable")
+
+
 def test_leg_superseded_by_reverify(reason: str, inline_review: object) -> bool:
-    """True when ``reason`` is a ``measured-rev-drift`` reason, the test leg left no review, and the run's
-    re-verify record reads pass with nothing red: the re-verify is then the measurement and the drift
-    needs no refusal. Without a green re-verify the leg failure stays the ``test-infra`` refusal."""
+    """True when ``reason`` is a ``measured-rev-drift`` or ``measure_unavailable`` reason, the test leg left
+    no review, and the run's re-verify record reads pass with nothing red: the re-verify is then the
+    measurement and the stale or unknown hash needs no refusal. Without a green re-verify the leg
+    failure stays the ``test-infra`` refusal."""
     return (
         isinstance(inline_review, dict)
         and test_leg_failure(inline_review) is not None
-        and reason.startswith("measured-rev-drift")
+        and reason.startswith(_STALE_MEASURE_PREFIXES)
         and _reverify_passed(inline_review.get("reverify"))
     )
+
+
+def remeasure_stale_gap(reason: str, inline_review: object, run_dir: Path, root: Path) -> Optional[str]:
+    """When the only gap is a stale measurement (the test leg left no review and ``reason`` is a
+    ``measured-rev-drift`` / ``measure_unavailable`` one), re-measure in-process: None when the paths now
+    measure clean, else the surviving reason. Any other ``reason`` comes back unchanged."""
+    if test_leg_failure(inline_review) is None or not reason.startswith(_STALE_MEASURE_PREFIXES):
+        return reason
+    from coordinator_core.ops.dispatch_emit import measured_rev
+
+    return measured_rev.remeasure_reason(run_dir, root)
 
 
 def test_infra_refusal(reason: str, inline_review: object) -> Optional[dict]:
@@ -197,7 +213,7 @@ def test_infra_refusal(reason: str, inline_review: object) -> Optional[dict]:
     reason and the test leg left no review: the stale measurement is the leg's failure, and the remedy is
     re-arming ``dispatch.test_leg``. None for an unreadable-record reason or a leg that ran."""
     leg_failure = test_leg_failure(inline_review)
-    if not leg_failure or not reason.startswith(("measured-rev-drift", "measure_unavailable")):
+    if not leg_failure or not reason.startswith(_STALE_MEASURE_PREFIXES):
         return None
     return _error(
         f"test-leg-error: {leg_failure}; {reason}; the measurement is stale, not the requirement. "
@@ -302,6 +318,22 @@ def _stamp_withheld_prints(root: Path, reply: object) -> None:
         _record_withheld_prints(root, record_dir_rel, withheld, [])
 
 
+def _stamp_push_state(root: Path, reply: dict) -> None:
+    """Name on a committing reply whether its commit reached the owned remote.
+
+    Sets `push_state` (the `push.state` readback dict) and `push_line` (its one-line
+    summary). A readback failure never fails the landing.
+    """
+    try:
+        from coordinator_core.ops.push_state import push_state
+
+        state = push_state(root)
+    except Exception:  # noqa: BLE001 -- a landed commit is never failed by its readback
+        return
+    reply["push_state"] = state
+    reply["push_line"] = state.get("line")
+
+
 def _gate_holder_label(params: dict) -> str:
     """The run id a landing holds the byte gate under: `params.run_id`, else the id the halted
     record carries (`halted_by.run_id`), else "" (which never re-enters a holder)."""
@@ -357,6 +389,7 @@ def _dispatch_admitted(mode: str, root: Path, repo_root: Path, params: dict, bud
                         withheld_reasons=reply.get("withheld_reasons") or {},
                     )
                     _chain_landed_tranche(root, params, reply)
+                    _stamp_push_state(root, reply)
                 return reply
         except land_deadline.LandDeadlineExceeded as exc:
             if not retried and _script_read_stall_retryable(mode, exc):
@@ -381,13 +414,71 @@ def _dispatch_halted_bounded(root: Path, repo_root: Path, params: dict) -> dict:
 
     head_before: Optional[str] = None
     started = False
-    with call_io_scope.bounded_reads():
-        try:
-            head_before = head_sha(root, fresh=True)
-            started = True
-            return _dispatch_mode("halted", root, repo_root, params)
-        except IoIndeterminate as exc:
-            return _halt_read_reply(root, params, exc, head_before, started)
+    _warm_test_leg_checkin(root, params)
+    warmed_again = False
+    while True:
+        with call_io_scope.bounded_reads():
+            try:
+                head_before = head_sha(root, fresh=True)
+                started = True
+                return _dispatch_mode("halted", root, repo_root, params)
+            except IoIndeterminate as exc:
+                if (
+                    not warmed_again and started and Path(exc.path).name == "test-leg.json"
+                    and _head_after_stall(root) == head_before
+                ):
+                    warmed_again = True
+                    _await_read_drain(exc.path)
+                else:
+                    return _halt_read_reply(root, params, exc, head_before, started)
+        _warm_test_leg_checkin(root, params)
+
+
+#: Longest the one test-leg stall retry waits for the stalled worker to finish; a wedged read outlasts it and parks.
+LEG_STALL_DRAIN_SECS = 0.3
+
+
+def _await_read_drain(path: str, *, clock=None, sleep=None) -> None:
+    """Wait up to `LEG_STALL_DRAIN_SECS` for the stalled bounded read of `path` to finish.
+
+    Trap: `bounded_io.run_bounded` answers a stalled key at once until its worker returns, so a retry
+    started while a merely slow read is still running stalls again without reading.
+    The wait is a 10ms sleep poll (no spawn, no CPU); it bounds the retry path at one read deadline plus
+    this dial plus one more bounded pass, and only the test-leg stall with HEAD unmoved takes it."""
+    import time
+
+    from coordinator_core import bounded_io
+
+    clock = clock or time.monotonic
+    sleep = sleep or time.sleep
+    end = clock() + LEG_STALL_DRAIN_SECS
+    key = f"read:{path}"
+    while clock() < end:
+        if not bounded_io.is_stalled(key):
+            return
+        sleep(0.01)
+
+
+def _warm_test_leg_checkin(root: Path, params: dict) -> None:
+    """Fill this land's scope with `test-leg.json`'s check-in form before the bounded halt reads begin.
+
+    Trap: a CR-bearing leg under `text=auto` makes the check-in read the git index and an object (located
+    by `commit._index_entry_sha`, not a whole-index parse); landing inside a halt read's 500ms
+    deadline on a loaded box stalled the landing. It is paid once here, outside any per-read deadline,
+    and the bounded hash hits the memo.
+    A missing or unreadable leg is a no-op."""
+    run_id = params.get("run_id")
+    if not (isinstance(run_id, str) and safe_id(run_id)):
+        return
+    from coordinator_core.git import call_io_scope, commit
+
+    rel = f"{RECORD_DIR_ROOT}/{run_id}/test-leg.json"
+    try:
+        data = call_io_scope.bounded_path_read(root / rel)
+        if data is not None:
+            commit.checkin_form(root, rel, data)
+    except Exception:  # noqa: BLE001 -- warming is advisory (a stalled read included); the bounded landing decides
+        return
 
 
 def _head_after_stall(root: Path) -> Optional[str]:
@@ -1927,7 +2018,7 @@ def _holder_hunk_uncarried(root: Path, path: str, holders: Sequence[str]) -> boo
 
 def _unchanged_since_halt(
     root: Path, resume: object, verdict: object, manifest_abs: Optional[Path],
-    plan_rel: Optional[str], detail: dict, exclude: Sequence[str] = (),
+    plan_rel: Optional[str], detail: dict, exclude: Sequence[str] = (), leg_paths: Sequence[str] = (),
 ) -> list:
     """``[{id, reason}]`` for each blocking row of a ledger resume the verdict calls met or
     post_commit while no declared product path counts as work since the halt commit.
@@ -1956,6 +2047,10 @@ def _unchanged_since_halt(
     if not judged or (isinstance(unlanded, list) and not unlanded):
         return []
     paths, stage_head = _manifest_declared(manifest_abs)
+    if not paths and isinstance(resume, dict) and resume.get(EMPTY_STAGE_RESUME_FIELD) is True:
+        # A stage that staged no row declares nothing: the run's leg footprint is what its rows may have landed.
+        skip = (RECORD_DIR_ROOT.rstrip("/") + "/", RUN_DIR_ROOT.rstrip("/") + "/")
+        paths = [p for p in leg_paths if not p.startswith(skip) and not _process_state(p)]
     paths = [p for p in paths if p not in exclude]
     # Withheld work pending against HEAD clears every row whatever the chain base is, so the
     # base's `git log` walk is skipped; a resume with no base candidate still resolves it below.
@@ -2152,9 +2247,12 @@ def _ledger_gate(
         drifted = measured_rev.foreign_drift(run_dir, root)
         drift_reason = f"measured-rev-drift: {', '.join(drifted)}"
     except measured_rev.MeasureUnavailable as exc:
-        drifted, drift_reason = exc.paths, f"measure_unavailable: {', '.join(exc.paths)}"
+        drifted, drift_reason = exc.paths, exc.reason()
     except (OSError, ValueError):
         drifted, drift_reason = ["<record>"], "measured-rev-record-unreadable"
+    if drifted and not test_leg_superseded_by_reverify(drift_reason, inline_review):
+        fresh = remeasure_stale_gap(drift_reason, inline_review, run_dir, root)
+        drifted, drift_reason = ([], "") if fresh is None else ([fresh], fresh)
     if drifted and not test_leg_superseded_by_reverify(drift_reason, inline_review):
         infra = test_infra_refusal(drift_reason, inline_review)
         if infra is not None:
@@ -2241,6 +2339,7 @@ def _ledger_gate(
             fence.update(fenced)
         stale = _unchanged_since_halt(
             root, resume_ledger, verdict, manifest_abs, plan_rel, since_halt, fenced.get("breach") or (),
+            leg_paths=(_leg_footprint_writes(root, run_dir) or ()) if resume_ledger.get(EMPTY_STAGE_RESUME_FIELD) is True else (),
         )
         stale = [*stale, *_unclosed_halt_gaps(
             resume_ledger, verdict, _halt_gap_lines(root, resume_ledger), inline_review.get("reverify"),
@@ -2966,6 +3065,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_review import (  # noqa:
     _fixes_integrated_at,
     _reviewer_applied_fixes,
     _wave_slice_files,
+    review_owed_findings,
     run_agent_pin_events,
     verdict_pin_mismatches,
     verdict_pin_refusal,
@@ -3649,6 +3749,30 @@ def _red_is_foreign_runs(
         return bool(dirt) and all(p in held for p in dirt)
 
     return bool(files) and all(_foreign_file(f) for f in files)
+
+
+def _red_is_foreign_import(detail: object, foreign: dict) -> bool:
+    """True when a red overlay verdict is a collection failure alone (no test completed) and every import error
+    its detail names is a module whose file another run holds (``foreign`` maps path to holder, ``unattributed``
+    excluded): the red is that run's uncommitted hunk, whichever test file imported it. A truncated list
+    of collection errors, an import error on any other module, or a test that ran keeps the refusal."""
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+
+    text = str(detail).replace("\r\n", "\n")
+    held = {p.replace("\\", "/") for p, h in foreign.items() if h and h != "unattributed"}
+    if not held or cov.completed_a_test(text) or "more collection error" in text:
+        return False
+    named = [
+        (mod.replace(".", "/"), sym) for sym, mod in cov._MISSING_NAME_RE.findall(text)
+    ] + [(mod.replace(".", "/"), "") for mod in cov._MISSING_MODULE_RE.findall(text)]
+    if not named:
+        return False
+
+    def _held(stem: str, symbol: str) -> bool:
+        rels = [f"{stem}.py", f"{stem}/__init__.py"] + ([f"{stem}/{symbol}.py"] if symbol else [])
+        return any(r in held for r in rels)
+
+    return all(_held(stem, symbol) for stem, symbol in named)
 
 
 def _overlay_refusal_text(
@@ -5624,7 +5748,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 overlay.verdict == "inconclusive" and overlay.timed_out
                 and isinstance(inline_review, dict) and _reverify_passed(inline_review.get("reverify"))
             )
-            foreign_red = overlay.red and _red_is_foreign_runs(overlay.failing, reach_dirt_foreign)
+            import_red = overlay.red and _red_is_foreign_import(overlay.detail, reach_dirt_foreign)
+            foreign_red = overlay.red and (import_red or _red_is_foreign_runs(overlay.failing, reach_dirt_foreign))
             if overlay.red and overlay.failing and not foreign_red:
                 landing_set = [
                     *(p for p in commit_set if p not in non_product),
@@ -5640,7 +5765,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                     )
                     reach_dirt_foreign.update(attributed)
                     reach_dirt_foreign.update({p: "unattributed" for p in unattributed})
-                foreign_red = _red_is_foreign_runs(overlay.failing, reach_dirt_foreign, failing_reach, landing_set)
+                foreign_red = import_red or _red_is_foreign_runs(
+                    overlay.failing, reach_dirt_foreign, failing_reach, landing_set,
+                )
             if overlay.verdict in ("pre_existing", "missing", clean_overlay_verify.ENV_DEFECT) or timed_out_reverified or foreign_red:
                 reach_dirt_overlay["advisory"] = (
                     f"clean-overlay verdict {overlay.verdict}"
@@ -5697,6 +5824,15 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 "then re-land; a peer's hunk never rides this commit",
                 refused=COMMIT_SET_NOT_RECORDED_HUNKS, paths=sorted({u.partition(":")[0] for u in unrecorded}),
             )
+
+    review_run_id = sibling_run_id or art_run_id
+    owed_review = review_owed_findings(
+        root, inline_review, [p for p in commit_set if p not in settled_blobs],
+        review_run_id if isinstance(review_run_id, str) else None,
+    )
+    if owed_review is not None:
+        _remove(root, receipt_paths)
+        return _error(owed_review, refused="review-owed")
 
     stale_verdict = verdict_pin_mismatches(
         root, inline_review, [p for p in commit_set if p not in settled_blobs],
@@ -6959,28 +7095,13 @@ def _integrity(
     # A landing path reads the blob the commit lands (*landing_blobs* names the settled own-only blob,
     # else its worktree bytes); every other path reads HEAD, so a name only a peer's dirt binds does
     # not resolve.
-    if owned is not None:
-        closure_paths = sorted({*live, *owned.present})
-        findings += li.import_closure_findings(
-            root, closure_paths, sorted({*deleted, *owned.deleted}),
-            landed_text=li.committed_image_text(root, _landing_bytes(root, closure_paths, landing_blobs)),
-        )
-    else:
-        findings += li.import_closure_findings(
-            root, live, deleted,
-            landed_text=li.committed_image_text(root, _landing_bytes(root, live, landing_blobs)),
-        )
-    try:
-        from coordinator_core.authoring_leaks import import_closure
-
-        findings += [
-            li.Finding(f.path, li.IMPORT_CLOSURE_UNTRACKED, f"{f.line}: {f.detail}")
-            for f in import_closure.residue_findings(root, residue_py, live, deleted)
-        ]
-    except Exception as exc:  # noqa: BLE001 -- fail closed: an unscannable residue refuses the landing
-        findings.append(li.Finding(
-            "", li.IMPORT_CLOSURE_UNTRACKED, f"residue import scan failed: {type(exc).__name__}: {exc}",
-        ))
+    closure_paths = live if owned is None else sorted({*live, *owned.present})
+    closure_deleted = deleted if owned is None else sorted({*deleted, *owned.deleted})
+    # Every uncommitted pair target is carried or dropped by `_carry_withheld_symbol_targets` after this call.
+    findings += li.committed_image_import_findings(
+        root, closure_paths, closure_deleted, _landing_bytes(root, closure_paths, landing_blobs),
+        residue_py=residue_py, carries_pairs=True,
+    )
     land_deadline.check("land_run._integrity.since_base")
     base = li.run_base_for(root, run_id, params)
     # The merge owner skips the since-base scan for the merge's own paths only: a resolution that

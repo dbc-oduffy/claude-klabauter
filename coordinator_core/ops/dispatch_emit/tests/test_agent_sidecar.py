@@ -50,8 +50,18 @@ def test_clause_content_and_marker_is_last_line():
         assert needle in c
 
 
+def test_clause_names_sidecar_write_op_ahead_of_heredoc():
+    c = a.sidecar_clause(a.sidecar_dir("emit", "p", "C1"))
+    assert f"{a._INVOKE_CLI} sidecar.write --params-file - <<'JSON'" in c
+    assert "'{" not in c
+    assert "${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" in c
+    assert " coordinator-invoke sidecar.write" not in c
+    assert c.index("sidecar.write") < c.index("cat > <path>")
+    assert c.index("sidecar.write") < c.index("Bash heredoc")
+
+
 def test_clause_stays_under_byte_budget():
-    assert len(a.sidecar_clause(a.sidecar_dir("emit", "p", "C1")).encode()) < 900
+    assert len(a.sidecar_clause(a.sidecar_dir("emit", "p", "C1")).encode()) < 1300
 
 
 def test_js_slug_uses_same_charset_literal():

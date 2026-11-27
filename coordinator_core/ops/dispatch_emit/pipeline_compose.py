@@ -1,7 +1,7 @@
 """Pure composer for the dispatch.emit pipeline route: a validated manifest and schedule to one Workflow script.
 
-`compose_pipeline_script(manifest, inputs, schedule, *, run_id, agent_type_host)` does no I/O and
-spawns nothing. Every stage becomes exactly one literal `agent(` call site inside its own
+`compose_pipeline_script(manifest, inputs, schedule, *, run_id, agent_type_host)` spawns nothing and does
+no I/O beyond the example-retrieval-repo-serving check on a given `repo_root`. Every stage becomes exactly one literal `agent(` call site inside its own
 `phase()`, so the foreign-emission hook sees real agentType literals. Prompts and outputs are
 filled at compose time, one `re.sub` pass per string, and a substituted value is never re-scanned.
 Pre-loop and post-loop stages run once; per-subject stages run in a sequential `for` loop with a
@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, replace
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from coordinator_core.ops.dispatch_emit.emit import (
     _AGENT_MODELS,
@@ -62,7 +62,18 @@ from coordinator_core.ops.dispatch_emit.fanout_cost import (
 from coordinator_core.ops import _research_contract as _rc
 from coordinator_core.ops.dispatch_emit.chatty import EM_MAILBOX
 from coordinator_core.ops.dispatch_emit.pipeline_run import REVISIONS_MARKER, finished_rel, revisions_rel, run_name
+from coordinator_core.ops.dispatch_emit import rag_prefetch as _rag_prefetch
 from coordinator_core.ops.dispatch_emit import stage_family as _stage_family
+from coordinator_core.ops.dispatch_emit.rag_use import (
+    HALT_EXAMPLE_RETRIEVAL_REPO_CADENCE,
+    HALT_EXAMPLE_RETRIEVAL_REPO_NOT_SERVING,
+    HALT_EXAMPLE_RETRIEVAL_REPO_UNUSED,
+    HALT_UE_CORPUS_GAP,
+)
+
+_RAG_HALT_KINDS = (
+    HALT_EXAMPLE_RETRIEVAL_REPO_UNUSED, HALT_EXAMPLE_RETRIEVAL_REPO_CADENCE, HALT_EXAMPLE_RETRIEVAL_REPO_NOT_SERVING, HALT_UE_CORPUS_GAP,
+)
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 __all__ = ["compose_pipeline_script", "compose_chain_script", "compose_chain_parts", "ChainPart"]
@@ -98,17 +109,96 @@ _PRODUCED = """const produced = async (label, call) => {
 _RELAY_DECL = f"const RELAY = {_js_string_literal(PIPELINE_RELAY_CLAUSE)};"
 
 
-def _revisions_decl(name: str) -> str:
-    """The script's one `REVISIONS` const: the stage-start read of the run's revisions file, spliced after `RELAY`."""
-    revisions = f"\n\n{REVISIONS_MARKER} Revisions file: {revisions_rel(name)} (read it if it exists; a later revision governs)."
+def _anchored_rel(repo_root: str | None, rel: str) -> str:
+    """`rel` joined under `repo_root` (POSIX) so a worker in any cwd reaches the run repo; `rel` itself when no root is given."""
+    return rel if repo_root is None else f"{repo_root.rstrip('/')}/{rel}"
+
+
+def _revisions_decl(name: str, repo_root: str | None = None, rag_root: str | None = None) -> str:
+    """The script's one `REVISIONS` const: the stage-start read of the run's revisions file, spliced after `RELAY`.
+
+    Carries the example-retrieval-repo-first line when example-retrieval-repo serves `rag_root`, so every worker prompt
+    (all of which splice `REVISIONS`) states it; an unserved or absent root adds nothing.
+    """
+    from coordinator_core.ops.dispatch_emit.emit import _example_retrieval_repo_brief_line
+
+    revisions = (
+        f"\n\n{REVISIONS_MARKER} Revisions file: {_anchored_rel(repo_root, revisions_rel(name))} "
+        "(read it if it exists; a later revision governs)."
+    )
+    rag_line = _example_retrieval_repo_brief_line(rag_root)
+    if rag_line:
+        revisions += f"\n\n{rag_line}"
     # json.dumps, not _js_string_literal: the marker's apostrophe must stay verbatim for reads_revisions.
     return f"const REVISIONS = {json.dumps(revisions)};"
 
 
-def _finish_decl(name: str) -> str:
+def _finish_decl(name: str, repo_root: str | None = None) -> str:
     """The script's `FINISH` const: the final stage's instruction to write the run's terminal marker."""
-    clause = f"\n\nOn finishing, write one line, this stage's label, to {finished_rel(name)}."
+    clause = f"\n\nOn finishing, write one line, this stage's label, to {_anchored_rel(repo_root, finished_rel(name))}."
     return f"const FINISH = {json.dumps(clause)};"
+
+
+RAG_PREFETCH_PHASE = "rag-prefetch"
+RAG_PREFETCH_AGENT_TYPE = "coordinator:research-scout"
+
+#: Appended to every stage prompt of a served run: empty until the opening prefetch stage returns.
+_RAG_SPLICE = "(_ragBlock ? '\\n\\n' + _ragBlock : '')"
+
+_RAG_BOUND_JS = """const _ragBound = (text) => {
+  const body = String(text ?? '').split(_RAG_MARK).join('').trim();
+  if (!body) return '';
+  const room = _RAG_CAP - _RAG_MARK.length - 2;
+  if (room <= 0) return '';
+  let out = body;
+  if (body.length > room) {
+    const head = body.slice(0, room);
+    let end = -1;
+    for (const m of head.matchAll(/[.!?](?=\\s)|\\n/g)) end = m.index + m[0].length;
+    out = (end > 0 ? head.slice(0, end) : head).trimEnd();
+  }
+  return out ? _RAG_MARK + '\\n\\n' + out : '';
+};"""
+
+_RAG_PREFETCH_TASK = (
+    "You are the run's opening example-retrieval-repo researcher. Your duty: call example-retrieval-repo (project_semantic_search, "
+    "project_symbol, project_subsystem_profile, and the ue-addon corpus tools when this session has them) at least once "
+    "for the work below, before any Grep, Glob or web search. A failed call is still an attempt: retry once with a "
+    "narrower query. Return plain text only: up to 15 citations, one per line, each a file path (with line when known) "
+    "and a one-line finding, then at most three sentences naming gaps the corpus did not answer. Stay under 3500 "
+    "characters; every later stage of this run reads your reply as its first context. Work: "
+)
+
+
+def _rag_prefetch_lines(
+    name: str, manifest: Manifest, inputs: PipelineInputs, agent_type_host: str | None, repo_root: str | None,
+) -> list[str]:
+    """The script's `_ragBlock` state and the one opening `rag-prefetch` agent call that fills it.
+
+    A failed or empty prefetch leaves `_ragBlock` empty: it logs and never blocks the run.
+    """
+    options = ", ".join([
+        "label: 'rag-prefetch'",
+        f"agentType: {_js_string_literal(_degrade_agent_type(RAG_PREFETCH_AGENT_TYPE, agent_type_host))}",
+        f"model: {_js_string_literal(resolve_agent_model(RAG_PREFETCH_AGENT_TYPE))}",
+    ])
+    task = _js_string_literal(f"{_RAG_PREFETCH_TASK}the research brief at {inputs.brief}")
+    sidecar = sidecar_clause_js("pipeline", manifest.pipeline, "'rag-prefetch'")
+    return [
+        f"const _RAG_MARK = {json.dumps(_rag_prefetch.PREFETCH_BLOCK_MARK)};",
+        f"const _RAG_CAP = {_rag_prefetch.PREFETCH_BLOCK_CHAR_CAP};",
+        "let _ragBlock = '';",
+        _RAG_BOUND_JS,
+        "",
+        f"phase({_js_string_literal(RAG_PREFETCH_PHASE)});",
+        "try {",
+        f"  const _ragReply = await agent((RELAY + REVISIONS + '\\n\\n' + {task} + {sidecar}), {{ {options} }});",
+        "  _ragBlock = _ragBound(typeof _ragReply === 'string' ? _ragReply : (_ragReply?.reply ?? ''));",
+        "} catch (err) {",
+        "  log('rag-prefetch failed, run continues without the block: ' + String(err && err.message || err));",
+        "}",
+        "",
+    ]
 
 
 def _final_stage(schedule: Schedule) -> tuple[str, str] | None:
@@ -361,13 +451,16 @@ def _agent_call(
     stage: Stage, manifest: Manifest, inputs: PipelineInputs, agent_type_host: str | None,
     prompt: str, label: str, slug: str, finish: str = "",
     stage_families: StageFamilies | None = None,
+    rag_block: bool = False,
 ) -> str:
     """One `produced(` expression, which rejects an empty return; a roster-typed stage gets one literal call site per roster agent type. Every prompt resolves to the script's `RELAY` clause plus its template.
 
     A stage `stage_families` routes to a non-claude family wraps `_familyStage(...)` in the same `produced(` instead of `agent(`.
+    `rag_block` appends the run's `_ragBlock` (empty until the opening prefetch stage returns) after the template.
     """
     sidecar = sidecar_clause_js("pipeline", manifest.pipeline, label)
-    prompt = f"(RELAY + REVISIONS + '\\n\\n' + {prompt} + {sidecar}{finish})"
+    rag = f" + {_RAG_SPLICE}" if rag_block else ""
+    prompt = f"(RELAY + REVISIONS + '\\n\\n' + {prompt}{rag} + {sidecar}{finish})"
     family = _family_of(stage_families, manifest, stage)
 
     def call(p: str, l: str, options: str) -> str:
@@ -446,6 +539,7 @@ def _stage_expression(
     final: bool = False,
     runtime_group: bool = False,
     stage_families: StageFamilies | None = None,
+    rag_block: bool = False,
 ) -> str:
     finish = ""
     if final:
@@ -465,12 +559,12 @@ def _stage_expression(
         else f"{_js_string_literal(f'{stage.id}:')} + (i + 1)"
     )
     if not fanned:
-        expr = _agent_call(stage, manifest, inputs, agent_type_host, prompt, label, "item", finish, stage_families)
+        expr = _agent_call(stage, manifest, inputs, agent_type_host, prompt, label, "item", finish, stage_families, rag_block)
     elif stage.fan_out.emit_time:
         item_prompt = f"(item.prompt ?? withItem({prompt}, item.slug))"
         if group_sizes:
             item_prompt = f"(item.members ? {_member_prompt_chain(prompt, group_sizes)} : {item_prompt})"
-        call = _agent_call(stage, manifest, inputs, agent_type_host, item_prompt, item_label, "item.slug", finish, stage_families)
+        call = _agent_call(stage, manifest, inputs, agent_type_host, item_prompt, item_label, "item.slug", finish, stage_families, rag_block)
         expr = (
             "(async () => {\n"
             f"      const items = {holder}.items[{_js_string_literal(stage.id)}];\n"
@@ -493,7 +587,7 @@ def _stage_expression(
             members = f"chunk.map((item, j) => {fill_at('(i + j)')})"
             ids = f"chunk.map((_, j) => {stage_id} + (i + j + 1))"
             both = f"(chunk.length === 1 ? {fill_at('i')} : groupPromptOf({ids}, {members}))"
-            call = _agent_call(stage, manifest, inputs, agent_type_host, both, item_label, "item", finish, stage_families)
+            call = _agent_call(stage, manifest, inputs, agent_type_host, both, item_label, "item", finish, stage_families, rag_block)
             expr = (
                 "(async () => {\n"
                 f"      const items = {items};\n"
@@ -508,7 +602,7 @@ def _stage_expression(
                 "    })()"
             )
         else:
-            call = _agent_call(stage, manifest, inputs, agent_type_host, fill_at("i"), item_label, "item", finish, stage_families)
+            call = _agent_call(stage, manifest, inputs, agent_type_host, fill_at("i"), item_label, "item", finish, stage_families, rag_block)
             expr = (
                 "(async () => {\n"
                 f"      {'let' if stage.agent_type_from else 'const'} items = {items};\n"
@@ -549,18 +643,30 @@ def _level_lines(
     final_stage: tuple[str, str] | None = None,
     fanout_group: str = "auto",
     stage_families: StageFamilies | None = None,
+    rag_block: bool = False,
 ) -> list[str]:
     target = _RETURN_NAME[scope]
     lines: list[str] = []
     for level in schedule.levels.get(scope, ()):
         for title in dict.fromkeys(stage_phase(stages[i]) for i in level):
             lines.append(f"{indent}phase({_js_string_literal(title)});")
+        for stage_id in level:
+            producer = stages[stage_id].requires_output
+            if producer is None or producer in schedule.skipped:
+                continue
+            holder = "s" if schedule.scope.get(producer) == SCOPE_SUBJECT else "common"
+            lines += _halt_lines(
+                stages[stage_id], scope, manifest.pipeline, inputs, indent, tag, segment, segment_name(manifest, inputs),
+                escalate=_escalate_options(stages[stage_id], manifest, agent_type_host),
+                prereq=(f"{holder}.outputs[{_js_string_literal(producer)}]", _prerequisite_options(agent_type_host)),
+            )
         exprs = [
             _stage_expression(
                 stages[i], scope, manifest, inputs, stages, schedule, agent_type_host, (group_sizes or {}).get(i, ()),
                 final_stage == (scope, i),
                 _runtime_grouped(stages[i], manifest, fanout_group),
                 stage_families,
+                rag_block,
             )
             for i in level
         ]
@@ -589,11 +695,71 @@ def _escalate_options(stage: Stage, manifest: Manifest, agent_type_host: str | N
     return _agent_options(replace(stage, schema=None, effort=None), manifest, stage.agent_type, agent_type_host)
 
 
+_PREREQ_SCHEMA = {
+    "type": "object",
+    "required": ["missing"],
+    "properties": {"missing": {"type": "array", "items": {"type": "string"}}},
+}
+
+
+def _prerequisite_options(agent_type_host: str | None) -> str:
+    """Agent options of the read-only relay call that probes a stage's required prior output."""
+    return ", ".join([
+        f"agentType: {_js_string_literal(_degrade_agent_type(CLOSE_AGENT_TYPE, agent_type_host))}",
+        f"model: {_js_string_literal(resolve_agent_model(CLOSE_AGENT_TYPE))}",
+        "effort: 'low'",
+        f"schema: {json.dumps(_PREREQ_SCHEMA, sort_keys=True)}",
+    ])
+
+
+def _prerequisite_lines(
+    stage: Stage, prereq: tuple[str, str], block: Callable[[str, str], list[str]], indent: str
+) -> list[str]:
+    """JS probing `stage.requires_output`'s output file, halting through `block` when it is absent or empty.
+
+    The script has no filesystem, so one read-only relay call does the look. A probe that returns
+    no verdict halts the run as well: an unchecked output is not a present one.
+    """
+    output_ref, options = prereq
+    tail = re.sub(r"\W", "_", stage.id)
+    want, need = f"want_{tail}", f"need_{tail}"
+    producer = stage.requires_output
+    ask = (
+        _js_string_literal(
+            "Using one read-only command, check that this file exists and is not empty, and change nothing: "
+        )
+        + f" + {want} + "
+        + _js_string_literal(
+            ". Return missing as an array holding that exact path when it is absent or empty, else an empty array."
+        )
+    )
+    lead = _js_string_literal(f"stage {producer} left no output at ")
+    after = _js_string_literal(
+        f" (stage {stage.id} requires it); fix stage {producer} and re-run, nothing downstream ran"
+    )
+    unchecked = _js_string_literal(
+        f"stage {stage.id}: could not check stage {producer}'s output before dispatch; re-run, nothing downstream ran"
+    )
+    return [
+        f"{indent}const {want} = {output_ref};",
+        f"{indent}const {need} = await agent({ask}, {{ label: {_js_string_literal('prereq:' + stage.id)}, {options} }}).catch(() => null);",
+        *block(
+            f"!{need} || !Array.isArray({need}.missing)",
+            f"[{unchecked}]",
+        ),
+        *block(f"{need}.missing.length > 0", f"[{lead} + {want} + {after}]"),
+    ]
+
+
 def _halt_lines(
     stage: Stage, scope: str, pipeline: str, inputs: PipelineInputs, indent: str, tag: str,
     segment: tuple[str, str] | None = None, name: str | None = None, escalate: str | None = None,
+    prereq: tuple[str, str] | None = None,
 ) -> list[str]:
     """The early exits of a stage's halts, each ending the run (or, given `segment`, its leg) before the next stage.
+
+    Given `prereq` (the producer's output path expression, the probe's agent options), returns only
+    the `requires_output` check, to run before `stage` dispatches.
 
     Given `escalate` (agent options; the preflight's), a halt first appends an escalate line to the
     run's EM mailbox and then ends the whole run, not just its leg: a source the PM named is required.
@@ -662,6 +828,8 @@ def _halt_lines(
             f"{indent}}}",
         ]
 
+    if prereq is not None:
+        return _prerequisite_lines(stage, prereq, block, indent)
     lines: list[str] = []
     if stage.halts_unless is not None:
         lines += block(
@@ -766,6 +934,7 @@ def _segment(
     tally: list | None = None,
     final: bool = False,
     stage_families: StageFamilies | None = None,
+    rag_block: bool = False,
 ) -> tuple[list[str], list[str], list[Stage]]:
     """A segment's data consts, its body lines and its active stages; a chained segment leaves `results` to the chain and tags its result entries with the pipeline.
 
@@ -905,9 +1074,9 @@ def _segment(
     if not chained:
         body.append("const results = [];")
     body.append("")
-    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group, stage_families=stage_families)
+    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group, stage_families=stage_families, rag_block=rag_block)
     body += ["for (const s of subjects) {", "  const ret = {};", "  subjRets.push(ret);", "  try {"]
-    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group, stage_families=stage_families)
+    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group, stage_families=stage_families, rag_block=rag_block)
     body += [
         f"    results.push({{ subject: s.subject, returns: ret{tag} }});",
         "  } catch (err) {",
@@ -916,7 +1085,7 @@ def _segment(
         "}",
         "",
     ]
-    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group, stage_families=stage_families)
+    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group, stage_families=stage_families, rag_block=rag_block)
     for scope in (SCOPE_PRE, SCOPE_POST):
         if schedule.levels.get(scope):
             body.append(f"results.push({{ scope: {_js_string_literal(scope)}, returns: {_RETURN_NAME[scope]}{tag} }});")
@@ -943,6 +1112,25 @@ def _close_agent_options(agent_type_host: str | None) -> str:
         f"model: {_js_string_literal(resolve_agent_model(CLOSE_AGENT_TYPE))}",
         f"schema: {json.dumps(_CLOSE_SCHEMA, sort_keys=True)}",
     ])
+
+
+#: Turns a close reply's pre-commit example-retrieval-repo halt (`halted_by.halted` one of the four rag kinds) into the
+#: run's `halted_by`, carrying the reply's `rag_use` and `next_action`; the close committed nothing.
+_RAG_HALT_JS = (
+    f"const _ragHaltKinds = {json.dumps(list(_RAG_HALT_KINDS))};\n"
+    """const ragHaltOf = (c) => {
+  const hb = c?.halted_by;
+  if (!hb || typeof hb !== 'object' || !_ragHaltKinds.includes(hb.halted)) return {};
+  const halted = { ...hb, rag_use: c.rag_use ?? hb.rag_use ?? null, next_action: c.next_action ?? hb.next_action };
+  results.push({ scope: 'close', halted });
+  return { halted_by: halted };
+};"""
+)
+
+
+#: A close reply halted `criterion_not_met` (the sizing still owes register rows; its archive is committed) returns as
+#: `halted_by` carrying the reply's own refire `next_action`, never as a bare green `closed`.
+_CLOSE_HALT_JS = "const closeHalt = closed?.halted === 'criterion_not_met' ? { halted_by: closed } : {};"
 
 
 def _close_in_run_js(options: str) -> list[str]:
@@ -985,6 +1173,8 @@ def compose_chain_script(
     nest_scratch: bool = True,
     fanout_group: str = "auto",
     stage_families: StageFamilies | None = None,
+    repo_root: str | None = None,
+    rag_root: str | None = None,
 ) -> str:
     """One Workflow script running `segments` in order; each segment keeps its own stores in its own block, and every segment after the first, and every keyed segment, writes under `{{scratch_dir}}/<segment name>/`.
 
@@ -993,11 +1183,15 @@ def compose_chain_script(
     in `segment_halts`. A scoped run returns `{results, segment_halts}`, plus `next_action` while any
     leg did not halt; with halts its `params.halted_segments` names every segment of every halted
     leg. A one-segment script without `legs` returns at the halt, byte-identical to the plain script.
-    `nest_scratch=False` takes each segment's `scratch_dir` as final (split parts).
+    `nest_scratch=False` takes each segment's `scratch_dir` as final (split parts). `repo_root` (POSIX)
+    anchors the run's revisions and finished-marker paths, which are repo-relative by contract.
+    `rag_root` names the repo example-retrieval-repo may serve: when it does, every worker prompt carries the
+    example-retrieval-repo-first line. A caller that omits it spawns workers without the line.
     """
     if not segments:
         raise PipelineEmitRefused(["a chain needs at least one segment"])
     _check_fanout_group(fanout_group)
+    prefetch = _rag_prefetch.prefetch_applies(rag_root)
     chained = len(segments) > 1
     scoped = chained or legs is not None
     leg_of = [(legs or {}).get(segment_name(m, i), segment_name(m, i)) for m, i, _ in segments]
@@ -1012,7 +1206,7 @@ def compose_chain_script(
             manifest, inputs, schedule, agent_type_host, errors, chained=scoped,
             segment=label, skip_guard=scoped and leg_of[index] in leg_of[:index],
             fanout_group=fanout_group, tally=tally, final=index == len(segments) - 1,
-            stage_families=stage_families,
+            stage_families=stage_families, rag_block=prefetch,
         )))
     if errors:
         raise PipelineEmitRefused(sorted(set(errors)))
@@ -1020,7 +1214,8 @@ def compose_chain_script(
     manifest, inputs, _ = parts[0]
     name = run_name(manifest.pipeline, run_id)
     active = [stage for _, _, (_, _, act) in parts for stage in act]
-    phases = ", ".join(_js_string_literal(title) for title in dict.fromkeys(stage_phase(s) for s in active))
+    titles = ([RAG_PREFETCH_PHASE] if prefetch else []) + [stage_phase(s) for s in active]
+    phases = ", ".join(_js_string_literal(title) for title in dict.fromkeys(titles))
     description = manifest.description or f"Pipeline {manifest.pipeline} over {len(inputs.subjects)} subject(s), run sequentially"
     cost = FanoutCost(
         units=sum(t[0] for t in tally),
@@ -1040,9 +1235,11 @@ def compose_chain_script(
         "",
         f"const ITEM_MARK = {json.dumps(ITEM_MARK)};",
         _RELAY_DECL,
-        _revisions_decl(name),
-        _finish_decl(name),
+        _revisions_decl(name, repo_root, rag_root),
+        _finish_decl(name, repo_root),
     ]
+    if prefetch:
+        out += _rag_prefetch_lines(name, manifest, inputs, agent_type_host, repo_root)
     if not scoped:
         out += parts[0][2][0]
     fanned = [(m, s) for m, _, (_, _, act) in parts for s in act if s.fan_out.kind == FAN_OUT_OVER]
@@ -1072,7 +1269,10 @@ def compose_chain_script(
                 f"const NEXT_ACTION = {json.dumps(dict(next_action), sort_keys=True)};",
                 *_close_in_run_js(_close_agent_options(agent_type_host)),
                 "const closed = await closeInRun(NEXT_ACTION);",
-                "return { results, closed, ...(closed?.committed === true ? {} : { next_action: NEXT_ACTION }) };",
+                _RAG_HALT_JS,
+                "const ragHalt = ragHaltOf(closed);",
+                _CLOSE_HALT_JS,
+                "return { results, closed, ...(closed?.committed === true ? {} : { next_action: NEXT_ACTION }), ...closeHalt, ...ragHalt };",
                 "",
             ]
         else:
@@ -1094,11 +1294,16 @@ def compose_chain_script(
                 "{ ...NEXT_ACTION, params: { ...NEXT_ACTION.params, halted_segments: [...new Set(haltedSegments)] } };",
                 *_close_in_run_js(_close_agent_options(agent_type_host)),
                 "const closed = delivered ? await closeInRun(effective) : null;",
+                _RAG_HALT_JS,
+                "const ragHalt = ragHaltOf(closed);",
+                _CLOSE_HALT_JS,
                 "return {",
                 "  results,",
                 "  segment_halts,",
                 "  closed,",
                 "  ...(delivered && closed?.committed !== true ? { next_action: effective } : {}),",
+                "  ...closeHalt,",
+                "  ...ragHalt,",
                 "};",
                 "",
             ]
@@ -1174,6 +1379,8 @@ def compose_chain_parts(
     legs: Mapping[str, str] | None = None,
     fanout_group: str = "auto",
     stage_families: StageFamilies | None = None,
+    repo_root: str | None = None,
+    rag_root: str | None = None,
 ) -> tuple[ChainPart, ...]:
     """The chain as one script when it fits the cap, else one script per leg, ordered by each leg's first segment.
 
@@ -1186,7 +1393,8 @@ def compose_chain_parts(
     try:
         script = compose_chain_script(
             segments, run_id=run_id, agent_type_host=agent_type_host, next_action=next_action, legs=legs,
-            fanout_group=fanout_group, stage_families=stage_families,
+            fanout_group=fanout_group, stage_families=stage_families, repo_root=repo_root,
+            rag_root=rag_root,
         )
     except _ScriptCapRefused:
         if len(segments) < 2:
@@ -1208,6 +1416,7 @@ def compose_chain_parts(
             group, run_id=run_id, agent_type_host=agent_type_host,
             next_action=next_action if index == len(groups) - 1 else None,
             legs=legs or {}, nest_scratch=False, fanout_group=fanout_group, stage_families=stage_families,
+            repo_root=repo_root, rag_root=rag_root,
         ))
         for index, group in enumerate(groups)
     )
@@ -1222,9 +1431,10 @@ def compose_pipeline_script(
     agent_type_host: str | None,
     fanout_group: str = "auto",
     stage_families: StageFamilies | None = None,
+    rag_root: str | None = None,
 ) -> str:
     """The Workflow script text for `manifest` run over `inputs` on `schedule`; deterministic for fixed arguments."""
     return compose_chain_script(
         [(manifest, inputs, schedule)], run_id=run_id, agent_type_host=agent_type_host,
-        fanout_group=fanout_group, stage_families=stage_families,
+        fanout_group=fanout_group, stage_families=stage_families, rag_root=rag_root,
     )

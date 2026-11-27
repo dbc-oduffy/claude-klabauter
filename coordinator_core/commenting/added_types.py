@@ -23,8 +23,3 @@ class AddedComment:
     line: int
     text: str
     kind: CommentKind
-
-
-def added_comments(rel_path: str, before: str, after: str) -> list[AddedComment]:
-    """Comments added between `before` and `after`; suffixes outside SUFFIXES return []."""
-    raise NotImplementedError("added_comments is implemented by coordinator_core.commenting.added")

@@ -1,7 +1,8 @@
 """An EM's route preference and rationale for an engine-ask: contract, validation, scout rendering.
 
-Stdlib-only leaf: it imports nothing from ask_contract so ask_contract may import it. The
-preference is advisory input to the sizing scout, never an input to route computation.
+Imports nothing from ask_contract so ask_contract may import it. The preference is advisory
+input to the sizing scout and never an input to route computation; its one gate input is
+`honours_plan`, which only declines a research split the sizing itself does not justify.
 """
 
 from __future__ import annotations
@@ -172,6 +173,32 @@ def diverges(pref: RoutePreference, route: object) -> bool:
     return route != PREFERENCE_ROUTES[pref.route_preference]
 
 
+_MISSING_FACT_KEYS = ("questions", "missing_facts", "missing_fact")
+
+
+def _names_entry(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple)):
+        return any(_names_entry(v) for v in value)
+    return False
+
+
+def honours_plan(pref: RoutePreference, sizing: Mapping) -> bool:
+    """True when the EM preference is plan, the sizing's effective route is not research, and its
+    research block names no missing fact (no non-empty `questions` or `missing_fact(s)` entry)."""
+    if pref.route_preference != "plan" or not isinstance(sizing, Mapping):
+        return False
+    from coordinator_core.ops.dispatch_emit.sizing_fire import effective_route
+
+    if effective_route(sizing) == "research":
+        return False
+    research = sizing.get("research")
+    if isinstance(research, Mapping) and any(_names_entry(research.get(k)) for k in _MISSING_FACT_KEYS):
+        return False
+    return True
+
+
 def scout_block(pref: RoutePreference) -> str:
     """The scout-prompt section carrying the EM's steer; empty string for an empty preference."""
     if pref.is_empty():
@@ -189,6 +216,8 @@ def scout_block(pref: RoutePreference) -> str:
     lines.append(
         f"This is the EM's suggestion; size from what you find in the substrate. It does not "
         f"override your finding. When the route you assemble differs, state why as "
+        f"`{ROUTE_OVERRIDE_REASON_KEY}`. A plan preference whose rationale names a mechanism and "
+        f"paths is honoured over research unless you name a missing fact in "
         f"`{ROUTE_OVERRIDE_REASON_KEY}`."
     )
     return "\n".join(lines) + "\n"

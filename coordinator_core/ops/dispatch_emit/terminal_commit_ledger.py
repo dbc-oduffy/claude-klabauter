@@ -495,10 +495,15 @@ def withheld_evidence_unmet(
             if iid in {str(r) for r in regs or ()}:
                 owned |= {str(w) for w in row_writes.get(row, ())}
         met_by = item.get("met_by")
+        remaining_in = item.get("remaining")
         text = " ".join(str(v) for v in (
-            item.get("evidence"), *(met_by if isinstance(met_by, list) else [met_by]), *(item.get("remaining") or ()),
+            item.get("evidence"), *(met_by if isinstance(met_by, list) else [met_by]),
+            *(remaining_in if isinstance(remaining_in, list) else [remaining_in]),
         ) if v)
-        hit = sorted(p for p in withheld if p in owned or p in text)
+        hit = sorted(
+            p for p in withheld
+            if p in owned or re.search(r"(?<![\w/.-])" + re.escape(p) + r"(?![\w/-])", text)
+        )
         if not hit:
             out.append(item)
             continue

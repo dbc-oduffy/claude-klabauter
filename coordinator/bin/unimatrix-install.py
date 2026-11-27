@@ -3436,7 +3436,7 @@ def enroll_codex_runtime(engine_root, *, consent=False, check=False, dest_dir=No
     return 0
 
 
-def enroll_agy_runtime(engine_root, *, consent=False, check=False, dest_dir=None, out=None, plugin_root=None):
+def enroll_agy_runtime(engine_root, *, consent=False, check=False, dest_dir=None, out=None, plugin_root=None) -> int:
     """Shared strict Agy runtime enrollment/update: return zero only for a ready runtime.
 
     Check mode is read-only; consent must be the literal boolean True for writes.
@@ -3477,6 +3477,10 @@ def enroll_agy_runtime(engine_root, *, consent=False, check=False, dest_dir=None
             return 7
         if check:
             return 0
+        written = host_install_agy.apply()
+        if written.mcp not in ("written", "current", "present"):
+            print(f"Agy runtime: mcp={written.mcp}", file=out)
+            return 7
         install_scripts(root / "coordinator" / "bin", dest)
         state = seed_agy_hook(hp, dest, str(root))
         print(f"Agy runtime: hooks={state}", file=out)
@@ -3500,8 +3504,9 @@ def enroll_agy_runtime(engine_root, *, consent=False, check=False, dest_dir=None
         if missing:
             print(f"Agy runtime: incomplete: {', '.join(missing)}", file=out)
             return 7
-        mcp = host_install_agy.apply()
-        if mcp.mcp not in ("written", "current", "present"):
+        final = host_install_agy.apply(check=True)
+        if final.mcp != "current":
+            print(f"Agy runtime: mcp={final.mcp}", file=out)
             return 7
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"Agy runtime: {exc}", file=out)

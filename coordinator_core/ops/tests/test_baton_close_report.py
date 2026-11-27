@@ -451,10 +451,13 @@ def test_no_evidence_names_each_baton_with_a_reason(tmp_path: Path) -> None:
     assert [i["handoff_path"] for i in items] == [
         "state/handoffs/a-bare.md", "state/handoffs/b-notdone.md", "state/handoffs/c-ticked.md",
     ]
-    assert [i["reason"] for i in items] == ["nothing_cited", "targets_not_done", "acs_all_ticked"]
+    assert [i["reason"] for i in items] == ["nothing_cited", "targets_not_done", "acs_ticked"]
     assert len(items) == rep["no_evidence"] == 3
     assert items[2]["detail"] and "docs/plans/ticked.md" in items[2]["detail"] and _SHA in items[2]["detail"]
+    assert "baton.bulk_set" in items[2]["detail"]
+    assert items[2]["route"] == "baton.bulk_set" and items[2]["evidence_sha"] == _SHA
     assert items[0]["detail"] is None and items[1]["detail"] is None
+    assert "route" not in items[0] and "route" not in items[1]
     assert rep["closable"] == [] and rep["residue"] == []
 
 

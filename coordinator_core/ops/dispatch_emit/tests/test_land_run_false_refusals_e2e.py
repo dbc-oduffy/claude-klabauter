@@ -142,7 +142,7 @@ def test_a_landing_that_drops_the_siblings_line_still_refuses(stale_repo) -> Non
 def _dirty_reach(root, verdict):
     reach._track_fixture(root)
     resume, token = _stage(root)
-    _rwrite(root, reach.FIXTURE, '{"a": 2}\n')
+    _rwrite(root, reach.FIXTURE, '{"a": 2, "dirty": true}\n')
     mr.measured_rev(RUN2, reach.LANDING, repo_root=root)
     if verdict:
         _write_overlay(root, verdict)
@@ -184,3 +184,34 @@ def test_peer_dirt_in_the_verified_reach_refuses_as_unverified_on_an_inconclusiv
 
     _refused(halted, head, out, land_run.VERIFY_OVERLAY_UNVERIFIED)
     assert "inconclusive" in out["error"], out
+
+
+_CONTRACT = "coordinator_core/bug_blitz/contract.py"
+
+
+def _collection_error(name: str, module: str, tail: str = "1 error in 0.4s") -> str:
+    return (
+        "_____ ERROR collecting coordinator_core/ops/tests/test_x.py _____\n"
+        f"E   ImportError: cannot import name '{name}' from '{module}' (C:/r/{module.replace('.', '/')}.py)\n"
+        f"=== short test summary info ===\nERROR coordinator_core/ops/tests/test_x.py\n{tail}\n"
+    )
+
+
+def test_a_collection_import_error_on_a_module_another_run_holds_is_that_runs_red() -> None:
+    held = {_CONTRACT: "e7c174"}
+    detail = _collection_error("safe_id", "coordinator_core.bug_blitz.contract")
+
+    assert land_run._red_is_foreign_import(detail, held) is True
+
+
+def test_a_collection_import_error_the_foreign_dirt_does_not_explain_keeps_the_refusal() -> None:
+    held = {_CONTRACT: "e7c174"}
+    own = _collection_error("helper", "coordinator_core.ops.own_module")
+    mixed = own + _collection_error("safe_id", "coordinator_core.bug_blitz.contract")
+
+    assert land_run._red_is_foreign_import(own, held) is False
+    assert land_run._red_is_foreign_import(mixed, held) is False
+    assert land_run._red_is_foreign_import(_collection_error("safe_id", "coordinator_core.bug_blitz.contract"), {_CONTRACT: "unattributed"}) is False
+    assert land_run._red_is_foreign_import(_collection_error("safe_id", "coordinator_core.bug_blitz.contract", "(+2 more collection errors)"), held) is False
+    assert land_run._red_is_foreign_import(_collection_error("safe_id", "coordinator_core.bug_blitz.contract", "3 passed, 1 error in 0.9s"), held) is False
+    assert land_run._red_is_foreign_import("no import error here", held) is False

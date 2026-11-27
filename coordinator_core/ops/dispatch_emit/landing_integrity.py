@@ -903,19 +903,31 @@ def _waive_on_peer_free_verdict(
     worktree_root: Path, run_id: Optional[str], findings: Sequence[Finding], owners: Mapping[str, str],
 ) -> tuple[list[Finding], list[Finding]]:
     """``(refusing, advisory)``: the reds on a file the run's overlay ran and passed move to advisory when
-    every peer path is split out and the overlay verdict is green for this landing key. A red, timed-out,
-    inconclusive, mismatched or missing verdict waives nothing."""
+    some peer path is split out and the overlay verdict is green for this landing key. With every peer path
+    split the red's reach is not read; with an unsplit one left, a red whose test files reach it stays
+    refusing, and an unreadable reach falls back to waiving nothing. A red, timed-out, inconclusive,
+    mismatched or missing verdict waives nothing."""
     from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
 
     measured = _measured_record(worktree_root, run_id)
-    if not run_id or not ltt.peers_all_split(measured):
+    any_split, unsplit = ltt.split_peer_state(measured)
+    if not run_id or not any_split:
         return list(findings), []
     from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 
     verdict = cov.check_verdict(worktree_root, run_id, measured)
     if verdict.verdict != "green" or verdict.timed_out:
         return list(findings), []
-    return ltt.waive_peer_reds(findings, owners, verdict.seeds)
+    if not unsplit:
+        return ltt.waive_peer_reds(findings, owners, verdict.seeds)
+    from coordinator_core.ops.dispatch_emit.landing_reach import reach_paths
+
+    try:
+        return ltt.waive_peer_reds_by_reach(
+            findings, owners, verdict.seeds, unsplit, lambda test_file: reach_paths(worktree_root, [test_file]),
+        )
+    except Exception:  # noqa: BLE001 -- an unreadable reach waives nothing
+        return list(findings), []
 
 
 def _unrun_nodes(verdict: Mapping, nodes: Sequence[str]) -> list[str]:
@@ -953,7 +965,7 @@ def _landing_test_gate_body(
                 + "re-run: " + retest_remedy(params),
             )], "failed"
         await_detail = (
-            "the run's retest is still running; poll: " + retest_remedy(params) + " --poll --wait"
+            "the run's retest is still running; poll: " + retest_remedy(params) + " --poll"
         )
         return [remedy_or_halt(
             TARGETED_TESTS_FAILED, _in_leg_attempt,
@@ -1063,10 +1075,13 @@ def _landing_test_gate_body(
         if passing:
             findings, check = failed_targeted_tests(fresh, retest_remedy(params), cleared=cleared | passing)
         left_ids = [n for n in owed if n not in passing]
-        if left_ids and check == UNKNOWN_ONLY and ltt._measured_ids(fresh, ltt.OWED_CLEARED_KEY) is not None:
+        # An id the retest record itself names foreign is the record's own attribution, never caused here.
+        named = ltt.named_foreign(base, left_ids)
+        caused_ids = [n for n in left_ids if n not in named]
+        if caused_ids and check == UNKNOWN_ONLY and ltt._measured_ids(fresh, ltt.OWED_CLEARED_KEY) is not None:
             # The retest measured the owed ids at HEAD + the run's landing paths and these did not come back
             # green: the run's own bytes are the only change there, so the red is caused.
-            groups = ltt._group_by_file(left_ids)
+            groups = ltt._group_by_file(caused_ids)
             return [
                 ltt.tests_failed_finding(
                     path, "; ".join(ns[:3]) + "; red at HEAD plus the run's landing paths (owed base check); "
@@ -1396,6 +1411,96 @@ def withheld_closure_findings(
     return import_closure_findings(
         worktree_root, [p for p in paths if p not in out], [p for p in deleted if p not in out], landed_text,
     )
+
+
+def landing_py_bytes(
+    worktree_root: Path, paths: Sequence[str], supplied_shas: Optional[Mapping[str, str]] = None,
+) -> dict[str, "bytes | None"]:
+    """``{rel: bytes the commit lands}`` for each ``.py`` in ``paths``: the object ``supplied_shas``
+    (``{path: blob sha}``) names where it names one, else the worktree bytes (None = unreadable).
+    A non-``.py`` path is read only when ``supplied_shas`` names it. Zero spawns."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    held = dict(supplied_shas or {})
+    common = resolve_git_common_dir(Path(worktree_root)) if held else None
+    out: dict[str, "bytes | None"] = {}
+    for rel in paths:
+        if rel in held:
+            got = git_objects.read_object(common, held[rel])
+            out[rel] = got[1] if got is not None and got[0] == "blob" else None
+        elif rel.endswith(".py"):
+            try:
+                out[rel] = (Path(worktree_root) / rel).read_bytes()
+            except OSError:
+                out[rel] = None
+    return out
+
+
+def head_importer_candidates(worktree_root: Path, paths: Sequence[str], deleted: Sequence[str]) -> list[str]:
+    """Tracked HEAD ``.py`` files beside a touched ``.py`` (each ancestor directory of every landing or
+    deleted ``.py``, repo root included): the importers a commit that moves a module or drops a name can
+    strand. One bounded tree-spine read, never a corpus scan; the landing's own paths are left out."""
+    from coordinator_core.authoring_leaks import HeadView, import_closure
+
+    touched = sorted(set(import_closure.candidates([*paths, *deleted])))
+    if not touched:
+        return []
+    view = HeadView(worktree_root, touched)
+    dirs = {""}
+    for rel in touched:
+        parts = rel.split("/")[:-1]
+        dirs.update("/".join(parts[:i]) for i in range(1, len(parts) + 1))
+    skip = set(touched)
+    out: list[str] = []
+    for directory in sorted(dirs):
+        for name, (mode, _sha) in sorted(view.dir_entries(directory).items()):
+            rel = f"{directory}/{name}" if directory else name
+            if name.endswith(".py") and mode & 0o170000 == 0o100000 and rel not in skip:
+                out.append(rel)
+    return out
+
+
+def committed_image_import_findings(
+    worktree_root: Path, paths: Sequence[str], deleted: Sequence[str],
+    landing_blobs: Mapping[str, "str | bytes | None"], *, residue_py: Optional[Sequence[str]] = None,
+    carries_pairs: bool = False, landed_text: Optional[Callable[[str], Optional[str]]] = None,
+) -> list[Finding]:
+    """The one committed-image import check: does every landing ``.py`` and every importer of a module
+    or name the commit removes import cleanly from HEAD plus ``landing_blobs`` (the worktree is never
+    read for a name). Composes ``import_closure_findings`` with ``import_closure.residue_findings``.
+
+    ``residue_py`` is the caller's dirty ``.py`` set the commit leaves behind; None (no residue
+    snapshot) falls back to ``head_importer_candidates`` instead of passing. By default a name only an
+    uncommitted tracked file binds is ``LOST_DEFINITION`` (the closed-table refusal), and so is a
+    fallback-importer hit; only the landing importers of an untracked or unbound module are recorded
+    ``IMPORT_CLOSURE_UNTRACKED``. A caller that carries or drops the uncommitted target itself
+    (``carries_pairs``) gets every finding as ``IMPORT_CLOSURE_UNTRACKED``. ``landed_text`` replaces the
+    blob provider. A detector failure is one ``IMPORT_CLOSURE_UNTRACKED`` finding. Zero spawns."""
+    from coordinator_core.authoring_leaks import import_closure
+
+    land_deadline.check("landing_integrity.committed_image_import_findings")
+    deleted_set = set(deleted)
+    inner = landed_text if landed_text is not None else committed_image_text(worktree_root, landing_blobs)
+
+    def text(rel: str) -> Optional[str]:
+        return None if rel in deleted_set else inner(rel)
+
+    found = import_closure_findings(worktree_root, paths, deleted, landed_text=text)
+    if not carries_pairs:
+        pairs = lost_definition_pairs(worktree_root, found, paths)
+        found = [Finding(f.path, LOST_DEFINITION, f.detail) if f.path in pairs else f for f in found]
+    fallback = residue_py is None
+    try:
+        importers = head_importer_candidates(worktree_root, paths, deleted) if fallback else list(residue_py)
+        residue = import_closure.residue_findings(worktree_root, importers, paths, deleted, landed_text=text)
+    except Exception as exc:  # fail closed: an unreadable closure is a finding, never a pass
+        return found + [Finding(
+            "", IMPORT_CLOSURE_UNTRACKED,
+            f"residue import-closure detector failed: {type(exc).__name__}: {exc}",
+        )]
+    reason = LOST_DEFINITION if fallback and not carries_pairs else IMPORT_CLOSURE_UNTRACKED
+    return found + [Finding(f.path, reason, f"{f.line}: {f.detail}") for f in residue]
 
 
 def since_base_findings(

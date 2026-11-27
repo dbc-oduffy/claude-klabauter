@@ -276,6 +276,7 @@ _PROVENANCE_EMITTERS = {
     "peer-hunks-co-declared": _e("peer_hunk_gate", "co_declared_peer_holds"),
     "out-of-ask-hunks": _e("peer_hunk_gate", "out_of_ask_holds"),
     "unreadable-peer-claims": _e("peer_hunk_gate", "landing_holds"),
+    "co-tenant-hunks-unattributed": _e("peer_hunk_gate", "landing_holds"),
     "shipped-claim-unbacked": _e("shipped_claims", "shipped_refusal"),
     "targeted-tests-failed": _e("landing_targeted_tests", "tests_failed_finding"),
     "review-reverify-failed": _e("landing_targeted_tests", "reverify_failed_finding"),

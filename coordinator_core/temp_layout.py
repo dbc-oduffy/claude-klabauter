@@ -255,6 +255,47 @@ def managed_tempdir(repo_root: Path | str | None = None) -> Path:
     return root
 
 
+def scratch_root(repo_root: Path | str | None = None) -> Path:
+    """The one engine scratch resolver: machine-local ``paths.scratch_root`` (not created), else the managed Temp root.
+
+    The fallback is `managed_tempdir`'s root, never a drive literal. `machine_resolver` is
+    imported per call so this module stays stdlib-only at import.
+    """
+    from coordinator_core import machine_resolver
+
+    configured = machine_resolver.registry_get("paths.scratch_root")
+    if configured:
+        return Path(configured)
+    return coordinator_temp_root(repo_root) if repo_root is not None else fleet_temp_root()
+
+
+def build_root() -> Path:
+    """Machine-local ``paths.build_root`` (not created) for self-replacing outputs; unset falls back to `scratch_root()` with a warning."""
+    import warnings
+
+    from coordinator_core import machine_resolver
+
+    configured = machine_resolver.registry_get("paths.build_root")
+    if configured:
+        return Path(configured)
+    warnings.warn("paths.build_root is unset; build outputs fall back to paths.scratch_root", stacklevel=2)
+    return scratch_root()
+
+
+def build_output_dir(repo_root: Path | str, output: str) -> Path:
+    """``<build_root>/<repo dir name>/<output>``: a path only, never created or deleted.
+
+    invariant: a new output replaces the prior one in place and its maker leaves it after use.
+    ``output`` is one path segment; ValueError otherwise.
+    """
+    repo = Path(repo_root).name
+    if not repo:
+        raise ValueError(f"repo_root has no directory name: {repo_root!r}")
+    if not output or output in (".", "..") or "/" in output or "\\" in output:
+        raise ValueError(f"output must be one path segment: {output!r}")
+    return build_root() / repo / output
+
+
 _MANAGED_DIR_RE = re.compile(r"^(\d+|kept)-[0-9a-f]{6}-.+$")
 # Dead-owner entries reaped per creation: bounds the synchronous rmtree a caller can pay.
 _REAP_CAP = 8

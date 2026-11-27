@@ -3,7 +3,8 @@
 Params: ``repo_root`` (string, optional: the repo to land in; defaults to the dispatching worktree's main root),
 ``paths`` (list of repo-relative path strings, required), ``message`` (string, required; the op appends a
 ``Hand-Landed: true`` trailer), ``expect_head`` (string, optional: a full or abbreviated HEAD sha; a HEAD that
-does not start with it refuses with nothing moved).
+does not start with it refuses with nothing moved), ``run_id`` (string, optional: a known run adds one
+``Governed-By`` trailer per committed plan or sizing file its record names).
 
 The commit, the ref CAS and the 3-way sync of each landed path into the worktree are ``commit_paths``'s; this op
 adds no commit-tree or update-ref of its own. A keyed dispatch also gets the durable land record ``land_run``
@@ -309,10 +310,13 @@ def hand_land(params: dict, repo_root: Optional[Path] = None) -> dict:
     ownerless = stranded_sibling.ownerless(root, [p.replace("\\", "/") for p in paths])
     land_intent.record(root, params, kind="hand_land")
     land_intent.mark(land_intent.PHASE_COMMITTING, base=head)
+    from coordinator_core.ops.ceremony import governed_by
+
+    stamp = "\n".join([TRAILER, *governed_by.trailer_lines(root, params.get("run_id"))])
     try:
         for attempt in range(REF_CAS_ATTEMPTS):
             try:
-                outcome = commit_paths(root, paths, f"{message.rstrip()}\n\n{TRAILER}\n")
+                outcome = commit_paths(root, paths, f"{message.rstrip()}\n\n{stamp}\n")
                 break
             except CommitRefused as exc:
                 if not is_ref_moved(exc) or attempt == REF_CAS_ATTEMPTS - 1:

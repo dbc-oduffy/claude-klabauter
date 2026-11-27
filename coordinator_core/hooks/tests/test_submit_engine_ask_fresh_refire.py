@@ -120,6 +120,83 @@ def test_an_unknown_running_engine_resumes(tmp_path, monkeypatch):
     assert retired == []
 
 
+def _cancel(root: Path) -> None:
+    marker = _marker(root)
+    (root / RECORD_DIR_ROOT / RUN / "halted.json").write_text(
+        json.dumps({**marker, "halted": "cancelled", "reason": "cancelled by workflow.cancel"}), encoding="utf-8"
+    )
+
+
+def test_fresh_on_a_cancelled_run_closes_it_and_mints(tmp_path, monkeypatch):
+    root = _repo(tmp_path, stamp=OLD)
+    _cancel(root)
+    envelope, result, retired, params = _route(root, monkeypatch, OLD, fresh=True)
+    assert (envelope, result) == (None, None)
+    assert retired == [RUN]
+    marker = _marker(root)
+    assert marker["status"] == "superseded"
+    assert marker["superseded_evidence"]["kind"] == SUPERSEDED_BY_REFIRE
+    assert "fresh" not in params
+
+
+def test_a_cancelled_run_without_fresh_is_not_minted_over(tmp_path, monkeypatch):
+    root = _repo(tmp_path, stamp=OLD)
+    _cancel(root)
+    envelope, _result, retired, _ = _route(root, monkeypatch, OLD)
+    assert envelope is not None
+    assert retired == []
+    assert _marker(root)["status"] == "halted"
+
+
+@pytest.mark.parametrize("status", ["closed", "superseded"])
+def test_fresh_on_a_terminal_run_never_refuses(tmp_path, monkeypatch, status):
+    root = _repo(tmp_path, stamp=OLD, status=status)
+    envelope, result, _retired, _ = _route(root, monkeypatch, OLD, fresh=True)
+    assert (envelope, result) == (None, None)
+
+
+def _refire_leaving_successor(root: Path, monkeypatch: pytest.MonkeyPatch, *, started: bool) -> str:
+    """Drive the default fresh refire, then mint a successor stamped onto the closed run; its script never fires."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import stamp_plan_phase_at, write_run_stage_at
+
+    (root / RECORD_DIR_ROOT / RUN / "run-stage.json").write_text(json.dumps({"stage": "halted"}), encoding="utf-8")
+    _envelope, _result, retired, _ = _route(root, monkeypatch, OLD, fresh=True)
+    assert retired == [RUN]
+    successor = "ask-20261118T020202-def456"
+    srd = root / RECORD_DIR_ROOT / successor
+    srd.mkdir(parents=True)
+    write_run_stage_at(srd, "minted")
+    if started:
+        assert stamp_plan_phase_at(srd) is True
+    mod._stamp_refire_successor(root, retired, successor)
+    assert _marker(root)["superseded_evidence"]["successor"] == successor
+    return successor
+
+
+def _start_old(root: Path) -> dict:
+    from coordinator_core.ops.dispatch_emit import minted_run
+
+    return minted_run._handler({"run_id": RUN, "action": "start"}, root / ".git")
+
+
+def test_a_refire_whose_successor_never_started_leaves_the_old_run_startable(tmp_path, monkeypatch):
+    root = _repo(tmp_path, stamp=OLD)
+    _refire_leaving_successor(root, monkeypatch, started=False)
+
+    assert "run-past-minted" not in (_start_old(root)["refusal"] or "")
+    assert _marker(root)["status"] == "halted"
+
+
+def test_a_refire_whose_successor_started_keeps_the_old_run_superseded(tmp_path, monkeypatch):
+    root = _repo(tmp_path, stamp=OLD)
+    successor = _refire_leaving_successor(root, monkeypatch, started=True)
+
+    assert "run-past-minted" in _start_old(root)["refusal"]
+    marker = _marker(root)
+    assert marker["status"] == "superseded"
+    assert marker["superseded_evidence"] == {**marker["superseded_evidence"], "kind": SUPERSEDED_BY_REFIRE, "successor": successor}
+
+
 def test_fresh_on_a_run_that_cannot_close_falls_through_to_the_resume(tmp_path, monkeypatch):
     root = _repo(tmp_path, stamp=OLD)
     monkeypatch.setattr("coordinator_core.ops.dispatch_emit.halted_run.mark_superseded_by_refire", lambda *a, **k: False)

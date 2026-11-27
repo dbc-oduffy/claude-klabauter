@@ -9,9 +9,11 @@ import json
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Collection, Mapping, Optional, Sequence
+from typing import Callable, Collection, Mapping, Optional, Sequence
 
 TARGETED_TESTS_FAILED = "targeted-tests-failed"
+#: Reported reason of a retest record that is not terminal yet; same value as ``land_remainder_contract.REFUSED_RETEST_PENDING``.
+RETEST_PENDING = "retest-pending"
 REVIEW_REVERIFY_FAILED = "review-reverify-failed"
 REVERIFY_INDETERMINATE = "indeterminate"
 REVIEW_REVERIFY_INDETERMINATE = "review-reverify-indeterminate"
@@ -41,7 +43,13 @@ ZERO_RUN_KILLED = "killed"
 ZERO_RUN_FOREIGN_DEPENDENCY = "uncommitted-foreign-dependency"
 #: Engine-side: every handed target was absent from disk (evicted or parked by the run itself), so no pytest ran.
 ZERO_RUN_MISSING_TARGET = "missing-target"
+#: The interpreter the leg runs cannot import a plugin the repo's own pytest ``addopts`` needs; no pytest spawned.
+ZERO_RUN_MISSING_PLUGIN = "missing-plugin"
+#: The repo-pinned interpreter cannot import a third-party module the repo's tests need, so no test ran.
+ZERO_RUN_INTERPRETER_MISMATCH = "interpreter-mismatch"
 _ZERO_RUN_CAUSES = {
+    ZERO_RUN_INTERPRETER_MISMATCH: "the pinned test interpreter cannot import the repo's declared dependencies, so no test ran (test_infra: fix the interpreter pin, not a test failure)",
+    ZERO_RUN_MISSING_PLUGIN: "the test interpreter lacks a pytest plugin the repo's addopts requires, so no pytest ran (test_infra: provision the plugin, not a test failure)",
     ZERO_RUN_MISSING_TARGET: "every target path was absent from disk, so no test ran (an engine-side fault, not a test failure)",
     ZERO_RUN_KILLED: "the test process was killed before any test completed",
     ZERO_RUN_BUDGET: "the verify budget was spent before any test ran",
@@ -101,21 +109,51 @@ def tag_findings_with_peer_owners(findings: Sequence[Finding], owners: Mapping[s
 PEER_WAIVED_CHECK = "peer-hunks-waived"
 
 
-def peers_all_split(measured: Optional[Mapping]) -> bool:
-    """True when the record carries `peer_hunks` and every entry is ``split: true`` (the overlay candidate
-    holds HEAD plus the run's own hunks only)."""
-    peers = measured.get("peer_hunks") if isinstance(measured, Mapping) else None
-    return isinstance(peers, Mapping) and bool(peers) and all(
-        isinstance(v, Mapping) and v.get("split") is True for v in peers.values()
-    )
-
-
 def waive_peer_reds(
     findings: Sequence[Finding], owners: Mapping[str, str], seeds: Collection[str],
 ) -> tuple[list[Finding], list[Finding]]:
     """``(refusing, advisory)``: a ``TARGETED_TESTS_FAILED`` finding whose every test file is among the
     overlay's ``seeds`` (the files it ran and passed) moves to ``advisory`` carrying the peer note; any
     other finding, one naming no test file, or a file the overlay did not run stays refusing. Pure."""
+    return _waive_ran_reds(findings, owners, seeds, None)
+
+
+def split_peer_state(measured: Optional[Mapping]) -> tuple[bool, frozenset[str]]:
+    """``(any_split, unsplit)``: whether the record's `peer_hunks` holds a ``split: true`` path, and the
+    paths whose peer hunks are still in the candidate (``split`` anything but true). ``any_split`` with an
+    empty ``unsplit`` is the every-peer-split case (the overlay holds HEAD plus the run's own hunks only)."""
+    peers = measured.get("peer_hunks") if isinstance(measured, Mapping) else None
+    if not isinstance(peers, Mapping):
+        return False, frozenset()
+    flags = {str(p): isinstance(v, Mapping) and v.get("split") is True for p, v in peers.items()}
+    return any(flags.values()), frozenset(p for p, s in flags.items() if not s)
+
+
+def waive_peer_reds_by_reach(
+    findings: Sequence[Finding], owners: Mapping[str, str], seeds: Collection[str],
+    unsplit: Collection[str], reach_of: Callable[[str], Collection[str]],
+) -> tuple[list[Finding], list[Finding]]:
+    """``(refusing, advisory)`` as `waive_peer_reds`, with one more bar: a red moves to ``advisory`` only when
+    the reach of its test files (``reach_of(test file)``, a path set) holds no path of ``unsplit``, so a
+    red that can read an unsplit peer path stays refusing. ``reach_of`` raising propagates. Pure."""
+    bar = {norm_node_id(p) for p in unsplit}
+    memo: dict[str, Collection[str]] = {}
+
+    def clear_of_unsplit(files: Collection[str]) -> bool:
+        for fl in files:
+            if fl not in memo:
+                memo[fl] = reach_of(fl)
+            if bar.intersection(norm_node_id(p) for p in memo[fl]):
+                return False
+        return True
+
+    return _waive_ran_reds(findings, owners, seeds, clear_of_unsplit)
+
+
+def _waive_ran_reds(
+    findings: Sequence[Finding], owners: Mapping[str, str], seeds: Collection[str],
+    also: Optional[Callable[[Collection[str]], bool]],
+) -> tuple[list[Finding], list[Finding]]:
     ran = {norm_node_id(s) for s in seeds}
     who = "; ".join(f"{p} (run {o})" for p, o in sorted(owners.items()))
     note = (
@@ -126,7 +164,7 @@ def waive_peer_reds(
     advisory: list[Finding] = []
     for f in findings:
         files = {_node_file(i) for i in _finding_node_ids(f)} or ({_node_file(f.path)} if f.path else set())
-        if type(f) is Finding and f.reason == TARGETED_TESTS_FAILED and files and files <= ran:
+        if type(f) is Finding and f.reason == TARGETED_TESTS_FAILED and files and files <= ran and (also is None or also(files)):
             advisory.append(replace(f, detail=f"{f.detail}; {note}" if f.detail else note))
         else:
             refusing.append(f)
@@ -177,7 +215,8 @@ def reverify_indeterminate_finding(detail: str) -> Finding:
 
 #: Zero-run causes that are a collected-nothing failure of the run itself; a zero-collected review reverify is a
 #: FAIL, never a pass, never indeterminate. ``empty-selection`` counts only with a recorded argv (pytest ran).
-ZERO_COLLECTED_CAUSES = (ZERO_RUN_COLLECTION, ZERO_RUN_IMPORT_ERROR, "test_infra_failure")
+ZERO_COLLECTED_CAUSES = (ZERO_RUN_COLLECTION, ZERO_RUN_IMPORT_ERROR, "test_infra_failure", ZERO_RUN_MISSING_PLUGIN,
+                         ZERO_RUN_INTERPRETER_MISMATCH)
 
 
 def is_zero_collected(verdict: Optional[Mapping]) -> bool:
@@ -201,6 +240,8 @@ def zero_collected_cause(verdict: Mapping) -> str:
         f"zero-collected: reverify collected 0 tests ({verdict.get(ZERO_RUN_CAUSE_KEY) or 'unrecorded cause'}); "
         f"argv: {argv_text}; interpreter: {verdict.get('interpreter') or 'unrecorded'}; "
         f"cwd: {verdict.get('cwd') or 'unrecorded'}" + (f"; import error: {err}" if err else "")
+        + (f"; {verdict['missing_plugin_detail']}" if verdict.get("missing_plugin_detail") else "")
+        + (f"; {verdict['interpreter_mismatch_detail']}" if verdict.get("interpreter_mismatch_detail") else "")
     )
 
 
@@ -364,6 +405,12 @@ def _is_await(finding: Finding) -> bool:
     return isinstance(finding, RetestAwait)
 
 
+def finding_reason(finding: Finding) -> str:
+    """The reason a finding is reported under: ``RETEST_PENDING`` for the running-retest answer (which
+    carries ``TARGETED_TESTS_FAILED`` for its consumers), else the finding's own reason."""
+    return RETEST_PENDING if _is_await(finding) else finding.reason
+
+
 def derived_nodes(params: Optional[Mapping]) -> tuple[list[str], list[str]]:
     """``(nodes, searched_writes)`` for a red that names no node: the run's declared targeted set
     (``targeted_set``), else the test files reaching its writes (``params.paths``, under
@@ -453,7 +500,7 @@ def split_test_advisory(findings: Sequence[Finding]) -> tuple[list[Finding], lis
 
 def advisory_entries(advisory: Sequence[Finding]) -> list[dict]:
     """The reply shape of advisory test findings, each detail carrying the retest remedy it already names."""
-    return [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in advisory]
+    return [{"path": f.path, "reason": finding_reason(f), "detail": f.detail} for f in advisory]
 
 
 def _finding_node_ids(finding: Finding) -> list[str]:
@@ -489,6 +536,26 @@ def _node_note(nodes: Sequence[str]) -> str:
     ``NO_NODE_RECORDED``: an unattributed refusal always says which tests, or that none were recorded."""
     named = [str(n) for n in dict.fromkeys(nodes) if n]
     return f"; failing: {'; '.join(named[:3])}" if named else f"; {NO_NODE_RECORDED}"
+
+
+_FORCED_EXIT_LINE = re.compile(r"\[forced-exit\] rc=\d+: ([^\n|]*)")
+
+
+def _ran_tests(tests_run: object) -> bool:
+    return isinstance(tests_run, int) and not isinstance(tests_run, bool) and tests_run > 0
+
+
+def forced_exit_cause(verdict: Mapping) -> str:
+    """The forced-exit cause a verdict's text names (``[forced-exit] rc=N: <cause>``, as the session guard
+    prints it), else the clean-overlay synthetic-verdict marker, else ``"unrecorded"``."""
+    for key in ("summary", "reason", "detail", "error"):
+        text = str(verdict.get(key) or "")
+        found = _FORCED_EXIT_LINE.search(text)
+        if found:
+            return found.group(1).strip()
+        if text.startswith("clean-overlay verdict"):
+            return text.split(" | ")[0].strip()
+    return "unrecorded"
 
 
 def failed_targeted_tests(
@@ -547,6 +614,14 @@ def failed_targeted_tests(
             return [zero_fail_finding(
                 f"the verdict reads fail with 0 failing tests and no failing node id to attribute "
                 f"(no baseline evidence){note}; re-run: {remedy or retest_remedy(None)}",
+            )], ZERO_FAIL_CHECK
+        if status == "fail" and not note.startswith("; failing:") and _ran_tests(tests_run) and (
+            count is None or (isinstance(count, int) and not isinstance(count, bool) and count <= 1)
+        ):
+            return [zero_fail_finding(
+                f"forced exit with zero failing tests: {tests_run} tests ran, the failure count "
+                f"({count}) is the synthetic floor of a forced rc, and no failing node id was recorded "
+                f"(cause: {forced_exit_cause(verdict)}){note}; re-run: {remedy or retest_remedy(None)}",
             )], ZERO_FAIL_CHECK
         shown = f"{count} " if isinstance(count, int) else ""
         if status == "error" and count == 0:
@@ -783,6 +858,13 @@ def _measured_ids(fresh: Optional[Mapping], key: str) -> Optional[set[str]]:
     baseline = fresh.get("baseline") if isinstance(fresh, Mapping) else None
     raw = baseline.get(key) if isinstance(baseline, Mapping) else None
     return {str(n) for n in raw if n} if isinstance(raw, (list, tuple, set, frozenset)) else None
+
+
+def named_foreign(baseline: Mapping, ids: Sequence[str]) -> set[str]:
+    """The ``ids`` a measured retest record's ``baseline.foreign`` names (its own attribution: not the run's
+    red), with or without evidence. ``unverified`` and ``pre_existing`` ids never count here. Pure."""
+    foreign = {str(i.get("id") if isinstance(i, Mapping) else i) for i in (baseline.get("foreign") or [])}
+    return {str(n) for n in ids} & foreign
 
 
 def owed_check_cleared(fresh: Optional[Mapping], ids: Sequence[str]) -> set[str]:

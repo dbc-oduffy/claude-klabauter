@@ -18,6 +18,7 @@ import uuid
 from coordinator_core.ops.workflow_fire import fire
 from coordinator_core.ops.workflow_fire.backends import check as check_backend
 from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV, stamp_fire_ownership
+from coordinator_core.ops.workflow_fire.wait import DEFAULT_TIMEOUT_S
 
 
 def _save(path: Path, value: dict) -> None:
@@ -91,7 +92,7 @@ def _worker_engine_root() -> Path:
 
 def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = None,
           backend: str = 'codex', concurrency_cap: int = fire.DEFAULT_CONCURRENCY_CAP,
-          timeout_s: int = 7200, args: dict | None = None, run_id: str | None = None,
+          timeout_s: int = DEFAULT_TIMEOUT_S, args: dict | None = None, run_id: str | None = None,
           caller_session_id: str | None = None, expected: str | None = None,
           private_engine: dict | None = None, refire: bool = False) -> dict:
     check_backend(backend)
@@ -624,12 +625,17 @@ def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *
         measured = {"status": "pass-with-skips", "tests_run": 0, "tests_failed": 0,
                     "summary": "every target was evicted by this run's halt; nothing to run",
                     "skipped": [{"test": t, "reason": _EVICTED_SKIP} for t in dropped]}
+        from coordinator_core.ops.dispatch_emit import test_leg_freshness
+
+        at, head = test_leg_freshness.started_stamp(root, None)
+        measured = test_leg_freshness.stamp(measured, measured_at=at, head_sha=head)
         _save(output, measured)
         return {**measured, "evicted_targets": dropped, "sidecar_path": output.relative_to(root).as_posix(),
                 **({"measured_rev_error": measured_rev_error} if measured_rev_error else {})}
     exit_code, measured = _run_pinned_test_leg(root, output, artifacts, targets, base, timeout)
     fields = ("status", "tests_run", "tests_failed", "baseline", "baseline_method", "build_clean",
-              "skipped", "summary", "importer_overrun", "tripwires_not_run", "zero_run_cause")
+              "skipped", "summary", "importer_overrun", "tripwires_not_run", "zero_run_cause",
+              "measured_at", "head_sha")
     result = {key: measured[key] for key in fields if key in measured}
     result["sidecar_path"] = output.relative_to(root).as_posix()
     if measured_rev_error:
@@ -944,7 +950,7 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
             guard.write(str(os.getpid()))
     except FileExistsError:
         raise RuntimeError('this workflow executor has already started; inspect its durable record')
-    deadline = time.monotonic() + record.get('timeout_s', 7200)
+    deadline = time.monotonic() + record.get('timeout_s', DEFAULT_TIMEOUT_S)
     try:
         while not (artifacts / 'start').exists():
             if time.monotonic() > deadline:

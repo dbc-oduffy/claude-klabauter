@@ -4,9 +4,14 @@
 claims (a path-level commit cannot split the peer's hunks off). `out_of_ask_holds` names the
 landing paths a findings-ledger row marks `out_of_ask: true` or rates critical (P0; the structured
 fields; reviewer prose is never read) whose status is still unresolved.
-`refusal_message` words both for the operator.
+`refusal_message` words both for the operator. `landing_holds` also holds a path another run owns
+whose bytes carry hunks beyond this run's own-hunk blob (or whose withheld print is typed `co_tenant`):
+a separable path lands its own blob, a live owner parks the run, else it is withheld as provenance
+`co-tenant-hunks-unattributed`.
 
-Invariants: in-process file reads only (no spawn), except the
+Invariants: in-process file reads only (no spawn), except one write: a live co-tenant owner parks the
+run through `co_tenant_owner._park_behind` (`stage_wait.park` is idempotent, a repeat keeps the first
+deadline, so a re-evaluated hold re-parks harmlessly); and the
 `halted_criterion_met.met_at_head` reads (a status and a log) when a surviving holder is halted (it is recorded as
 `released` on its marker before its hold is dropped; an error keeps every hold); a halted holder
 whose owner session is not live (hunks or not) is released first
@@ -33,6 +38,7 @@ _LOG = logging.getLogger(__name__)
 PEER_HUNKS_CO_DECLARED = "peer-hunks-co-declared"
 OUT_OF_ASK_HUNKS = "out-of-ask-hunks"
 UNREADABLE_PEER_CLAIMS = "unreadable-peer-claims"
+CO_TENANT_HUNKS_UNATTRIBUTED = "co-tenant-hunks-unattributed"
 
 _RESOLVED = frozenset({"applied", "em-rejected", "em_rejected"})
 
@@ -576,17 +582,126 @@ def _landing_holds(
         own_declared, own_seniority,
     )
     held.update(live_held)
+    co_tenant = _co_tenant_holds(
+        worktree_root, run_id,
+        [p for p in all_paths if p in declared and p not in held and p not in deleted_paths],
+    )
+    for p, (owner, _state) in co_tenant.items():
+        held[p] = owner or CO_TENANT_HUNKS_UNATTRIBUTED
     declared_held = {p: h for p, h in held.items() if p in declared and p not in live_held}
     if declared_held:
         carried = hunk_provenance.landable_under_hold(
             worktree_root, run_id, plan_path,
             {p: h for p, h in declared_held.items() if h != UNREADABLE_HALT_RECORD and p not in deleted_paths},
-            split_only=frozenset(oa_paths),
+            split_only=frozenset(oa_paths) | frozenset(co_tenant),
         )
         for p, h in declared_held.items():
             if p in carried or h == UNREADABLE_HALT_RECORD or p in deleted_paths:
                 del held[p]
+    for p in [p for p in co_tenant if p in held]:
+        owner, state = co_tenant[p]
+        if state == "live" and _sequence_behind(worktree_root, run_id, owner, p):
+            held[p] = owner
+        else:
+            held[p] = co_tenant_unattributed_message(worktree_root, p, owner)
     return held
+
+
+def co_tenant_unattributed_message(root: Path, path: str, owner: str) -> str:
+    """The withhold reason of a path whose bytes carry a co-tenant run's hunks that cannot be separated
+    from this run's (provenance kind `CO_TENANT_HUNKS_UNATTRIBUTED`; it never refuses a landing)."""
+    who = f"run {owner}" if owner else "another run"
+    return (
+        f"{CO_TENANT_HUNKS_UNATTRIBUTED}: {who} holds uncommitted hunks on {path}; "
+        f"hand-land check: coordinator/bin/landed-tree-test-verify.py --repo {root} --paths {path}"
+    )
+
+
+def _typed_print_owners(root: Path, run_id: str) -> dict:
+    """`{path: owner run id}` for each typed `co_tenant` entry of the run's withheld print (owner `""` when
+    the entry names none). Empty on a missing or unreadable print."""
+    try:
+        import json
+
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+        from coordinator_core.ops.dispatch_emit.write_baseline import WITHHELD_PRINTS_FILE
+
+        data = json.loads((record_dir(root, run_id) / WITHHELD_PRINTS_FILE).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 -- no readable print: no typed entry
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        _norm(p): str(v.get("owner") or "") for p, v in data.items()
+        if isinstance(v, dict) and v.get("kind") == "co_tenant"
+    }
+
+
+def _carries_other_hunks(root: Path, run_id: str, path: str, owner: str) -> bool:
+    """True when the worktree bytes of `path` (checkin form) differ from the blob of HEAD plus only this
+    run's own hunks (`run_hunk_claims.own_hunks` over `own_hunk_stage.own_blob`), or when that blob cannot be
+    built (no HEAD side, no attributable own hunk, an unreadable side): unknown carries. No spawn."""
+    try:
+        from coordinator_core.ops.dispatch_emit import kept_work, own_hunk_stage, run_hunk_claims
+
+        diff = own_hunk_stage.read_diff(root, [path]).get(_norm(path))
+        if diff is None:
+            return True
+        split = run_hunk_claims.own_hunks(
+            root, run_id, path, list(diff.hunks), {owner: False} if owner else {}, head_blob=diff.head_sha,
+        )
+        if not split.own:
+            return True
+        form = kept_work.checkin_form(root, path, (root / path).read_bytes())
+        if form is None:
+            return True
+        return own_hunk_stage.own_blob(root, path, diff.head_bytes, split.own) != kept_work.blob_sha(form)
+    except Exception:  # noqa: BLE001 -- unmeasurable: the path carries
+        return True
+
+
+def _co_tenant_holds(root: Path, run_id: str, paths: Sequence[str]) -> dict:
+    """`{path: (owner run id, owner state)}` for each of `paths` whose withheld print is typed `co_tenant`
+    or which `co_tenant_owner.owner_of` gives to another run, while the bytes carry hunks beyond the run's
+    own-hunk blob. The state is `owner_of`'s ("live", "halted") or None when only the print names the owner.
+    A halted landing run holds nothing here (two halted runs land a path whole). Never raises."""
+    if not paths:
+        return {}
+    try:
+        from coordinator_core.ops import warp_run_deliverable
+        from coordinator_core.ops.dispatch_emit import co_tenant_owner
+
+        if warp_run_deliverable._halted(root, run_id):
+            return {}
+        typed = _typed_print_owners(root, run_id)
+        out: dict = {}
+        for p in paths:
+            try:
+                found = co_tenant_owner.owner_of(root, p, exclude_run_id=run_id)
+            except Exception:  # noqa: BLE001 -- no nameable owner
+                found = {"run_id": None, "state": None}
+            named = found.get("run_id")
+            if not (named or p in typed):
+                continue
+            owner = named or typed.get(p, "")
+            if _carries_other_hunks(root, run_id, p, owner):
+                out[p] = (owner, found.get("state") if named else None)
+        return out
+    except Exception:  # noqa: BLE001 -- a hold that cannot be computed adds none
+        return {}
+
+
+def _sequence_behind(root: Path, run_id: str, owner: str, path: str) -> bool:
+    """Park `run_id` behind the live `owner` of `path` through `co_tenant_owner._park_behind` (the stage-wait
+    record the owner's run-token consume wakes). False when the park is refused; never raises."""
+    try:
+        from types import SimpleNamespace
+
+        from coordinator_core.ops.dispatch_emit import co_tenant_owner
+
+        return bool(co_tenant_owner._park_behind(root, run_id, owner, SimpleNamespace(peer=path)))
+    except Exception:  # noqa: BLE001 -- no park: the path is withheld as unattributed
+        return False
 
 
 def _conflict_paths(conflicts: Sequence[str], landing_paths: Iterable[str]) -> list:

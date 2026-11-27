@@ -68,6 +68,7 @@ Negative-spec:
 from __future__ import annotations
 
 import calendar
+import functools
 try:
     from _sha1 import sha1 as _sha1  # CPython's builtin SHA-1: no _hashlib/OpenSSL load
 except ImportError:  # pragma: no cover
@@ -284,6 +285,37 @@ def svc_dir(engine_root: Optional[Path] = None) -> Path:
 
 RUNTIME_BASE_ENV = "COORDINATOR_WARM_RUNTIME_BASE"
 
+#: Settings-home `machine-local/` file naming the runtime base (one line, an
+#: absolute path). Second rung after `RUNTIME_BASE_ENV`; door.c
+#: `door_svc_dir_w` and door_posix.c `runtime_base_candidates` read the same
+#: file in the same order -- change all three together.
+RUNTIME_BASE_KEY_FILE = ".coordinator-warm-runtime-base"
+
+
+def _machine_local_runtime_base() -> str:
+    """The base named by settings-home `machine-local/<RUNTIME_BASE_KEY_FILE>`;
+    empty when absent, unreadable, blank or not absolute (a relative value
+    would resolve against whatever cwd the engine has, so it reads as unset)."""
+    home = os.environ.get("COORDINATOR_SETTINGS_HOME", "").strip()
+    if home:
+        root = Path(home)
+    else:
+        base = os.environ.get("CLAUDE_HOME", "").strip() or str(Path.home())
+        root = Path(base) / ".coordinator-claude-settings"
+    return _read_runtime_base_key(str(root / "machine-local" / RUNTIME_BASE_KEY_FILE))
+
+
+@functools.lru_cache(maxsize=8)
+def _read_runtime_base_key(key_path: str) -> str:
+    """invariant: read once per key path per process -- `svc_dir` is on every request's path, the
+    key file lives on the settings-home drive that may be the contended one, and a live server's
+    runtime base must not move under it."""
+    try:
+        text = Path(key_path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return text if text and Path(text).is_absolute() else ""
+
 
 def _runtime_base() -> Path:
     r"""User-local, non-synced base for warm runtime state.
@@ -330,6 +362,9 @@ def _runtime_base() -> Path:
     override = os.environ.get(RUNTIME_BASE_ENV, "").strip()
     if override:
         return Path(override)
+    configured = _machine_local_runtime_base()
+    if configured:
+        return Path(configured)
     local = os.environ.get("LOCALAPPDATA")
     if local:
         return Path(local)

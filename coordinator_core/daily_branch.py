@@ -63,6 +63,7 @@ widening the shape regex without re-deriving this cost.
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from pathlib import Path
@@ -272,6 +273,68 @@ def is_work_branch(name: Optional[str]) -> bool:
     ):
         return True
     return _is_work_shape(name, _THREE_SEG_ANY_OWNER_RE)
+
+
+_USER_SECTION_RE = re.compile(r"(?ims)^[ \t]*\[user\][ \t]*$(.*?)(?=^[ \t]*\[|\Z)")
+_USER_NAME_KEY_RE = re.compile(r"(?im)^[ \t]*name[ \t]*=[ \t]*(.*?)[ \t]*$")
+_UNOWNED_FIRST_SEGMENTS = frozenset({"main", "master", "origin", "release", "migration", "feature", "work"})
+
+
+def _config_user_name(text: str) -> Optional[str]:
+    found: Optional[str] = None
+    for section in _USER_SECTION_RE.finditer(text):
+        for match in _USER_NAME_KEY_RE.finditer(section.group(1)):
+            value = re.split(r"[ \t][#;]", match.group(1), maxsplit=1)[0].strip().strip('"')
+            found = value or found
+    return found
+
+
+def read_git_user_name(repo_root) -> Optional[str]:
+    """`user.name` from the repo's common-dir config, else the global config; zero git spawns.
+
+    Tolerant text scan; `[include]`/`[includeIf]` are not followed. None on absent key or read failure. Never raises.
+    """
+    paths = []
+    try:
+        from coordinator_core.lifecycle import git_common_dir
+
+        paths.append(git_common_dir(Path(repo_root)) / "config")
+    except Exception:  # noqa: BLE001 - best-effort
+        pass
+    glob = os.environ.get("GIT_CONFIG_GLOBAL")
+    if glob:
+        paths.append(Path(glob))
+    else:
+        try:
+            home = Path.home()
+            xdg = os.environ.get("XDG_CONFIG_HOME")
+            paths.append(home / ".gitconfig")
+            paths.append((Path(xdg) if xdg else home / ".config") / "git" / "config")
+        except Exception:  # noqa: BLE001 - no resolvable home
+            pass
+    for path in paths:
+        try:
+            found = _config_user_name(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        if found:
+            return found
+    return None
+
+
+def is_user_branch(name: Optional[str], repo_root) -> bool:
+    """True iff <name> is `<first>/<rest>` where <first> equals this repo's `git config user.name`.
+
+    Negative spec: case-sensitive; main/release/migration/feature/work/origin first
+    segments never match; no user.name, a bare name or an empty tail is False; the
+    owned-remote decision stays with `owned_push_remote`. None returns False.
+    """
+    if not name or "/" not in name:
+        return False
+    first, _, rest = name.partition("/")
+    if not first or not rest or first in _UNOWNED_FIRST_SEGMENTS:
+        return False
+    return read_git_user_name(repo_root) == first
 
 
 def has_remote_prefix(name: Optional[str]) -> bool:

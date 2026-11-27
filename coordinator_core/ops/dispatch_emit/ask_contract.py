@@ -103,13 +103,13 @@ STOP_AFTER_PLAN = "plan"
 #: The one name for a stop-after phase: the engine-ask `args` key, the `asks[i]` key, the emit param
 #: and the slice sizing's `em_analysis` key. Only `STOP_AFTER_PLAN` is a legal value.
 STOP_AFTER_KEY = "stop_after"
-_PARKED_NEXT_ACTION_HEAD = "Run /mise-prep on "
-_PARKED_NEXT_ACTION_TAIL = ", then /mise-en-place."
+_PARKED_NEXT_ACTION_HEAD = "Plan landed: "
+_PARKED_NEXT_ACTION_TAIL = "; re-fire the sizing to stage and run it, no baton needed."
 _PARKED_NEXT_ACTION_NO_PLAN = "the run's plan"
 
 
 def parked_next_action(plan_rel: str | None) -> str:
-    """The `next_action` of a parked halt: what the EM runs on the landed plan."""
+    """The `next_action` of a parked halt: the sizing refire that stages the landed plan (certified or not, the stage gates decide)."""
     return f"{_PARKED_NEXT_ACTION_HEAD}{plan_rel or _PARKED_NEXT_ACTION_NO_PLAN}{_PARKED_NEXT_ACTION_TAIL}"
 
 
@@ -199,6 +199,21 @@ def stop_after_plan_live(dir_: Path) -> bool:
 #: Edges that continue a run's own work (a refire, a reserved-id bind): an ancestor reached through one that
 #: already recorded its park has discharged its marker. `chain_parent` is a handoff and never discharges.
 _RESUME_KEYS = ("resumes_ask", "resumed_from", "reserved_parent")
+#: Record-dir file of a run emitted without `stop_after` over an ancestor whose live marker it does not resume:
+#: `stop_after_source` follows no resume edge out of that run, so the park is not inherited at stage time either.
+RESUME_PARK_CUT_FILE = "stop-after-resume-cut.json"
+
+
+def write_resume_park_cut(root: Path, run_dir: Path) -> bool:
+    """Write `RESUME_PARK_CUT_FILE` into `run_dir` when its lineage holds an inherited live marker; True when written.
+
+    Called for a fire whose effective stop_after is None: whatever marker `stop_after_source` still finds
+    through a resume edge is one this fire did not resume, so the cut keeps it from parking the run later."""
+    source = stop_after_source(root, Path(run_dir).name)
+    if not source or not source["inherited"]:
+        return False
+    atomic_write_bytes(Path(run_dir) / RESUME_PARK_CUT_FILE, b'{"cut": "resume"}\n', preserve_mode=False)
+    return True
 
 
 def stop_after_source(root: Path, run_id: str) -> Optional[dict]:
@@ -225,7 +240,11 @@ def stop_after_source(root: Path, run_id: str) -> Optional[dict]:
                 sender = (_read_json_object(dir_ / STOP_AFTER_FILE) or {}).get("from")
                 return {"run_id": rid, "from": sender if isinstance(sender, str) else "", "inherited": depth > 0}
             run = _read_json_object(dir_ / "run.json") or {}
-            nxt.extend((v, k in _RESUME_KEYS) for k in LINEAGE_KEYS if isinstance(v := run.get(k), str))
+            cut = (dir_ / RESUME_PARK_CUT_FILE).is_file()
+            nxt.extend(
+                (v, k in _RESUME_KEYS) for k in LINEAGE_KEYS
+                if isinstance(v := run.get(k), str) and not (cut and k in _RESUME_KEYS)
+            )
         if not nxt:
             return None
         frontier = nxt
@@ -333,7 +352,8 @@ def _recorded_run_base(dir_: Path, run_record: dict) -> Optional[str]:
 
 def ask_warp_run(root: Path, ask_id: str) -> Optional[str]:
     """The warp run an ask launched: its run-stage `warp_run` when stamped, else the newest
-    `warp-<stem>-<stamp>` dir of the ask's sizing whose stamp is not older than the ask's. One listing,
+    `warp-<stem>-<stamp>` dir of the ask's sizing whose stamp is not older than the ask's, else the
+    `pipeline-research-<stamp>` run emitted from that sizing (`_ask_research_run`). Two listings,
     file reads only, no git spawn. The listing path is a heuristic: a later run of the same sizing from another
     ask also matches, so only the stamped link is exact. None when the ask is unsafe, names no sizing, or launched nothing."""
     if not isinstance(ask_id, str) or not safe_id(ask_id):
@@ -354,7 +374,7 @@ def ask_warp_run(root: Path, ask_id: str) -> Optional[str]:
     try:
         listing = os.listdir(warp)
     except OSError:
-        return None
+        listing = []
     candidates = sorted(
         (n[len(warp_prefix):], n)
         for n in listing
@@ -368,6 +388,58 @@ def ask_warp_run(root: Path, ask_id: str) -> Optional[str]:
         named = (_read_json_object(warp / name / "run.json") or {}).get("sizing_rel")
         if isinstance(named, str) and PurePosixPath(named.replace("\\", "/")).as_posix() == norm:
             return name
+    return _ask_research_run(root, ask_stamp, norm)
+
+
+_RESEARCH_RUN_PREFIX = "pipeline-research-"
+_RESEARCH_RECEIPT_SUFFIX = ".workflow.mjs.emitted.json"
+_BRIEF_POINTER_BYTES = 400
+
+
+def _names_sizing(path_text: object, norm: str) -> bool:
+    """True when `path_text` (repo-relative or absolute, either slash) is the sizing `norm`."""
+    if not isinstance(path_text, str):
+        return False
+    p = path_text.strip().replace("\\", "/")
+    return bool(p) and (p == norm or p.endswith("/" + norm))
+
+
+def _ask_research_run(root: Path, ask_stamp: str, norm: str) -> Optional[str]:
+    """The newest `pipeline-research-<stamp>` run, stamped no earlier than the ask, emitted from the ask's sizing.
+
+    A research ask launches as a pipeline-research run, live or closed (the close leaves its scratch dir and
+    emission receipt in place), never as a `warp-<stem>` run. The receipt's `brief` is the sizing itself, or
+    the scratch `brief.md` whose first line points at it. One listing of `RUN_DIR_ROOT`, a receipt read per
+    later-stamped research run, no git spawn. Like the warp listing this is a heuristic: a later research run
+    of the same sizing matches too."""
+    base = Path(root) / RUN_DIR_ROOT
+    try:
+        listing = os.listdir(base)
+    except OSError:
+        return None
+    floor = ask_stamp[:15]
+    hits = sorted(
+        n[: -len(_RESEARCH_RECEIPT_SUFFIX)]
+        for n in listing
+        if n.startswith(_RESEARCH_RUN_PREFIX)
+        and n.endswith(_RESEARCH_RECEIPT_SUFFIX)
+        and n[len(_RESEARCH_RUN_PREFIX):len(_RESEARCH_RUN_PREFIX) + 15] >= floor
+    )
+    for name in reversed(hits):
+        if not safe_id(name):
+            continue
+        receipt = _read_json_object(base / f"{name}{_RESEARCH_RECEIPT_SUFFIX}") or {}
+        if _names_sizing(receipt.get("sizing"), norm) or _names_sizing(receipt.get("brief"), norm):
+            return name
+        brief = receipt.get("brief")
+        if isinstance(brief, str) and brief.replace("\\", "/").endswith("/brief.md"):
+            try:
+                with open(base / name / "brief.md", encoding="utf-8", errors="replace") as fh:
+                    head = fh.read(_BRIEF_POINTER_BYTES)
+            except OSError:
+                continue
+            if any(_names_sizing(tok, norm) for tok in head.split("`")):
+                return name
     return None
 
 
@@ -1451,9 +1523,11 @@ SUBMITTER_FIELD = "submitter_session_id"
 
 def write_run_stage_at(
     record_path: Path, stage: str, *, steps_planned: int | None = None, now: str | None = None,
-    warp_run: str | None = None, session_id: str | None = None,
+    warp_run: str | None = None, session_id: str | None = None, rag_use: dict[str, Any] | None = None,
 ) -> Path:
-    """Atomically write `stage` into `<record_path>/run-stage.json` and return the path. One read of
+    """Atomically write `stage` into `<record_path>/run-stage.json` and return the path. `rag_use`
+    (a `dispatch.stage_rag_gate` reply) is written as the record's `rag_use` key when given and kept
+    from the prior file otherwise. One read of
     the prior file, one write. `session_id`/`started_at` come from the prior file; the first stamp of
     any stage sets them (`session_id` null when unresolvable), so a run that never passed the ledger
     start still projects as a `WorkflowRun`. The first stamp records `session_id` when given, else the
@@ -1492,6 +1566,8 @@ def write_run_stage_at(
         data["steps_planned"] = int(steps_planned)
     if warp_run:
         data["warp_run"] = warp_run
+    if rag_use:
+        data["rag_use"] = rag_use
     atomic_write_bytes(path, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     return path
 
@@ -1674,10 +1750,12 @@ def record_driver_session_at(record_path: Path, session_id: str) -> Path:
     return path
 
 
-def write_run_stage(repo_root: Path, run_id: str, stage: str, *, steps_planned: int | None = None) -> Path:
+def write_run_stage(
+    repo_root: Path, run_id: str, stage: str, *, steps_planned: int | None = None, rag_use: dict[str, Any] | None = None,
+) -> Path:
     """`write_run_stage_at` over the run's record dir. Raises ValueError on a bad stage or an unsafe
     run id."""
-    return write_run_stage_at(record_dir(repo_root, run_id), stage, steps_planned=steps_planned)
+    return write_run_stage_at(record_dir(repo_root, run_id), stage, steps_planned=steps_planned, rag_use=rag_use)
 
 
 def read_run_stage(repo_root: Path, run_id: str) -> dict[str, Any] | None:
@@ -1690,11 +1768,13 @@ def read_run_stage(repo_root: Path, run_id: str) -> dict[str, Any] | None:
 
 def stamp_run_stage(
     repo_root: Path, run_id: str, stage: str, *, steps_planned: int | None = None, session_id: str | None = None,
+    rag_use: dict[str, Any] | None = None,
 ) -> None:
     """Best-effort `write_run_stage`: a ValueError or OSError never reaches the op it rides on."""
     try:
         stamp_run_stage_at(
             record_dir(repo_root, run_id), stage, steps_planned=steps_planned, session_id=session_id,
+            rag_use=rag_use,
         )
     except ValueError:
         pass
@@ -1702,12 +1782,13 @@ def stamp_run_stage(
 
 def stamp_run_stage_at(
     record_path: Path, stage: str, *, steps_planned: int | None = None, warp_run: str | None = None,
-    session_id: str | None = None,
+    session_id: str | None = None, rag_use: dict[str, Any] | None = None,
 ) -> None:
     """Best-effort `write_run_stage_at`: a ValueError or OSError never reaches the op it rides on."""
     try:
         write_run_stage_at(
             record_path, stage, steps_planned=steps_planned, warp_run=warp_run, session_id=session_id,
+            rag_use=rag_use,
         )
     except (ValueError, OSError):
         pass
@@ -1716,6 +1797,56 @@ def stamp_run_stage_at(
             record_terminal_judge_at(record_path)
         except (ValueError, OSError):
             pass
+
+
+#: Record dirs older than this are not scanned for an ask a research close settles; the drain's sweep window.
+CLOSED_ASK_LOOKBACK_SECONDS = 24 * 3600
+
+
+def stamp_closed_research_asks(
+    repo_root: Path, run_id: str, sizing_rel: str | None, *, now: float | None = None,
+) -> list[str]:
+    """Stamp `landed` on every ask still at `minted` that a committed research close settles; returns their ids.
+
+    An ask is settled when its id is `run_id`, or its `run.json` names `sizing_rel`. Only a never-staged
+    `minted` record with no `warp_run` is stamped, so the never-launched sweep skips it and the run is
+    not judged. One scandir, one run-stage read per recent `ask-*` dir, no git spawn. Never raises."""
+    import time
+
+    root = Path(repo_root)
+    cutoff = (time.time() if now is None else now) - CLOSED_ASK_LOOKBACK_SECONDS
+    norm = PurePosixPath(sizing_rel.replace("\\", "/")).as_posix() if sizing_rel else None
+    stamped: list[str] = []
+    names: list[str] = []
+    try:
+        with os.scandir(root / RECORD_DIR_ROOT) as it:
+            for e in it:
+                if not e.name.startswith("ask-"):
+                    continue
+                try:
+                    if e.name == run_id or e.stat().st_mtime >= cutoff:
+                        names.append(e.name)
+                except OSError:
+                    continue
+    except OSError:
+        return stamped
+    for name in sorted(names):
+        try:
+            if not safe_id(name):
+                continue
+            rd = record_dir(root, name)
+            stage = _read_json_object(rd / RUN_STAGE_FILE)
+            if not stage or stage.get("stage") != "minted" or stage.get("warp_run") or "staged_at" in stage:
+                continue
+            if name != run_id:
+                named = (_read_json_object(rd / "run.json") or {}).get("sizing_rel")
+                if not (norm and isinstance(named, str) and PurePosixPath(named.replace("\\", "/")).as_posix() == norm):
+                    continue
+            write_run_stage_at(rd, "landed")
+            stamped.append(name)
+        except (ValueError, OSError):
+            continue
+    return stamped
 
 
 def write_ledger_halt(path: Path, halt: LedgerHalt) -> None:

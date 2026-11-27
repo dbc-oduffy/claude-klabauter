@@ -1,5 +1,6 @@
 """Behavior pins for the unimatrix far-box autolink launcher: ssh and process spawns are faked."""
 import importlib.util
+import io
 import json
 import os
 import re
@@ -3224,6 +3225,82 @@ def test_agy_replay_over_staged_hooks_leaves_exactly_one_sessionstart_registrati
     starts = [h for h in data[inst.AGY_HOOK_KEY]["SessionStart"] if inst.AGY_SESSIONSTART_SCRIPT in h["command"]]
     registered = [k for k, v in data.items() if isinstance(v, dict) and "SessionStart" in v]
     assert cleared == ["agy"] and len(starts) == 1 and registered == [inst.AGY_HOOK_KEY]
+
+
+_AGY_SEED_STUBS = (
+    "seed_agy_hook", "seed_host_status_line", "seed_agy_allow_rule", "_seed_agy_config", "seed_agy_plugin",
+    "seed_agy_sidecar", "seed_peer_doctrine",
+)
+
+
+def _agy_enroll_rig(inst, tmp_path, monkeypatch, mcp_bytes):
+    home = tmp_path / "home"
+    cfg = home / ".gemini" / "config" / "mcp_config.json"
+    if mcp_bytes is not None:
+        cfg.parent.mkdir(parents=True)
+        cfg.write_bytes(mcp_bytes)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.setattr(inst, "agy_hooks_path", lambda: tmp_path / "agy" / "hooks.json")
+    monkeypatch.setattr(inst, "agy_plugins_path", lambda: tmp_path / "agy" / "plugins.json")
+    monkeypatch.setattr(inst, "agy_settings_path", lambda: tmp_path / "agy" / "settings.json")
+    monkeypatch.setattr(inst, "host_present", lambda name: True)
+    monkeypatch.setattr(inst, "external_session_capability", lambda root: (True, ""))
+    monkeypatch.setattr(inst, "install_scripts", lambda *a, **k: None)
+    monkeypatch.setattr(inst, "launcher_sac_blocked", lambda: True)
+    monkeypatch.setattr(inst, "_resolve_agy_plugin_root", lambda p: tmp_path / "plugin")
+    monkeypatch.setattr(inst, "_write_agy_plugin_tree", lambda ns, out, dest: True)
+    monkeypatch.setattr(inst, "agy_sidecars_dir", lambda: tmp_path / "agy" / "sidecars")
+    monkeypatch.setattr(inst, "agy_rules_path", lambda: tmp_path / "agy" / "GEMINI.md")
+    monkeypatch.setattr(inst, "render_peer_doctrine", lambda dest: "")
+    monkeypatch.setattr(inst, "_seed_standing_doctrine", lambda *a, **k: [])
+    for name in _AGY_SEED_STUBS:
+        monkeypatch.setattr(inst, name, lambda *a, **k: "created")
+    return cfg
+
+
+@pytest.mark.parametrize("mcp_bytes", [b"", None])
+def test_enroll_agy_runtime_registers_example_retrieval_repo_in_an_empty_or_missing_mcp_config(tmp_path, monkeypatch, mcp_bytes):
+    inst = load("unimatrix-install")
+    cfg = _agy_enroll_rig(inst, tmp_path, monkeypatch, mcp_bytes)
+    out = io.StringIO()
+    assert inst.enroll_agy_runtime(tmp_path / "root", consent=True, dest_dir=tmp_path / "dest", out=out) == 0
+    assert "Agy runtime ready" in out.getvalue()
+    assert "project-rag" in json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]
+
+
+def test_enroll_agy_runtime_registers_example_retrieval_repo_before_a_later_step_fails(tmp_path, monkeypatch):
+    inst = load("unimatrix-install")
+    cfg = _agy_enroll_rig(inst, tmp_path, monkeypatch, b"")
+
+    def boom(*a, **k):
+        raise OSError("disk contention")
+
+    monkeypatch.setattr(inst, "install_scripts", boom)
+    out = io.StringIO()
+    assert inst.enroll_agy_runtime(tmp_path / "root", consent=True, dest_dir=tmp_path / "dest", out=out) == 7
+    assert "Agy runtime ready" not in out.getvalue()
+    assert "project-rag" in json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]
+
+
+def test_enroll_agy_runtime_never_reports_ready_over_an_empty_mcp_config(tmp_path, monkeypatch):
+    inst = load("unimatrix-install")
+    cfg = _agy_enroll_rig(inst, tmp_path, monkeypatch, b"")
+    from coordinator_core.install import host_install_agy
+
+    real_apply = host_install_agy.apply
+
+    def truncating_apply(*a, check=False, **k):
+        result = real_apply(*a, check=check, **k)
+        if not check:
+            cfg.write_bytes(b"")
+        return result
+
+    monkeypatch.setattr(host_install_agy, "apply", truncating_apply)
+    out = io.StringIO()
+    assert inst.enroll_agy_runtime(tmp_path / "root", consent=True, dest_dir=tmp_path / "dest", out=out) == 7
+    assert "Agy runtime ready" not in out.getvalue()
 
 
 def test_replay_marker_name_and_actions_mirror_the_installers(env):

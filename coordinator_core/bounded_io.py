@@ -132,6 +132,12 @@ def run_bounded(
     return job.result  # type: ignore[return-value]
 
 
+def is_stalled(key: str) -> bool:
+    """True while a worker that overran its deadline on ``key`` has not returned."""
+    with _lock:
+        return key in _stalled
+
+
 def inflight_open_paths() -> "list[OpenPath]":
     """Paths with an open/read in flight, oldest first. A dict copy under a lock: no I/O, never raises."""
     with _open_lock:

@@ -9,6 +9,7 @@ is released only by closed dispositions in the master inventory.
 from __future__ import annotations
 
 import heapq
+import itertools
 import posixpath
 from collections import defaultdict
 from dataclasses import dataclass
@@ -157,6 +158,86 @@ def _topological(row_ids: Sequence[str], deps: Mapping[str, Set[str]]) -> List[s
     return order
 
 
+def pack_rows(
+    order: Sequence[str],
+    *,
+    plan_of: Mapping[str, str],
+    row_bytes: Mapping[str, int],
+    plan_bytes: Mapping[str, int],
+    fixed_bytes: int,
+    budget: float,
+) -> List[List[str]]:
+    """Cut ``order`` into consecutive parts under ``budget``, preferring plan boundaries.
+
+    A part is charged ``fixed_bytes`` once, each row's bytes, and each distinct plan's
+    ``plan_bytes`` once, the plan charge capped so that the plan's own rows still fit
+    one part: a plan too costly for any part lands alone and whole, not split by row.
+    Only a row whose own bytes plus ``fixed_bytes`` exceed ``budget`` raises
+    ``RowOverBudgetError``.
+    """
+    room = budget - fixed_bytes
+    plan_rows: Dict[str, int] = defaultdict(int)
+    for r in order:
+        plan_rows[plan_of[r]] += row_bytes[r]
+    charge = {
+        p: max(0, int(min(plan_bytes.get(p, 0), room - total))) for p, total in plan_rows.items()
+    }
+    chunks: List[List[str]] = []
+    current: List[str] = []
+    seen: Set[str] = set()
+    used = 0
+
+    def extra(plan: str) -> int:
+        return 0 if plan in seen else charge[plan]
+
+    def add(r: str) -> None:
+        nonlocal used
+        used += row_bytes[r] + extra(plan_of[r])
+        seen.add(plan_of[r])
+        current.append(r)
+
+    def flush() -> None:
+        nonlocal current, seen, used
+        chunks.append(current)
+        current, seen, used = [], set(), 0
+
+    for plan, group in itertools.groupby(order, key=lambda r: plan_of[r]):
+        run = list(group)
+        whole = sum(row_bytes[r] for r in run)
+        if current and used + whole + extra(plan) + fixed_bytes <= budget:
+            for r in run:
+                add(r)
+            continue
+        if current and whole + charge[plan] + fixed_bytes <= budget:
+            flush()
+            for r in run:
+                add(r)
+            continue
+        for r in run:
+            if row_bytes[r] + fixed_bytes > budget:
+                raise RowOverBudgetError(
+                    f"row {r!r}: {row_bytes[r]} row bytes + {fixed_bytes} fixed bytes exceeds "
+                    f"the part budget {int(budget)}"
+                )
+            if current and used + row_bytes[r] + extra(plan) + fixed_bytes > budget:
+                flush()
+            add(r)
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def split_at_plan_boundary(order: Sequence[str], plan_of: Mapping[str, str]) -> Optional[List[List[str]]]:
+    """Two consecutive halves of ``order`` cut where the plan changes nearest the middle,
+    or ``None`` when ``order`` holds one plan."""
+    cuts = [i for i in range(1, len(order)) if plan_of[order[i]] != plan_of[order[i - 1]]]
+    if not cuts:
+        return None
+    mid = len(order) / 2
+    cut = min(cuts, key=lambda i: (abs(i - mid), i))
+    return [list(order[:cut]), list(order[cut:])]
+
+
 def partition(
     rows: Sequence[Mapping[str, str]],
     *,
@@ -167,8 +248,12 @@ def partition(
     run_id: str,
     source_inventory: str,
     start_sha: Optional[str],
+    plan_bytes: Optional[Mapping[str, int]] = None,
 ) -> dict:
-    """Lane-map dict (``mise-lane-map.schema.json``) over all rows, live and closed."""
+    """Lane-map dict (``mise-lane-map.schema.json``) over all rows, live and closed.
+
+    ``plan_bytes`` (spec path -> bytes a plan adds to any part holding one of its rows)
+    defaults to no per-plan cost."""
     ids = [_row_id(r) for r in rows]
     if len(set(ids)) != len(ids):
         seen_ids: Set[str] = set()
@@ -244,24 +329,14 @@ def partition(
     lane_order = [n for n in names if n in lane_rows] + ([_HUB] if _HUB in lane_rows else [])
     for lane in lane_order:
         ordered = _topological(sorted(lane_rows[lane]), deps)
-        chunks: List[List[str]] = []
-        current: List[str] = []
-        used = 0
-        for r in ordered:
-            cost = row_bytes[r] + fixed_bytes
-            if cost > budget:
-                raise RowOverBudgetError(
-                    f"row {r!r}: {row_bytes[r]} row bytes + {fixed_bytes} fixed bytes exceeds "
-                    f"the part budget {int(budget)} (byte_cap {params.byte_cap} x headroom "
-                    f"{params.headroom})"
-                )
-            if current and used + row_bytes[r] + fixed_bytes > budget:
-                chunks.append(current)
-                current, used = [], 0
-            current.append(r)
-            used += row_bytes[r]
-        if current:
-            chunks.append(current)
+        chunks = pack_rows(
+            ordered,
+            plan_of=plan,
+            row_bytes=row_bytes,
+            plan_bytes=plan_bytes or {},
+            fixed_bytes=fixed_bytes,
+            budget=budget,
+        )
         parts: List[dict] = []
         for n, chunk in enumerate(chunks, start=1):
             pid = lane if len(chunks) == 1 else f"{lane}-p{n}"

@@ -7,7 +7,9 @@ absent, times out, or emits unparseable output: None means "unknown", never "zer
 
 from __future__ import annotations
 
+import fnmatch
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,7 +22,15 @@ DEBOUNCE_SECONDS = 180
 # A probe is a real engine-corpus call, so it must not ride the 5s scan tick.
 PROBE_INTERVAL_SECONDS = 60
 HALT_RAG_CORPUS_DOWN = "rag_corpus_down"
+HALT_EXAMPLE_RETRIEVAL_REPO_UNUSED = "example_retrieval_repo_unused"
+HALT_EXAMPLE_RETRIEVAL_REPO_CADENCE = "example_retrieval_repo_cadence"
+HALT_EXAMPLE_RETRIEVAL_REPO_NOT_SERVING = "example_retrieval_repo_not_serving"
+HALT_UE_CORPUS_GAP = "ue_corpus_gap"
+TIER_NONE, TIER_RAG, TIER_UE = "none", "rag", "ue"
+GATED_ROLES_RELPATH = "coordinator/contract/example-retrieval-repo-gated-roles.json"
+DEFAULT_TOOL_PREFIX = "mcp__project-rag__"
 DEGRADED = "degraded"
+SEARCH_DEGRADED_KEY = "search_degraded"
 # The checker made no example-retrieval-repo call: a checker-behaviour gap, not an outage.
 RAG_NOT_USED = "rag_not_used"
 # The checker transcript could not be located or read: unknown, not an outage.
@@ -155,6 +165,276 @@ def rag_installed(repo_root: str | Path) -> bool:
         return find_example_retrieval_repo_dir(str(repo_root)) is not None
     except Exception:
         return False
+
+
+_MCP_CACHE: dict[str, tuple[int, frozenset]] = {}
+
+
+def _mcp_names_in(path: Path, *, nested: bool) -> frozenset:
+    """Lower-cased MCP server names declared in the JSON file at `path`; empty on any error.
+
+    `nested` also reads each `projects[*].mcpServers` (the `~/.claude.json` shape). Memoised on mtime.
+    """
+    try:
+        key, mtime = str(path), path.stat().st_mtime_ns
+    except OSError:
+        return frozenset()
+    hit = _MCP_CACHE.get(key)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+    names: set[str] = set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        scopes = [data] if isinstance(data, dict) else []
+        if nested and scopes:
+            scopes += [p for p in (data.get("projects") or {}).values() if isinstance(p, dict)]
+        for scope in scopes:
+            servers = scope.get("mcpServers")
+            if isinstance(servers, dict):
+                names.update(str(n).lower() for n in servers)
+    except (OSError, ValueError, AttributeError):
+        pass
+    out = frozenset(names)
+    _MCP_CACHE[key] = (mtime, out)
+    return out
+
+
+def rag_tier(
+    repo_root: str | Path,
+    *,
+    settings: Optional[Path] = None,
+    plugin_roots: Optional[Iterable[Path]] = None,
+    mcp_names: Optional[Iterable[str]] = None,
+) -> str:
+    """Enforcement tier for `repo_root`: "none" (example-retrieval-repo not installed), "rag", or "ue".
+
+    Installed means an in-repo or settings-home index/dir, an installed plugin or a registered MCP
+    server named for example-retrieval-repo. "ue" means a ue-addon or example-game-repo plugin/server is installed, or
+    `is_ue_repo(repo_root)` holds on an installed box. Staleness or a broken layer never lowers the
+    tier. No subprocess; never raises (an unreadable source reads as absent).
+    """
+    try:
+        root = Path(repo_root)
+        if mcp_names is None:
+            from coordinator_core._settings_home import home_dir
+
+            names = _mcp_names_in(home_dir() / ".claude.json", nested=True) | _mcp_names_in(
+                root / ".mcp.json", nested=False
+            )
+        else:
+            names = frozenset(str(n).lower() for n in mcp_names)
+        if plugin_roots is None:
+            from coordinator_core.ops.dispatch_emit.plugin_review_overlay import installed_plugin_roots
+
+            plugin_roots = installed_plugin_roots()
+        from coordinator_core.ops.dispatch_emit.plugin_review_overlay import _plugin_name
+
+        plugin_names = {_plugin_name(Path(r)).lower() for r in plugin_roots}
+        if settings is None:
+            from coordinator_core._settings_home import settings_home
+
+            settings = settings_home()
+        every = names | plugin_names
+        ue_addon = any(("ue-addon" in n or "example-game-repo" in n) for n in every)
+        installed = (
+            any("project-rag" in n for n in every)
+            or (Path(settings) / "project-rag").is_dir()
+            or rag_installed(root)
+        )
+        if not installed and not ue_addon:
+            return TIER_NONE
+        return TIER_UE if ue_addon or is_ue_repo(root) else TIER_RAG
+    except Exception:
+        return TIER_NONE
+
+
+_EXEMPT_FALLBACK = ("*executor*", "*test-runner*", "*op-relay*")
+_GATED_FALLBACK = (
+    "*sizing-scout*", "*plan-author*", "*enricher*", "*prior-art-checker*", "*premise-checker*",
+    "*research*", "*specialist*", "*scout*", "*reviewer*", "*staff-eng*",
+)
+#: Fallback cadence when the DoE file is missing: one example-retrieval-repo call in every 12 tool calls.
+_UE_CADENCE_FALLBACK = {"window_tool_calls": 12, "min_rag_calls": 1}
+
+
+def _pattern_list(value: Any) -> list[str]:
+    return [str(v).strip().lower() for v in value if str(v).strip()] if isinstance(value, list) else []
+
+
+def load_gated_roles(plugin_root: str | Path | None = None) -> dict:
+    """Gated-role config `{gated, exempt, ue_cadence, tool_prefix, source[, reason]}`.
+
+    Reads `coordinator/contract/example-retrieval-repo-gated-roles.json` under `plugin_root` (else the first
+    installed plugin root carrying it). A missing, unreadable or malformed file yields the built-in
+    fallback with `source: "fallback"` and a `reason`, so the hard rule never lapses silently.
+    Role entries are fnmatch patterns over the agent type (plugin prefix optional).
+    """
+    path: Optional[Path] = None
+    if plugin_root is not None:
+        path = Path(plugin_root) / GATED_ROLES_RELPATH
+    else:
+        try:
+            from coordinator_core.ops.dispatch_emit.plugin_review_overlay import installed_plugin_roots
+
+            path = next((r / GATED_ROLES_RELPATH for r in installed_plugin_roots()
+                         if (r / GATED_ROLES_RELPATH).is_file()), None)
+        except Exception:
+            path = None
+    fallback = {
+        "gated": list(_GATED_FALLBACK), "exempt": list(_EXEMPT_FALLBACK),
+        "ue_cadence": dict(_UE_CADENCE_FALLBACK), "tool_prefix": DEFAULT_TOOL_PREFIX,
+        "source": "fallback",
+    }
+    if path is None:
+        return {**fallback, "reason": "gated-roles file not found"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("not a JSON object")
+    except (OSError, ValueError) as exc:
+        return {**fallback, "reason": f"gated-roles file unreadable: {exc}"}
+    gated, exempt = _pattern_list(data.get("gated")), _pattern_list(data.get("exempt"))
+    if not gated:
+        return {**fallback, "reason": "gated-roles file lists no gated roles"}
+    cad = data.get("ue_cadence")
+    cadence = dict(_UE_CADENCE_FALLBACK)
+    if isinstance(cad, dict) and _as_int(cad.get("window_tool_calls")) > 0 and _as_int(cad.get("min_rag_calls")) > 0:
+        cadence = {"window_tool_calls": _as_int(cad["window_tool_calls"]),
+                   "min_rag_calls": _as_int(cad["min_rag_calls"])}
+    prefix = data.get("tool_prefix")
+    return {"gated": gated, "exempt": exempt, "ue_cadence": cadence,
+            "tool_prefix": prefix if isinstance(prefix, str) and prefix else DEFAULT_TOOL_PREFIX,
+            "source": "file"}
+
+
+def is_gated(agent_type: Any, roles: dict) -> bool:
+    """True when `agent_type` matches a gated pattern and no exempt pattern (exempt wins)."""
+    t = str(agent_type or "").strip().lower()
+    if not t:
+        return False
+    forms = {t, t.rsplit(":", 1)[-1]}
+
+    def hit(patterns: Any) -> bool:
+        return any(fnmatch.fnmatchcase(f, p) for p in _pattern_list(patterns) for f in forms)
+
+    return hit(roles.get("gated")) and not hit(roles.get("exempt"))
+
+
+def cadence_gap(positions: Iterable[int], total: int, window: int, minimum: int) -> bool:
+    """True when some window of `window` consecutive tool calls out of `total` holds fewer than `minimum` hits.
+
+    `positions` are 0-based indices of example-retrieval-repo calls among the agent's tool calls. A sequence
+    shorter than `window` is one window.
+    """
+    pos = sorted({int(p) for p in positions if 0 <= int(p) < max(total, 1)})
+    if window <= 0 or minimum <= 0:
+        return False
+    span = min(window, total) if total > 0 else 0
+    if span == 0:
+        return False
+    lo = 0
+    hi = 0
+    for start in range(total - span + 1):
+        while lo < len(pos) and pos[lo] < start:
+            lo += 1
+        hi = max(hi, lo)
+        while hi < len(pos) and pos[hi] < start + span:
+            hi += 1
+        if hi - lo < min(minimum, span):
+            return True
+    return False
+
+
+def _agent_entry(row: dict) -> dict:
+    return {"agent_id": str(row.get("agent_id") or ""), "agent_type": str(row.get("agent_type") or ""),
+            "label": str(row.get("label") or ""), "rag_calls": _as_int(row.get("rag_calls"))}
+
+
+def agent_rag_halt(
+    rows: Optional[list[dict]],
+    *,
+    tier: str,
+    roles: dict,
+    serving: Any = None,
+) -> Optional[dict]:
+    """The halted_by dict for per-agent example-retrieval-repo use, or None when the run may continue.
+
+    `rows` are agent_usage rows (`agent_id`, `agent_type`, `label`, `rag_calls`, `rag_errors`,
+    `rag_positions`, optional `tool_calls`, `rag_empty`); a row whose `rag_calls` is None is unknown
+    and never halts. Any example-retrieval-repo tool_use counts as an attempt, a failed call included. Tier none
+    never halts. Tier rag halts on zero attempts by a gated agent: `{halted, agents}`. Tier ue checks,
+    in order, `serving` (False or `{serving: False, layer}`) -> example_retrieval_repo_not_serving
+    `{halted, layer, queries, agents}`; every successful call an empty ue-addon answer (`rag_empty` an
+    int or a list of queries, fleet-wide) -> ue_corpus_gap `{halted, layer, queries, agents}`; zero
+    attempts -> example_retrieval_repo_unused; below `roles["ue_cadence"]` -> example_retrieval_repo_cadence
+    `{halted, agents}` (agents carry actual `rag_calls`).
+    """
+    if tier not in (TIER_RAG, TIER_UE):
+        return None
+    live = [r for r in rows or [] if isinstance(r, dict)]
+    gated = [r for r in live if r.get("rag_calls") is not None and is_gated(r.get("agent_type"), roles)]
+    if tier == TIER_UE:
+        down = serving is False or (isinstance(serving, dict) and serving.get("serving") is False)
+        if down:
+            layer = str(serving.get("layer") or "project-rag") if isinstance(serving, dict) else "project-rag"
+            return {"halted": HALT_EXAMPLE_RETRIEVAL_REPO_NOT_SERVING, "layer": layer, "queries": [], "agents": []}
+        queries: list[str] = []
+        empty = ok_calls = 0
+        for r in live:
+            e = r.get("rag_empty")
+            if isinstance(e, list):
+                queries += [str(q) for q in e]
+                empty += len(e)
+            else:
+                empty += _as_int(e)
+            ok_calls += max(_as_int(r.get("rag_calls")) - _as_int(r.get("rag_errors")), 0)
+        if empty > 0 and empty >= ok_calls:
+            return {"halted": HALT_UE_CORPUS_GAP, "layer": "ue-addon", "queries": queries, "agents": []}
+    silent = [_agent_entry(r) for r in gated if _as_int(r.get("rag_calls")) <= 0]
+    if silent:
+        return {"halted": HALT_EXAMPLE_RETRIEVAL_REPO_UNUSED, "agents": silent}
+    if tier == TIER_UE:
+        cad = roles.get("ue_cadence") or _UE_CADENCE_FALLBACK
+        window, minimum = _as_int(cad.get("window_tool_calls")), _as_int(cad.get("min_rag_calls"))
+        low = []
+        for r in gated:
+            pos = [p for p in (r.get("rag_positions") or []) if isinstance(p, int) and not isinstance(p, bool)]
+            total = max(_as_int(r.get("tool_calls")), (max(pos) + 1) if pos else 0)
+            if cadence_gap(pos, total, window, minimum):
+                low.append(_agent_entry(r))
+        if low:
+            return {"halted": HALT_EXAMPLE_RETRIEVAL_REPO_CADENCE, "agents": low}
+    return None
+
+
+def stage_rag_verdict(*, served: bool, rows: Optional[list[dict]]) -> dict:
+    """Stage verdict `{verdict, rag_calls, per_worker}` from per-worker usage rows.
+
+    `rows` are agent_usage rows (`label`, `agent_id`, `rag_calls`, `rag_failed`); None or empty
+    means no worker transcript was read: TRANSCRIPT_UNREADABLE, never zero. A served repo whose
+    workers made no example-retrieval-repo call in total is RAG_NOT_USED; calls that all failed are DEGRADED.
+    """
+    if not served:
+        return {"verdict": "not_applicable", "rag_calls": 0, "per_worker": []}
+    per_worker: list[dict] = []
+    calls = failed = 0
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        n, bad = _as_int(r.get("rag_calls")), _as_int(r.get("rag_failed"))
+        calls += n
+        failed += bad
+        per_worker.append({"label": str(r.get("label") or ""), "agent_id": str(r.get("agent_id") or ""),
+                           "rag_calls": n, "rag_failed": bad})
+    if not per_worker:
+        return {"verdict": TRANSCRIPT_UNREADABLE, "rag_calls": 0, "per_worker": []}
+    if calls <= 0:
+        verdict = RAG_NOT_USED
+    elif failed >= calls:
+        verdict = DEGRADED
+    else:
+        verdict = "ok"
+    return {"verdict": verdict, "rag_calls": calls, "per_worker": per_worker}
 
 
 def docs_check_rag_verdict(

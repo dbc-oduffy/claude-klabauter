@@ -49,6 +49,29 @@ def test_spliced_new_file_reads_staged_to_real_git(tmp_path: Path) -> None:
     _git(repo, "fsck", "--strict")
 
 
+def test_nested_batch_splice_reads_clean_and_a_blob_mismatch_still_reads_modified(
+    tmp_path: Path,
+) -> None:
+    repo = _repo(tmp_path)
+    (repo / "state" / "h").mkdir(parents=True)
+    updates = {}
+    for i in range(20):
+        body = f"body {i}\n".encode()
+        (repo / "state" / "h" / f"b{i:02d}.md").write_bytes(body)
+        updates[f"state/h/b{i:02d}.md"] = (0o100644, write_object(repo / ".git", b"blob", body))
+    stale = write_object(repo / ".git", b"blob", b"not what is on disk\n")
+    updates["state/h/b07.md"] = (0o100644, stale)
+
+    index_write.splice_index(repo, updates)
+
+    lines: dict = {}
+    for ln in _status(repo).splitlines():
+        lines.setdefault(ln[:2], []).append(ln[3:])
+    assert lines.pop("AM") == ["state/h/b07.md"]
+    assert sorted(lines.pop("A ")) == [f"state/h/b{i:02d}.md" for i in range(20) if i != 7]
+    assert not lines
+
+
 def test_untouched_entries_survive_verbatim(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "added.txt").write_text("x\n", encoding="utf-8", newline="\n")
@@ -348,3 +371,61 @@ def test_collapse_unmerged_leaves_other_conflicts_refused(tmp_path: Path) -> Non
     sha = write_object(repo / ".git", b"blob", b"resolved\n")
     with pytest.raises(index_write.IndexWriteError, match="unmerged"):
         index_write.splice_index(repo, {"a.txt": (0o100644, sha)}, collapse_unmerged={"a.txt"})
+
+
+def _spliced_batch(repo: Path, n: int) -> dict:
+    (repo / "state").mkdir()
+    updates = {}
+    for i in range(n):
+        body = f"body {i}\n".encode()
+        (repo / "state" / f"b{i:04d}.md").write_bytes(body)
+        updates[f"state/b{i:04d}.md"] = (0o100644, write_object(repo / ".git", b"blob", body))
+    return updates
+
+
+def test_scale_809_trusted_updates_walk_once_skip_rehash_and_bound_name_decodes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo(tmp_path)
+    updates = _spliced_batch(repo, 809)
+    index_write.splice_index(repo, updates)
+    trusted = {}
+    for rel in updates:
+        st = (repo / rel).stat()
+        trusted[rel] = (st.st_size, st.st_mtime_ns)
+
+    walks, rehashes, names = [], [], []
+    real_walk, real_match, real_name = (
+        index_write._walk_entries, index_write._worktree_matches_blob, index_write._entry_name,
+    )
+    monkeypatch.setattr(
+        index_write, "_walk_entries", lambda *a, **k: (walks.append(1), real_walk(*a, **k))[1]
+    )
+    monkeypatch.setattr(
+        index_write, "_worktree_matches_blob",
+        lambda *a, **k: (rehashes.append(1), real_match(*a, **k))[1],
+    )
+    monkeypatch.setattr(
+        index_write, "_entry_name", lambda *a, **k: (names.append(1), real_name(*a, **k))[1]
+    )
+
+    index_write.prepare_splice(repo, updates, trusted_stats=trusted).publish()
+
+    assert len(walks) == 1
+    assert rehashes == []
+    entries = 810
+    assert len(names) < len(updates) * 2 * entries.bit_length()
+    assert _status(repo).count("A  state/") == 809
+
+
+def test_trusted_stat_that_no_longer_matches_runs_the_blob_check(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    updates = _spliced_batch(repo, 3)
+    rel = "state/b0001.md"
+    st = (repo / rel).stat()
+    stale_trust = {rel: (st.st_size, st.st_mtime_ns + 1)}
+    (repo / rel).write_bytes(b"peer edit after the caller hashed\n")
+
+    index_write.prepare_splice(repo, updates, trusted_stats=stale_trust).publish()
+
+    assert f"AM {rel}" in _status(repo)

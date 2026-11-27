@@ -108,6 +108,7 @@ from coordinator_core.ops.ceremony.commit_admission import (
     publish_allowlist_drift_refusal,
     skill_weight_check_worktree,
 )
+from coordinator_core.ops.ceremony import governed_by
 from coordinator_core.ops.ceremony.commit_source import post_commit_reader
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.session import claim_index as session_claim_index
@@ -1663,6 +1664,8 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             list(raw_paths) + raw_removed,
             session_id_override=session_id_override,
         )
+    with ledger.phase("governed_by_stamp"):
+        message = governed_by.stamp(message, worktree_root)
 
     with ledger.phase("skill_weight_check"):
         skill_weight_refusal, skill_weight_note = skill_weight_check_worktree(

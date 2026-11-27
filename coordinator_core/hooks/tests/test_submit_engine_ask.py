@@ -2028,7 +2028,7 @@ def test_a_refire_of_a_premint_held_ask_still_runs_the_refire_join_and_a_stale_p
     first = pointer.read_text(encoding="utf-8")
     mod.evaluate(_payload(root, {"ask": "Build  the THING", "source": "relayed"}))
     assert len(calls) == 1
-    assert pointer.read_text(encoding="utf-8") != first  # no holder was found: the stale pointer went, the new premint wrote its own
+    assert pointer.read_text(encoding="utf-8") == first  # the join dropped the holderless pointer; the unlaunched premint is reused and re-pointed
 
 
 def test_an_ask_with_a_brief_file_keeps_the_refire_join_listing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2142,3 +2142,106 @@ def test_a_two_ready_asks_submission_writes_a_launcher_that_starts_both_and_name
     script = Path(hso["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
     assert "r1" in script and "r2" in script and "status: 'not_started'" in script
     assert "`not_started`" in json.dumps(out) and "r1, r2" in json.dumps(out)
+
+
+_C4_SIZING = "state/sizings/2026-11-24-completed-run-c4.yaml"
+_C4_RUN = "warp-2026-11-24-completed-run-c4-20261124T200000-abc123"
+_C4_OWNER = "c4-live-owner"
+
+
+def _staged_run_whose_script_returned_a_halt(
+    root: Path, monkeypatch: pytest.MonkeyPatch, land: bool = True
+) -> tuple[Path, dict]:
+    """A staged, token-holding run of a live owner whose script returned `halted_by` after a committed
+    halt record: the no-marker exit of `land_returned_halt` (`land=False` leaves the run mid-stage, the
+    control). Returns (run dir, the halt's next_action)."""
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops.dispatch_emit import halt_refire
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, write_run_stage_at
+    from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
+    from coordinator_core.ops.dispatch_emit.returned_halt import land_returned_halt
+    from coordinator_core.session import liveness
+
+    monkeypatch.setattr(liveness, "session_live", lambda sid: sid == _C4_OWNER)
+    rd = root / RECORD_DIR_ROOT / _C4_RUN
+    rd.mkdir(parents=True)
+    (rd / "run.json").write_text(json.dumps({"sizing_rel": _C4_SIZING}), encoding="utf-8")
+    write_run_stage_at(rd, "staged", session_id=_C4_OWNER)
+    stage = json.loads((rd / "run-stage.json").read_text(encoding="utf-8"))
+    stage["last_activity_at"] = datetime.now(timezone.utc).isoformat()
+    (rd / "run-stage.json").write_text(json.dumps(stage), encoding="utf-8")
+    run_token.mint(
+        root, _C4_RUN, f"scratch/warp/{_C4_RUN}.workflow.mjs", session_id=_C4_OWNER, sizing_rel=_C4_SIZING
+    )
+    assert _run_is_live(root, _C4_RUN)
+    next_action = halt_refire.refire_next_action(
+        call=warp_fire.fire_command(_C4_SIZING), run_id=_C4_RUN, sizing=_C4_SIZING, halted="criterion"
+    )
+    if land:
+        # A committed halt record is the script's own `halted.json`; `land_returned_halt` then writes nothing.
+        write_halt_marker(
+            rd, halted="criterion", sizing_rel=_C4_SIZING, reason="criterion unmet", next_action=next_action
+        )
+        assert (
+            land_returned_halt(
+                rd,
+                {
+                    "sizing": _C4_SIZING,
+                    "halt_commit": {"committed": True},
+                    "halted_by": {"halted": "criterion", "reason": "criterion unmet", "next_action": next_action},
+                },
+                launched_at=time.time() - 60,
+            )
+            is None
+        )
+    return rd, next_action
+
+
+def _run_is_live(root: Path, run_id: str) -> bool:
+    from coordinator_core.warm import live_runs
+
+    return live_runs.run_is_live(root, run_id)
+
+
+def _named_refire_args(next_action: dict) -> dict:
+    match = re.search(r"args: (\{.*\})\}\)", next_action["call"])
+    assert match, next_action["call"]
+    return json.loads(match.group(1))
+
+
+@pytest.mark.parametrize("extra", [{}, {"takeover": True}], ids=["named-refire", "takeover"])
+def test_the_default_refire_of_a_halt_returned_through_the_no_marker_exit_is_not_refused_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: dict
+) -> None:
+    from coordinator_core.ops.dispatch_emit import run_terminality
+
+    root = _repo(tmp_path)
+    rd, next_action = _staged_run_whose_script_returned_a_halt(root, monkeypatch)
+    args = _named_refire_args(next_action)
+    assert args == {"sizing": _C4_SIZING}
+    monkeypatch.setattr(mod, "_spawn_recompose", lambda r, run_id: True)
+
+    out = mod.evaluate(
+        _payload(root, {**args, **extra}, session_id=_C4_OWNER), emit=_Emit(), launch=lambda *a, **k: root / "launcher.mjs"
+    )
+
+    hso = _hso(out)
+    assert f"Run {_C4_RUN} is live" not in hso.get("permissionDecisionReason", "")
+    assert hso["permissionDecision"] == "allow"
+    assert not _run_is_live(root, _C4_RUN)
+    reply = run_terminality._handler({"run_dir": f"state/warp/{_C4_RUN}"}, repo_root=root)
+    assert reply["ok"] and reply["terminal"] is True
+
+
+def test_a_staged_run_with_a_live_owner_and_no_returned_halt_is_still_refused_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    _staged_run_whose_script_returned_a_halt(root, monkeypatch, land=False)
+    assert _run_is_live(root, _C4_RUN)
+
+    out = mod.evaluate(_payload(root, {"sizing": _C4_SIZING}), emit=_Emit())
+
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert f"Run {_C4_RUN} is live" in _hso(out)["permissionDecisionReason"]

@@ -274,6 +274,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     STOP_AFTER_PLAN,
     lineage_stop_after,
     record_dir,
+    write_resume_park_cut,
     write_stop_after_marker,
 )
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
@@ -773,8 +774,18 @@ def _script_written(root: Path, record: dict) -> bool:
     return (path if path.is_absolute() else root / path).is_file()
 
 
+def ask_identity_hash(ask: str, brief: Optional[dict] = None) -> str:
+    """The key a raw ask's run is held under: the normalized ask hash, plus the brief inputs (`ask_brief`,
+    `ask_brief_file`, `ask_context`) when any are given. Trap: two asks sharing a short ask text but
+    carrying different briefs are different asks; hashing the text alone folded one onto the other's run."""
+    given = {k: brief[k] for k in ("ask_brief", "ask_brief_file", "ask_context") if brief and brief.get(k)}
+    if not given:
+        return normalized_ask_hash(ask)
+    return normalized_ask_hash(f"{ask}\0{json.dumps(given, sort_keys=True)}")
+
+
 def _resend_holder(
-    root: Path, sizing_rel: Optional[str], ask: object, exclude: Optional[str] = None
+    root: Path, sizing_rel: Optional[str], ask: object, exclude: Optional[str] = None, brief: Optional[dict] = None
 ) -> Optional[str]:
     """Run id already minted for this emit's key (the sizing, else the normalized ask hash): a minted
     run nothing has fired yet inside `_UNFIRED_RESEND_WINDOW_SECS` (the lost-reply case: the caller
@@ -787,7 +798,7 @@ def _resend_holder(
     if sizing_rel:
         key = lambda r: isinstance(r.get("sizing_rel"), str) and run_token.normalize_sizing_rel(root, r["sizing_rel"]) == sizing_rel  # noqa: E731
     elif isinstance(ask, str) and ask.strip():
-        digest = normalized_ask_hash(ask)
+        digest = ask_identity_hash(ask, brief)
         key = lambda r: r.get("ask_sha256") == digest  # noqa: E731
     else:
         return None
@@ -813,7 +824,7 @@ def _resend_holder(
     if sizing_rel:
         live = warp_live.live_run_for_sizing(root, sizing_rel)
     else:
-        found = warp_live.run_for_ask(root, normalized_ask_hash(ask))
+        found = warp_live.run_for_ask(root, digest)
         live = found[1] if found is not None and found[0] == "live" else None
     return None if live == exclude else live
 
@@ -831,7 +842,7 @@ def _resent_live_emit(
     if params.get("reserved_run_id") is not None:
         return None
     chain_parent = params.get("chain_parent")
-    holder = _resend_holder(root, sizing_rel, ask, chain_parent if isinstance(chain_parent, str) else None)
+    holder = _resend_holder(root, sizing_rel, ask, chain_parent if isinstance(chain_parent, str) else None, params)
     if holder is None:
         return None
     from coordinator_core.ops.dispatch_emit import run_token
@@ -1096,6 +1107,11 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
     )
     if ask_ctx.get("stop_after") and not (run_dir_ / STOP_AFTER_FILE).is_file():
         write_stop_after_marker(run_dir_, ask_ctx["stop_after"], "dispatch.emit")
+    elif not ask_ctx.get("stop_after") and (run_dir_ / STOP_AFTER_FILE).is_file():
+        # No park is in force (a parked run's own marker, discharged): leaving it live would park the refire again.
+        (run_dir_ / STOP_AFTER_FILE).unlink(missing_ok=True)
+    if not ask_ctx.get("stop_after"):
+        write_resume_park_cut(root, run_dir_)
     if ask_ctx.get("sizing_rel"):
         prompt = ask_ctx.get("prompt")
         relayed = ask_ctx.get("ask_source") == ASK_SOURCE_RELAYED
@@ -1124,11 +1140,26 @@ def _chain_parent_param(root: Path, params: dict) -> Optional[str]:
 
 def _inherited_stop_after(root: Path, run_id: str, chain_parent: Optional[str], *resumed: Optional[str]) -> Optional[str]:
     """`STOP_AFTER_PLAN` when the run's own or its chain parent's lineage holds the park, or a resumed
-    predecessor's lineage does and that predecessor has not already parked (resuming a parked run stages)."""
+    predecessor's lineage does and that predecessor is a live halted run that has not already parked.
+
+    A parked run's own lineage is discharged (its refire stages), and a `resumed` id the caller does not
+    actually resume (no halt record, or a superseded, landed or closed one) lends no park. A run that has
+    already staged (manifest.json) inherits nothing: its refire never re-takes an ancestor's marker."""
     from coordinator_core.ops.dispatch_emit import halted_run as _halted_run
 
+    if (record_dir(root, run_id) / "manifest.json").is_file():
+        return None
     for rid in (run_id, chain_parent):
-        if rid and lineage_stop_after(root, rid) == STOP_AFTER_PLAN:
+        if not rid:
+            continue
+        if rid == run_id:
+            try:
+                own = _halted_run._read(record_dir(root, rid))
+            except ValueError:
+                continue
+            if own and own.get("halted") == HALT_PARKED:
+                continue
+        if lineage_stop_after(root, rid) == STOP_AFTER_PLAN:
             return STOP_AFTER_PLAN
     for rid in resumed:
         if not rid:
@@ -1138,7 +1169,9 @@ def _inherited_stop_after(root: Path, run_id: str, chain_parent: Optional[str], 
             marker = _halted_run._read(rd)
         except ValueError:
             continue
-        if (marker and marker.get("halted") == HALT_PARKED) or (rd / "manifest.json").is_file():
+        if not marker or marker.get("status") not in (_halted_run.STATUS_HALTED, _halted_run.STATUS_RESUMED):
+            continue
+        if marker.get("halted") == HALT_PARKED or (rd / "manifest.json").is_file():
             continue
         if lineage_stop_after(root, rid) == STOP_AFTER_PLAN:
             return STOP_AFTER_PLAN
@@ -1795,13 +1828,15 @@ def _research_route_setup(
     else:
         questions = [str(q) for q in lists.get("questions") or ()]
     sizing_rel = ""
-    stage_family_opted_in = False
+    sizing_intent = ""
+    stage_family_binding = None
     if from_sizing:
         root = _sizing_root(params, repo_root, str(from_sizing))
         brief_rel = sizing_rel = normalize_sizing_rel(root, str(from_sizing))
         loaded_sizing = load_sizing(root, brief_rel)
+        sizing_intent = str(loaded_sizing.get("intent") or "")
         try:
-            stage_family_opted_in = _stage_family_binding.opted_in(loaded_sizing)
+            stage_family_binding = _stage_family_binding.from_sizing(loaded_sizing)
         except ValueError as exc:
             raise PipelineEmitRefused([str(exc)]) from exc
         research = loaded_sizing.get("research")
@@ -1870,7 +1905,9 @@ def _research_route_setup(
         ask_text = str(ask or "")
         if (raw_questions or from_sizing) and not ask_text.strip():
             ask_text = questions[0]["text"]
-        brief_rel = research_emit.write_ask(root, scratch_rel, ask_text, questions, mode, allowlist, research)
+        brief_rel = research_emit.write_ask(
+            root, scratch_rel, ask_text, questions, mode, allowlist, research, intent=sizing_intent
+        )
     members_brief = research_emit.bind_context(
         root, scratch_rel, brief_rel, [str(c) for c in params.get("context") or ()]
     )
@@ -2075,7 +2112,7 @@ def _research_route_setup(
         "websearch_budget_warning": websearch_warning,
         "next_action": {"op": "research.close", "params": close_params},
         "legs": research_emit.halt_legs([m.pipeline for m, _, _ in segments]),
-        "stage_family_opted_in": stage_family_opted_in,
+        "stage_family_binding": stage_family_binding,
     }
     pipeline_ctx = {"root": root, "run_id": run_id, "resume_missing": False, "inputs": segments[0][1]}
     return research_ctx, pipeline_ctx, params
@@ -2268,6 +2305,7 @@ def _emit_script_file(
     before_write: Callable[[], None],
     ask_run: bool = False,
     run_owned: bool = False,
+    tranche_record: Optional[str] = None,
 ) -> dict:
     """Check, write and receipt one emitted script; returns its path, sha256, receipt and findings.
 
@@ -2292,6 +2330,21 @@ def _emit_script_file(
     ]
     script = bind_script_literals(script)  # the delivered text: composers keep the portable command form
     script_bytes = script.encode("utf-8")
+    # Binding can grow the script past the cap `compose_script` measured it under; the cap binds the delivered bytes.
+    from coordinator_core.ops.dispatch_emit import emit as _emit_mod
+
+    cap = _emit_mod._WORKFLOW_SCRIPT_BYTE_CAP
+    if len(script_bytes) > cap:
+        over = ScriptOverCapError(
+            f"bound script is {len(script_bytes)} bytes, over the Workflow runner's "
+            f"{cap}-byte cap -- split the inventory into parts of fewer rows "
+            "(`emit-dispatch-workflow --inventory <record> --lanes` writes write-disjoint, byte-bounded parts)",
+            script_size=len(script_bytes),
+            row_count=script.count("] = _runRow("),
+        )
+        if tranche_record:
+            over.tranche_inventory = tranche_record
+        raise over
     # Script and receipt are one unit: a second emit of this path waits here, so the receipt's
     # digest is always of the bytes the script holds. Both writes are atomic, so a reader never
     # sees a truncated script; the digest is of the bytes written, never a read-back. The bytes
@@ -2762,10 +2815,10 @@ def _dispatch_emit_body(
         if params.get("per_group") is False:
             raise ValueError("dispatch.emit group_refs needs per_group")
         return _emit_per_group(params, repo_root, from_sizing, _dispatch_emit)
-    if fanout_group == "split" and not (research_route or pipeline_name):
+    if fanout_group == "split" and not (research_route or pipeline_name or plan_path or inventory_path):
         return {
-            "error": "dispatch.emit params.fanout_group 'split' is honoured by the pipeline and research "
-            "routes only; the plan, queue and ask composers take no override"
+            "error": "dispatch.emit params.fanout_group 'split' is honoured by the plan, pipeline and "
+            "research routes only; the queue and ask composers take no override"
         }
     research_ctx: Optional[dict] = None
     if research_route:
@@ -2959,6 +3012,7 @@ def _dispatch_emit_body(
         inherited_base = None
         resumes_ask = None
         resumed_from = None
+        resumed_real = None  # the `resumed_from` ids this fire truly resumes; notes and superseded lookups resume nothing
         from coordinator_core.ops.dispatch_emit.ask_gate import token_spent as _token_spent
 
         chain_parent = _chain_parent_param(ask_root, params)
@@ -3043,11 +3097,14 @@ def _dispatch_emit_body(
                 blocker = None
                 if not aliased_param(params, "output_path", "out_path"):
                     blocker = rebind_blocker(ask_root, halted_id, _receipt_session_id(params))
+                    if blocker is None:
+                        spent = spent_run_reason(ask_root / RUN_DIR_ROOT / f"{halted_id}.workflow.mjs")
+                        blocker = "run-spent" if spent else None
                 if blocker is None:
                     _gate_resume(ask_root, halted_id, params, sizing_rel)
                     run_id, rebound = halted_id, True
                 else:
-                    resumed_from = halted_id
+                    resumed_from = resumed_real = halted_id
                     output_redirect = {
                         "from": f"{RUN_DIR_ROOT}/{halted_id}.workflow.mjs",
                         "to": f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs",
@@ -3068,7 +3125,7 @@ def _dispatch_emit_body(
         effective_stop = (
             params.get(STOP_AFTER_KEY)
             or sizing_stop
-            or _inherited_stop_after(ask_root, run_id, chain_parent, resumes_ask, resumed_from, reserved_parent)
+            or _inherited_stop_after(ask_root, run_id, chain_parent, resumes_ask, resumed_real, reserved_parent)
         )
         if effective_stop not in (None, STOP_AFTER_PLAN):
             raise ValueError(
@@ -3427,14 +3484,13 @@ def _dispatch_emit_body(
         receipt_plan_path = None
     elif research_ctx is not None:
         from coordinator_core.ops.dispatch_emit import pipeline_stage_roles
-        from coordinator_core.ops.dispatch_emit import stage_family_binding as _stage_family_binding
         from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_chain_parts
 
         family_kwargs: dict = {}
-        if research_ctx.get("stage_family_opted_in"):
+        if research_ctx.get("stage_family_binding") is not None:
             try:
                 family_kwargs["stage_families"] = pipeline_stage_roles.stage_families(
-                    research_ctx["segments"], _stage_family_binding.load()
+                    research_ctx["segments"], research_ctx["stage_family_binding"]
                 )
             except ValueError as exc:
                 raise PipelineEmitRefused([str(exc)]) from exc
@@ -3444,6 +3500,7 @@ def _dispatch_emit_body(
             agent_type_host=agent_type_host,
             next_action=research_ctx["next_action"],
             legs=research_ctx["legs"],
+            rag_root=Path(research_ctx["root"]).as_posix(),
             **family_kwargs,
             **({**fanout_kwargs, "fanout_group": "split"} if research_ctx.get("scouts_per_question") else fanout_kwargs),
         )
@@ -3485,6 +3542,7 @@ def _dispatch_emit_body(
             schedule,
             run_id=pipeline_ctx["run_id"],
             agent_type_host=agent_type_host,
+            rag_root=Path(pipeline_ctx["root"]).as_posix(),
             **fanout_kwargs,
         )
         receipt_extras = {
@@ -3516,7 +3574,7 @@ def _dispatch_emit_body(
                     Path(ask_ctx["root"]), ask_ctx["run_id"], ask_script_path or "",
                     session_id=emitting_session_id, sizing_rel=ask_ctx["sizing_rel"], carry_prior=True,
                     ask_sha256=(
-                        normalized_ask_hash(ask_ctx["prompt"])
+                        ask_identity_hash(ask_ctx["prompt"], params)
                         if ask_ctx["sizing_rel"] is None and ask_ctx["prompt"] else None
                     ),
                 )
@@ -3659,6 +3717,7 @@ def _dispatch_emit_body(
                 held_out=held_out,
                 auto_split=bool(params.get("auto_split")),
                 sibling=params.get("sibling"),
+                **fanout_kwargs,
                 **(
                     {}
                     if params.get("review_only_rows") is not None
@@ -3728,6 +3787,7 @@ def _dispatch_emit_body(
                 session_id=emitting_session_id,
                 agent_type_host=agent_type_host,
                 before_write=_declare_output_root,
+                tranche_record=inventory_path if tranche_inventory else None,
             )))
         written = emitted[0][1]
         # plan_findings ride on every part; count each distinct finding once.
@@ -3747,6 +3807,7 @@ def _dispatch_emit_body(
             before_write=_declare_output_root,
             ask_run=ask_ctx is not None,
             run_owned=ask_ctx is not None and bool(ask_ctx.get("rebound") or ask_ctx.get("reserved_parent")),
+            tranche_record=inventory_path if tranche_inventory else None,
         )
         error_count = written["error_count"]
         warn_count = written["warn_count"]
@@ -3969,9 +4030,60 @@ def _write_lane_map(path: Path, lane_map: dict) -> None:
     path.write_text(json.dumps(lane_map, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 
 
-def _cost_model(chunk_rows: list, *, root: Path, run_id: str, preamble: Optional[str]) -> tuple:
-    """``(row_bytes, fixed_bytes)`` for ``chunk_rows``: per-row estimates from
-    ``emit.row_block_bytes`` and the script shell measured off one composed probe row."""
+def _plan_probe_bytes(
+    probe, spec: str, *, root: Path, fragment, schemas, preamble: Optional[str], row_bytes: int
+) -> Optional[int]:
+    """Bytes of a one-row script composed over plan ``spec`` itself, less the probe row's
+    own bytes; ``None`` when the plan is not on disk or its probe does not compose.
+    A probe over the cap measures as that over-cap size."""
+    from coordinator_core.ops.dispatch_emit import emit
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    try:
+        text = (root / spec).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        raw_by_id = {
+            r["id"]: emit.with_leg_slot(r)
+            for r in load_rows(text).rows
+            if isinstance(r, dict) and isinstance(r.get("id"), str)
+        }
+        shell = emit.compose_script(
+            [[probe]],
+            name="lane-probe",
+            description="lane-probe",
+            repo_root=root,
+            plan_path=spec,
+            plan_text=text,
+            plan_context=emit.derive_plan_context(
+                text, fallback_title=Path(spec).stem, repo_root=root.as_posix(), plan_path=spec
+            ),
+            seam=emit.seam_inputs_for({spec: [probe.id]}, spec, text, raw_by_id, root),
+            review_roster_fragment=fragment,
+            review_stage_schemas=schemas,
+            predispatch=True,
+            preamble=preamble,
+        )
+    except emit.ScriptOverCapError as over:
+        return over.script_size - row_bytes
+    except Exception:
+        return None
+    return len(shell.encode("utf-8")) - row_bytes
+
+
+def _cost_model(
+    chunk_rows: list,
+    *,
+    root: Path,
+    run_id: str,
+    preamble: Optional[str],
+    plan_cache: Optional[dict] = None,
+) -> tuple:
+    """``(row_bytes, fixed_bytes, plan_bytes)`` for ``chunk_rows``: per-row estimates from
+    ``emit.row_block_bytes``, the script shell measured off one composed probe row, and per
+    distinct plan the bytes its material adds over that shell (one composed probe per plan,
+    memoised in ``plan_cache``; a plan not on disk adds none)."""
     from coordinator_core.ops.dispatch_emit import emit
 
     wave_rows = [_wave_row_of(r) for r in chunk_rows]
@@ -3994,7 +4106,23 @@ def _cost_model(chunk_rows: list, *, root: Path, run_id: str, preamble: Optional
         preamble=preamble,
     )
     fixed_bytes = max(0, len(shell.encode("utf-8")) - row_bytes[probe.id])
-    return row_bytes, fixed_bytes
+    cache = plan_cache if plan_cache is not None else {}
+    first_row: dict = {}
+    for chunk_row, wave_row in zip(chunk_rows, wave_rows):
+        first_row.setdefault(_strip_backtick(chunk_row["spec path"]), wave_row)
+    plan_bytes: dict = {}
+    for spec, wave_row in first_row.items():
+        if not spec:
+            continue
+        if spec not in cache:
+            measured = _plan_probe_bytes(
+                wave_row, spec, root=root, fragment=fragment, schemas=schemas,
+                preamble=preamble, row_bytes=row_bytes[wave_row.id],
+            )
+            cache[spec] = None if measured is None else max(0, measured - fixed_bytes)
+        if cache[spec]:
+            plan_bytes[spec] = cache[spec]
+    return row_bytes, fixed_bytes, plan_bytes
 
 
 def _build_lane_map(
@@ -4007,10 +4135,13 @@ def _build_lane_map(
     lane_count: int,
     hot_files: int,
     preamble: Optional[str],
+    plan_cache: Optional[dict] = None,
 ) -> dict:
     from coordinator_core.ops.dispatch_emit import emit, lanes
 
-    row_bytes, fixed_bytes = _cost_model(chunk_rows, root=root, run_id=run_id, preamble=preamble)
+    row_bytes, fixed_bytes, plan_bytes = _cost_model(
+        chunk_rows, root=root, run_id=run_id, preamble=preamble, plan_cache=plan_cache
+    )
     params = lanes.LaneParams(
         lanes=lane_count,
         hot_files=hot_files,
@@ -4025,6 +4156,7 @@ def _build_lane_map(
         params=params,
         row_bytes=row_bytes,
         fixed_bytes=fixed_bytes,
+        plan_bytes=plan_bytes,
         bound_plans=bound,
         run_id=run_id,
         source_inventory=inventory.resolve().relative_to(root).as_posix(),
@@ -4040,12 +4172,16 @@ def _resplit_part(
     root: Path,
     preamble: Optional[str],
     headroom: float,
+    plan_cache: Optional[dict] = None,
 ) -> Optional[str]:
     """Repack one over-cap part at a tightened ``headroom``, in place: the part
     becomes several sequential parts of its lane and later parts of that lane
     are renumbered. Returns the id of the first resulting part, or ``None``
-    when the tightened estimate still fits it in one part. Only a never-emitted
-    part is split."""
+    when the part holds one row that the tightened estimate still fits. A
+    part the estimate fits anyway was measured over the cap, so it is cut in
+    two, at a plan boundary when it has one and at its middle row otherwise;
+    the caller re-measures each result and splits again until the written
+    script fits or one row alone does not. Only a never-emitted part is split."""
     from coordinator_core.ops.dispatch_emit import lanes
 
     lane = next(l for l in lane_map["lanes"] if any(p["id"] == part_id for p in l["parts"]))
@@ -4055,31 +4191,30 @@ def _resplit_part(
             f"part {part_id!r} or a later part of lane {lane['id']!r} is already emitted; "
             f"delete {lanes.lane_map_path(lane_map['run_id'])} to re-partition"
         )
-    row_bytes, fixed_bytes = _cost_model(
-        [chunk_by_id[r] for r in lane["parts"][idx]["rows"]],
+    part_rows = lane["parts"][idx]["rows"]
+    row_bytes, fixed_bytes, plan_bytes = _cost_model(
+        [chunk_by_id[r] for r in part_rows],
         root=root,
         run_id=lane_map["run_id"],
         preamble=preamble,
+        plan_cache=plan_cache,
     )
-    budget = lane_map["params"]["byte_cap"] * headroom
-    chunks: list = []
-    current: list = []
-    used = 0
-    for r in lane["parts"][idx]["rows"]:
-        cost = row_bytes[r] + fixed_bytes
-        if cost > budget:
-            raise lanes.RowOverBudgetError(
-                f"row {r!r}: {row_bytes[r]} row bytes + {fixed_bytes} fixed bytes exceeds "
-                f"the part budget {int(budget)}"
-            )
-        if current and used + cost > budget:
-            chunks.append(current)
-            current, used = [], 0
-        current.append(r)
-        used += row_bytes[r]
-    chunks.append(current)
+    plan_of = {r: _strip_backtick(chunk_by_id[r]["spec path"]) for r in part_rows}
+    chunks = lanes.pack_rows(
+        part_rows,
+        plan_of=plan_of,
+        row_bytes=row_bytes,
+        plan_bytes=plan_bytes,
+        fixed_bytes=fixed_bytes,
+        budget=lane_map["params"]["byte_cap"] * headroom,
+    )
     if len(chunks) == 1:
-        return None
+        chunks = lanes.split_at_plan_boundary(part_rows, plan_of)
+        if chunks is None:
+            if len(part_rows) < 2:
+                return None
+            mid = len(part_rows) // 2
+            chunks = [part_rows[:mid], part_rows[mid:]]
     tail_rows = [p["rows"] for p in lane["parts"][idx + 1:]]
     rebuilt = lane["parts"][:idx]
     for rows in [*chunks, *tail_rows]:
@@ -4154,9 +4289,11 @@ def _emit_lanes(params: dict, repo_root: Optional[Path]) -> dict:
     map_path = root / lanes.lane_map_path(run_id)
     lane_map = _read_lane_map(map_path)
     pinned = lane_map is not None
+    plan_cache: dict = {}
     if not pinned:
         lane_map = _build_lane_map(
             chunk_rows,
+            plan_cache=plan_cache,
             root=root,
             inventory=inventory,
             run_id=run_id,
@@ -4236,6 +4373,7 @@ def _emit_lanes(params: dict, repo_root: Optional[Path]) -> dict:
                     root=root,
                     preamble=params.get("preamble"),
                     headroom=round(headroom - _HEADROOM_STEP * attempt, 4),
+                    plan_cache=plan_cache,
                 )
                 if first_new is not None:
                     resplits += 1

@@ -275,6 +275,8 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_closeout import (  # noq
     _record_resolution,
     _ship_cited_sizing,
     _dropped_part_rows,
+    _land_closure,
+    _reconcile_sizing_rows,
     USAGE_FILE,
     _write_usage,
     _stamp_usage_marker,
@@ -1891,6 +1893,39 @@ def _stamp_on_refusal(params: dict, repo_root: Optional[Path], reply: dict) -> d
         return stamp_landed_rows_on_refusal(main_worktree_root(repo_root), repo_root, params, reply, session_id)
     except Exception as exc:
         return {"refusal_coded_stamp_error": f"{type(exc).__name__}: {exc}"}
+
+
+#: Same string as `ask_compose.HALT_CRITERION_NOT_MET`; not imported (terminal_commit's import-cost pin).
+_HALT_CRITERION_NOT_MET = "criterion_not_met"
+
+
+def _open_register_halt(worktree_root: Path, sizing_rel: Optional[str], acknowledged: Sequence[dict]) -> Optional[dict]:
+    """The non-green reply fields when the cited sizing's register still owes rows after the commit's
+    write-backs: `{ok: False, halted: "criterion_not_met", open_rows, error}`; None when none are owed.
+    A row the ledger gate already passed as open (`acknowledged`) is recorded by its commit trailers
+    and is not owed here. An unreadable sizing owes nothing: `_ship_cited_sizing` already reports it."""
+    if not sizing_rel:
+        return None
+    from coordinator_core.ops.requirement_register import open_register_rows
+
+    try:
+        owed = open_register_rows(worktree_root, sizing_rel)
+    except Exception:  # noqa: BLE001 -- the product commit stands; the ship leg names an unreadable sizing
+        return None
+    held = {str(r.get("id")) for r in acknowledged if isinstance(r, dict)}
+    owed = [r for r in owed if str(r.get("id")) not in held]
+    if not owed:
+        return None
+    ids = ", ".join(str(r.get("id")) for r in owed[:10])
+    return {
+        "ok": False,
+        "halted": _HALT_CRITERION_NOT_MET,
+        "open_rows": owed,
+        "error": (
+            f"criterion_not_met: {len(owed)} register row(s) of {sizing_rel} still owed ({ids}). "
+            "The commit stands; the run is not finished. Refire the remaining stages or close the rows"
+        ),
+    }
 
 
 def _unrecorded_review_rows(worktree_root: Path, evidence_rel: str, rows: Sequence[dict]) -> list:
@@ -3777,7 +3812,10 @@ def _terminal_commit_inner(
             return _with_withheld(_naming_held(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})))
 
     if ask_run_dir is not None:
-        outcome_path = run_artifacts.write_tracked_outcome(worktree_root, ask_run_dir.name, "landed")
+        outcome_path = run_artifacts.write_tracked_outcome(
+            worktree_root, ask_run_dir.name, "landed", ledger_verdict=params.get("ledger_verdict"),
+            cited_sizing=cited_sizing or (ledger.sizing_rel if ledger is not None else None),
+        )
         if outcome_path and outcome_path not in all_paths:
             all_paths = [*all_paths, outcome_path]
     merge_plan = _merge_landing_plan(
@@ -4028,6 +4066,7 @@ def _terminal_commit_inner(
             merge_open=merge_plan is not None,
             own_declared=sorted(declared_writes), session_id=session_id,
             carried_paths=[p for p in carried if p not in kept_supplied], minted_before=own_seniority,
+            landing_blobs=kept_supplied,
             withheld=gate_withheld,
         )
 
@@ -4571,6 +4610,11 @@ def _terminal_commit_inner(
         writeback = {} if anchor_only else _register_writeback(
             worktree_root, request.plan_path, inline_review, str(reply["sha"])
         )
+        if not anchor_only:
+            for key, val in _reconcile_sizing_rows(
+                worktree_root, request.plan_path, inline_review, str(reply["sha"])
+            ).items():
+                writeback.setdefault(key, val)
         register_sizing = writeback.pop("register_sizing", None)
         reply.update(writeback)
         pending_operator = _awaiting_operator(open_rows)
@@ -4622,10 +4666,29 @@ def _terminal_commit_inner(
             if shipped_sizing:
                 run_id = _run_id_of(params, ask_run_dir, script_path_raw)
                 reply.update(_write_resolution(worktree_root, shipped_sizing, str(reply["sha"]), run_id))
+        if not (shipped_sizing or anchor_only or foreign_repo or incomplete_chunks or request.review_only):
+            reply.update(
+                _open_register_halt(
+                    worktree_root, cited_sizing or (ledger.sizing_rel if ledger is not None else None), open_rows
+                ) or {}
+            )
+        outcome_closed = None
+        if ask_run_dir is not None and not anchor_only and not foreign_repo:
+            closure, outcome_closed = _land_closure(
+                worktree_root, ask_run_dir.name, cited_sizing or (ledger.sizing_rel if ledger is not None else None),
+                params.get("ledger_verdict"),
+            )
+            if closure is not None:
+                reply["closure"] = closure
+                if closure.get("verdict") == "partial":
+                    reply["closed_as"] = "partial"
+                if close_ctx is not None:
+                    close_ctx["closure"] = closure
         also_commit = tuple(
             p for p in (
                 request.plan_path if reply.get("review_stamp") == "minted" else None,
                 reply.get("review_receipt"),
+                outcome_closed,
                 register_sizing,
                 dropped_sizing,
                 shipped_sizing,

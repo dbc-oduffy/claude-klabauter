@@ -1,26 +1,13 @@
-"""Reader for DoE's stage-family binding file, the opt-in third family source.
-
-A run opts in by naming `BINDING_REF` as its sizing's `stage_family_binding`;
-only then is the file read. The DoE root comes from `doe_drift.resolve_doe_clone`.
-"""
+"""The sizing-driven stage-family binding: `from_sizing` builds a `Binding` from the sizing's `stage_families`."""
 from __future__ import annotations
 
-from pathlib import Path
 from typing import NamedTuple, Optional
 
-import yaml
-
-from coordinator_core.frontmatter.yaml_load import SAFE_LOADER
 from coordinator_core.ops.dispatch_emit import stage_family
-from coordinator_core.ops.emit import doe_drift
-
-BINDING_REF = "doe" + "-claude:coordinator/pipelines/stage-family-binding.yaml"
-_BINDING_RELPATH = "coordinator/pipelines/stage-family-binding.yaml"
-_REGISTRY_KEY = "engine.working_repos.content_root"
 
 
 class BindingError(ValueError):
-    """The binding file is unreadable, unresolvable or violates its contract."""
+    """The sizing's `stage_families` violates its contract."""
 
 
 class Binding(NamedTuple):
@@ -31,58 +18,36 @@ class Binding(NamedTuple):
     roles: dict
 
 
-def opted_in(sizing: Optional[dict]) -> bool:
-    """True iff the sizing names `BINDING_REF`; any other non-empty value raises."""
-    value = (sizing or {}).get("stage_family_binding")
-    if value is None or value == "":
-        return False
-    if value != BINDING_REF:
-        raise ValueError(
-            f"stage_family_binding {value!r} is not the binding; expected {BINDING_REF}"
-        )
-    return True
+def from_sizing(sizing: Optional[dict]) -> Optional[Binding]:
+    """The `Binding` the sizing's `stage_families` (role -> family) names, or None when the EM chose none.
 
-
-def load(content_root: Optional[Path] = None) -> Binding:
-    """Read and validate the binding under the DoE root (registry-resolved when None)."""
-    if content_root is None:
-        try:
-            content_root = doe_drift.resolve_doe_clone()
-        except doe_drift.DoeResolveError as exc:
-            raise BindingError(
-                f"cannot resolve the DoE root: registry key {_REGISTRY_KEY} unset "
-                f"or its path absent ({exc})"
-            ) from exc
-    path = Path(content_root) / _BINDING_RELPATH
-    try:
-        data = yaml.load(path.read_text(encoding="utf-8"), Loader=SAFE_LOADER)
-    except (OSError, yaml.YAMLError) as exc:
-        raise BindingError(f"cannot read binding {path}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise BindingError(f"binding {path} is not a mapping")
-    if data.get("schema_version") != 1:
+    Roles mapped to claude are dropped (claude is the absence of a choice); a map left empty is None.
+    Raises `BindingError` for a role outside `stage_family.ROLES`, an unknown family, a non-mapping
+    value, or a sizing still carrying the retired `stage_family_binding` key.
+    """
+    sizing = sizing or {}
+    if sizing.get("stage_family_binding") not in (None, ""):
         raise BindingError(
-            f"binding schema_version {data.get('schema_version')!r} != 1"
+            "sizing key stage_family_binding is retired; name the EM's choice as "
+            "`stage_families: {role: family}`"
         )
-    runner = data.get("runner")
-    if runner != stage_family.RUNNER_AGENT:
-        raise BindingError(
-            f"binding runner {runner!r} != {stage_family.RUNNER_AGENT}"
-        )
-    fallback = data.get("fallback")
-    if fallback != stage_family.FALLBACK:
-        raise BindingError(f"binding fallback {fallback!r} != {stage_family.FALLBACK}")
-    roles = data.get("roles")
-    if not isinstance(roles, dict) or not roles:
-        raise BindingError("binding roles must be a non-empty mapping")
-    for role, family in roles.items():
+    chosen = sizing.get("stage_families")
+    if chosen is None or chosen == {}:
+        return None
+    if not isinstance(chosen, dict):
+        raise BindingError("stage_families must be a mapping of role to family")
+    roles: dict = {}
+    for role, value in chosen.items():
         if role not in stage_family.ROLES:
             raise BindingError(
-                f"binding role {role!r} not one of {'|'.join(stage_family.ROLES)}"
+                f"stage_families role {role!r} not one of {'|'.join(stage_family.ROLES)}"
             )
-        if family not in stage_family.FAMILIES:
-            raise BindingError(
-                f"binding family {family!r} for role {role!r} not one of "
-                f"{'|'.join(stage_family.FAMILIES)}"
-            )
-    return Binding(runner=runner, fallback=fallback, roles=dict(roles))
+        try:
+            family = stage_family.resolve(value)
+        except ValueError as exc:
+            raise BindingError(f"stage_families role {role!r}: {exc}") from exc
+        if family != stage_family.FALLBACK:
+            roles[role] = family
+    if not roles:
+        return None
+    return Binding(runner=stage_family.RUNNER_AGENT, fallback=stage_family.FALLBACK, roles=roles)

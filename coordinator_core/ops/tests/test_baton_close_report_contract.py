@@ -50,11 +50,12 @@ def test_ship_ref_and_deployment_state_are_optional_keys():
 
 def test_no_evidence_reason_members_and_item_shape():
     assert {m.value for m in c.NoEvidenceReason} == {
-        "nothing_cited", "targets_not_done", "acs_all_ticked",
+        "nothing_cited", "targets_not_done", "acs_ticked",
     }
     assert set(c.NoEvidenceItem.__annotations__) == {
-        "handoff_path", "reason", "evidence", "conflict", "detail",
+        "handoff_path", "reason", "evidence", "conflict", "detail", "route", "evidence_sha",
     }
+    assert c.NoEvidenceItem.__optional_keys__ == {"route", "evidence_sha"}
     assert "no_evidence_batons" in c.REPORT_KEYS
     assert c.REPORT_KEYS.index("no_evidence_batons") == c.REPORT_KEYS.index("no_evidence") + 1
 

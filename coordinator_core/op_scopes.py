@@ -566,6 +566,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "baton.carry_forward_read":              "common_dir",
     "baton.close_report":                    "common_dir",
     "baton.close_commit":                    "common_dir",
+    "baton.bulk_set":                        "common_dir",
     "baton.pm_turn_append":                  "common_dir",
     "baton.pm_turns":                        "common_dir",
     "baton.pm_directive_unmapped":           "common_dir",
@@ -755,6 +756,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # scratch.record_run_path, scratch.keep — "show_top", MUTATING: same run-record lookup as scratch.delete.
     "scratch.record_run_path":                "show_top",
     "scratch.keep":                           "show_top",
+    # sidecar.write — "show_top", MUTATING: writes under the invoking worktree's sidecar root.
+    "sidecar.write":                          "show_top",
     # run.paths_trash — "show_top", MUTATING: same run-record lookup as scratch.delete.
     "run.paths_trash":                        "show_top",
     # scratch.remove — "show_top": roots are the calling repo's scratch/. proc.stop_own_child — "none": judged on the process table.

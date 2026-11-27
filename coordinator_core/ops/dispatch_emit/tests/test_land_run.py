@@ -674,6 +674,7 @@ def _wired_landing(tmp_path, monkeypatch, command: str) -> tuple[dict, dict]:
 def test_land_reports_a_failing_wired_command_as_demoted_and_writes_the_row_partial(tmp_path, monkeypatch) -> None:
     out, row = _wired_landing(tmp_path, monkeypatch, "python bad.py")
 
+    assert "requirements_writeback_error" not in out
     assert out["wired_demoted"] == [{"id": "R1", "command": "python bad.py", "reason": "exit 3"}]
     assert row["wired"] is False and row["status"] == "partial"
 
@@ -682,6 +683,7 @@ def test_land_keeps_a_passing_wired_command_wired_and_met(tmp_path, monkeypatch)
     out, row = _wired_landing(tmp_path, monkeypatch, "python ok.py")
 
     assert "wired_demoted" not in out
+    assert "requirements_writeback_error" not in out
     assert row["wired"] is True and row["status"] == "met"
 
 
@@ -689,5 +691,51 @@ def test_land_keeps_a_passing_wired_command_wired_and_met(tmp_path, monkeypatch)
 def test_land_demotes_an_inadmissible_wired_command_without_running_it(tmp_path, monkeypatch, command) -> None:
     out, row = _wired_landing(tmp_path, monkeypatch, command)
 
+    assert "requirements_writeback_error" not in out
     assert out["wired_demoted"][0]["reason"] == "not-rerunnable-at-land"
     assert row["wired"] is False and row["status"] == "partial"
+
+
+def test_remeasure_stale_gap_remeasures_only_a_stale_reason_with_a_missing_test_leg_review(tmp_path, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import measured_rev
+
+    calls = []
+    monkeypatch.setattr(measured_rev, "remeasure_reason", lambda run_dir, root: calls.append((run_dir, root)))
+    no_review = {"wave_not_run": [{"agent_type": land_run.TEST_LEG_AGENT_TYPE, "reason": "timed out"}]}
+
+    assert land_run.remeasure_stale_gap("measured-rev-drift: a.py", no_review, tmp_path, tmp_path) is None
+    assert land_run.remeasure_stale_gap("measure_unavailable: a.py", no_review, tmp_path, tmp_path) is None
+    assert len(calls) == 2
+    # Refused sides: another reason, or a test leg that did return a review, is never re-measured.
+    assert land_run.remeasure_stale_gap("other-reason", no_review, tmp_path, tmp_path) == "other-reason"
+    assert land_run.remeasure_stale_gap("measured-rev-drift: a.py", {}, tmp_path, tmp_path) == "measured-rev-drift: a.py"
+    assert len(calls) == 2
+
+
+def test_remeasure_stale_gap_returns_the_surviving_reason(tmp_path, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import measured_rev
+
+    monkeypatch.setattr(measured_rev, "remeasure_reason", lambda run_dir, root: "measured-rev-drift: b.py")
+    no_review = {"wave_not_run": [{"agent_type": land_run.TEST_LEG_AGENT_TYPE}]}
+    assert land_run.remeasure_stale_gap("measured-rev-drift: a.py", no_review, tmp_path, tmp_path) == "measured-rev-drift: b.py"
+
+
+def test_measured_rev_drift_uses_the_diagnosing_reads_sha(tmp_path, monkeypatch) -> None:
+    import json
+
+    from coordinator_core.git import commit
+    from coordinator_core.ops.dispatch_emit import measured_rev as mr
+    from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_RECORD
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "a.py").write_bytes(b"x = 1\n")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    recorded = commit._blob_sha1(b"x = 1\n")
+    (run_dir / MEASURED_REV_RECORD).write_text(json.dumps({"blobs": {"a.py": recorded}, "removed": []}))
+    monkeypatch.setattr(commit, "checkin_blob_sha", lambda root, rel: None)
+    monkeypatch.setattr(mr, "_reread_bounded", lambda root, rel, deadline=None: None)
+    monkeypatch.setattr(mr, "_diagnose_bounded", lambda *a, **k: commit.BlobDiagnosis(recorded, "late"))
+    assert mr.measured_rev_drift(run_dir, tmp_path) == []
+    monkeypatch.setattr(mr, "_diagnose_bounded", lambda *a, **k: commit.BlobDiagnosis("0" * 40, "late"))
+    assert mr.measured_rev_drift(run_dir, tmp_path) == ["a.py"]

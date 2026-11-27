@@ -164,13 +164,23 @@ def read_strict_run(record_dir: Path) -> Optional[dict]:
         raise UnreadableHaltRecord(Path(record_dir).name, str(exc)) from exc
 
 
-def _fixture_edits(record_dir: Path) -> list:
-    """The run's `test-leg.json` `flagged_fixture_edits` (a later leg changed the file of a test an earlier leg
-    recorded failing); [] when the record is absent, unreadable or flags none. Advisory: never a refusal."""
+def _read_test_leg(record_dir: Path) -> Optional[dict]:
+    """The record dir's `test-leg.json` object; None when absent, unreadable or not an object.
+    Read through the open `call_io_scope`; inside `bounded_marker_reads` a stall raises `IoIndeterminate`."""
     try:
-        record = json.loads((Path(record_dir) / "test-leg.json").read_text(encoding="utf-8"))
+        raw = call_io_scope.read_bytes(Path(record_dir) / "test-leg.json", bounded=_BOUNDED_MARKER_READS.get())
+        record = json.loads(raw.decode("utf-8")) if raw is not None else None
     except (OSError, ValueError):
-        return []
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _fixture_edits(record_dir: Path, record: object = None) -> list:
+    """The run's `test-leg.json` `flagged_fixture_edits` (a later leg changed the file of a test an earlier leg
+    recorded failing); [] when the record is absent, unreadable or flags none. Advisory: never a refusal.
+    `record` is the leg object the caller already read; None reads it here."""
+    if record is None:
+        record = _read_test_leg(record_dir)
     edits = record.get(HALT_FIXTURE_EDITS_KEY) if isinstance(record, dict) else None
     return [e for e in edits if isinstance(e, dict)] if isinstance(edits, list) else []
 
@@ -178,7 +188,11 @@ def _fixture_edits(record_dir: Path) -> list:
 def _write(record_dir: Path, payload: dict) -> Path:
     target = record_dir / HALTED_FILE
     if payload.get("status") == STATUS_HALTED:
-        edits = _fixture_edits(record_dir)
+        from coordinator_core.ops.dispatch_emit import test_leg_freshness
+
+        leg = _read_test_leg(record_dir)
+        payload = {**payload, "test_leg": test_leg_freshness.halt_stamp(record_dir, record=leg)}
+        edits = _fixture_edits(record_dir, leg)
         if edits:
             payload = {**payload, HALT_FIXTURE_EDITS_FIELD: edits}
     atomic_write_bytes(target, (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
@@ -187,6 +201,9 @@ def _write(record_dir: Path, payload: dict) -> Path:
 
     halted_withheld_index.forget_fresh()
     _track_lookup(Path(record_dir), payload)
+    root = _root_of(Path(record_dir))
+    if root is not None:
+        halted_withheld_index.record_claim(root, Path(record_dir).name)
     return target
 
 
@@ -1457,6 +1474,9 @@ def mark_superseded_by_refire(
     fresh refire closes the prior run and credits none of its kept chunks. False and no write for any other
     status (landed, closed, superseded) or an absent marker.
 
+    The run keeps its `halted_withheld_index` entry: a superseded run stays the owner of its withheld paths
+    until a successor lands (`co_tenant_owner.owner_of`).
+
     The evidence records `prior_status` (the status overwritten) and, when known, the `successor` run id; a
     caller that mints the successor after this call stamps it with `stamp_refire_successor`. The pair lets
     `void_unstarted_supersede` undo the close when the successor's script never launched."""
@@ -1470,7 +1490,6 @@ def mark_superseded_by_refire(
     if successor:
         evidence["successor"] = successor
     _write(Path(record_dir), {**marker, "status": STATUS_SUPERSEDED, SUPERSEDED_EVIDENCE_FIELD: evidence})
-    _index_call("remove_run", record_dir)
     _live_index_drop(record_dir)
     _record_judge(record_dir)
     return True
@@ -1569,6 +1588,18 @@ def void_unstarted_supersede(repo_root: Path, sizing_rel: str, run_id: object = 
         if _void_refire_supersede(root, name, bound):
             return name
     return None
+
+
+def revive_unstarted_supersede(repo_root: Path, run_id: str) -> bool:
+    """True when `run_id` was `superseded-by-refire` onto a successor whose script never launched and is now
+    restored to `halted`, so a start of it is not refused as past minted. Voids only `run_id`, never a sibling
+    close; False and no write for any other marker. One marker read, plus the sizing's bound-run listing
+    when the marker is a refire close; no git, no subprocess."""
+    root = Path(repo_root)
+    if not safe_id(run_id) or _refire_evidence(_read(root / RECORD_DIR_ROOT / run_id)) is None:
+        return False
+    sizing_rel = bound_sizing_rel(root, run_id)
+    return bool(sizing_rel) and _void_refire_supersede(root, run_id, bound_runs(root, sizing_rel))
 
 
 SUPERSEDED_BY_SUCCESSOR = "superseded-by-successor"

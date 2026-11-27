@@ -83,7 +83,6 @@ from coordinator_core.ops.dispatch_emit.halted_record_ledger import (  # noqa: F
     family_done_chunks,
 )
 from coordinator_core.ops.dispatch_emit.halted_record_eviction import (  # noqa: F401 -- re-exported
-    EVICTED_NOT_IMPORTABLE,
     RUN_DIRT_UNCOMMITTED,
     TreeEviction,
     _NOT_RUN_OWNED,
@@ -1015,9 +1014,7 @@ def _land(
     )
     if snapshot is None:
         return _error(f"git status over {record_dir_rel} failed", **base)
-    python_dirt = None
     if needs_import_check:
-        python_dirt = {p for p in snapshot.changed if p.endswith(".py")}
         # Only eviction consumes the extra peer paths from the combined status.
         snapshot.changed = {p for p in snapshot.changed if snapshot.covers(p)}
     artifacts = artifacts.with_superseded(
@@ -1308,7 +1305,7 @@ def _land(
     _withhold_run_dirt(withheld, [*run_written, *post_candidates, *uncoded_dirt], snapshot.changed, landed_now)
     eviction = plan_tree_eviction(
         worktree_root, record_dir_rel, run_written, snapshot.changed,
-        [*run_written, *owner, *declared], withheld, paths, run_id, python_dirt=python_dirt,
+        [*run_written, *owner, *declared], withheld, paths,
         halt_kind=halted.get("halted") if isinstance(halted, dict) else None,
         credited={*touch_written, *owner, *declared, *request_owned, *review_literals},
     )
@@ -1350,9 +1347,17 @@ def _land(
                 post_candidates=[p for p in post_candidates if p in snapshot.changed], landed=landed_now,
                 common_dir=resolve_git_common_dir(worktree_root), manifest_doc=manifest_doc,
             )
+        # Trap: a no-op halt still withholds paths; the own delta is what lets the EM hand-land them.
+        own_delta_written: list = []
+        if (worktree_root / record_dir_rel).is_dir():
+            _record_withheld_own_delta(
+                worktree_root, record_dir_rel, withheld, own_delta_written, run_id,
+                kept=_kept_paths(worktree_root, record_dir_rel),
+            )
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,
+            **({"withheld_own_delta": own_delta_written[0]} if own_delta_written else {}),
             **({"withheld": withheld} if withheld else {}),
             **({"withheld_causes": {p: c for p, c in withheld_causes.items() if p in withheld}}
                if any(p in withheld for p in withheld_causes) else {}),
@@ -1411,7 +1416,7 @@ def _land(
             eviction.apply()
         except OSError as exc:
             return _error(f"evicting unimportable run bytes failed: {exc}", **base)
-        extra_evicted = {"evicted": eviction.evicted, **({"unimportable_unowned": eviction.unowned} if eviction.unowned else {})}
+        extra_evicted = {"evicted": eviction.evicted, **({"unimportable": eviction.unimportable} if eviction.unimportable else {})}
     else:
         extra_evicted = {}
     commit_params: dict = {"paths": paths, "message": message, "carry_stopped_runs": False}
@@ -1465,6 +1470,10 @@ def _land(
             if (worktree_root / record_dir_rel).is_dir():
                 halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
                 _stamp_ignored_excluded(worktree_root / record_dir_rel, ignored_excluded)
+                _record_withheld_own_delta(
+                    worktree_root, record_dir_rel, withheld, paths, run_id,
+                    kept=_kept_paths(worktree_root, record_dir_rel),
+                )
             commit_params["paths"] = paths
             commit_params["message"] = compose_message(deleted)
             for key in ("deleted_paths", "declared_reverts"):
@@ -1586,7 +1595,9 @@ def _record_withheld_own_delta(
     from coordinator_core.ops.dispatch_emit.halt_refire import WITHHELD_OWN_DELTA_FILE
 
     baseline = halted_hunk_attribution._baseline(root, run_id) or {}
-    wanted = [p for p in sorted({*withheld, *kept}) if isinstance(p, str) and p in baseline]
+    wanted = run_artifacts.split_run_state(
+        [p for p in sorted({*withheld, *kept}) if isinstance(p, str)]
+    )[0]
     if not wanted:
         return
     common = resolve_git_common_dir(root)
@@ -1595,7 +1606,12 @@ def _record_withheld_own_delta(
     unlandable: list = []
     for p in wanted:
         try:
-            image = _own_delta_image(root, common, head, p, baseline[p])
+            # Trap: a path off the run baseline has no recorded pre image; absent from HEAD it is a new
+            # file whose whole post image is the run's own, present in HEAD its own change is unknowable.
+            if p not in baseline and head.entry(p) is not None:
+                unlandable.append(p)
+                continue
+            image = _own_delta_image(root, common, head, p, baseline.get(p))
             if image is None:
                 unlandable.append(p)
             elif head.entry(p) is None or image != head.head_bytes(p):

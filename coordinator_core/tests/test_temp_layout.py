@@ -521,3 +521,56 @@ def test_old_root_reap_skips_a_leased_commit_clone_and_prunes_the_rest(tmp_path,
         pass
     assert leased.exists()
     assert not dead_lease.exists() and not bare.exists()
+
+
+def test_scratch_root_is_the_machine_local_key_when_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import machine_resolver
+
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: str(tmp_path) if key == "paths.scratch_root" else None)
+    assert temp_layout.scratch_root() == tmp_path
+    assert temp_layout.scratch_root("/work/r") == tmp_path
+
+
+def test_scratch_root_falls_back_to_the_managed_temp_root_when_unset(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import machine_resolver
+
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: None)
+    assert temp_layout.scratch_root() == temp_layout.fleet_temp_root()
+    assert temp_layout.scratch_root("/work/r") == temp_layout.coordinator_temp_root("/work/r")
+    assert not temp_layout.scratch_root("/work/r").exists()
+
+
+def _registry(monkeypatch: pytest.MonkeyPatch, values: dict) -> None:
+    from coordinator_core import machine_resolver
+
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: values.get(key))
+
+
+def test_build_root_is_the_machine_local_key_when_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recwarn) -> None:
+    _registry(monkeypatch, {"paths.build_root": str(tmp_path / "b"), "paths.scratch_root": str(tmp_path / "s")})
+    assert temp_layout.build_root() == tmp_path / "b"
+    assert not [w for w in recwarn.list if "paths.build_root" in str(w.message)]
+
+
+def test_build_root_falls_back_to_scratch_root_with_a_warning_when_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _registry(monkeypatch, {"paths.scratch_root": str(tmp_path / "s")})
+    with pytest.warns(UserWarning, match=r"paths\.build_root"):
+        assert temp_layout.build_root() == tmp_path / "s"
+
+
+def test_build_output_dir_is_build_root_repo_output_and_leaves_a_prior_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _registry(monkeypatch, {"paths.build_root": str(tmp_path)})
+    out = temp_layout.build_output_dir("/work/game", "win64")
+    assert out == tmp_path / "game" / "win64"
+    assert not out.exists()
+    out.mkdir(parents=True)
+    (out / "prior.bin").write_text("x")
+    assert temp_layout.build_output_dir("/work/game", "win64") == out
+    assert (out / "prior.bin").read_text() == "x"
+
+
+@pytest.mark.parametrize("output", ["", ".", "..", "a/b", "a\\b"])
+def test_build_output_dir_refuses_a_non_segment_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output: str) -> None:
+    _registry(monkeypatch, {"paths.build_root": str(tmp_path)})
+    with pytest.raises(ValueError):
+        temp_layout.build_output_dir("/work/game", output)

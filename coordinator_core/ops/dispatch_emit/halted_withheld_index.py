@@ -26,7 +26,7 @@ from coordinator_core.git.git_objects import PACK_READ_DEADLINE_SECS as READ_DEA
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
-from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE, _read, _withheld_of
+from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE, STATUS_SUPERSEDED, _read, _withheld_of
 
 INDEX_DIR = ".coordinator-local/halt-withheld"
 SENTINEL = ".built-v2"
@@ -350,7 +350,8 @@ def _manifest_declared(record_dir) -> tuple:
 
 
 def rebuild(repo_root: Path) -> None:
-    """Index every `halted` marker under `state/warp` that carries withheld paths or a staged footprint
+    """Index every `halted` or `superseded` marker under `state/warp` (a superseded run stays the owner of its
+    withheld paths until a successor lands) that carries withheld paths or a staged footprint
     (paths, sizing_rel, prints from `withheld-prints.json`, declared from `manifest.json`, `at_ns` the
     marker's mtime), then write the sentinel. Add-only, so a halt recorded mid-scan is never undone."""
     root = Path(repo_root)
@@ -366,7 +367,7 @@ def rebuild(repo_root: Path) -> None:
     for name in names:
         record_dir = os.path.join(warp, name)
         marker = _read(Path(record_dir))
-        if marker is None or marker.get("status") != STATUS_HALTED or not safe_id(name):
+        if marker is None or marker.get("status") not in (STATUS_HALTED, STATUS_SUPERSEDED) or not safe_id(name):
             continue
         withheld = _withheld_of(marker)
         declared = _manifest_declared(record_dir)
@@ -483,7 +484,20 @@ def fresh_entry(repo_root: Path, run_id: str) -> Optional[RunEntry]:
     if not safe_id(run_id):
         return None
     root = os.fspath(repo_root)
-    return call_io_scope.memo(_FRESH, (root, run_id), lambda: _fresh_entry(root, run_id))
+    return call_io_scope.memo(_FRESH, (root, run_id), lambda: _fresh_entry(root, run_id) or _row_entry(root, run_id))
+
+
+def _row_entry(root: str, run_id: str) -> Optional[RunEntry]:
+    """The entry a valid claim row stands for when the index file's own entry is stale or absent: the row proves
+    the marker reads `halted` with its withheld set, as a fresh entry does. Carries `paths` and `declared` only
+    (no sizing or prints). None without a valid halted row, a withheld path, or when a footprint file was
+    unreadable."""
+    row = claim_get(root, run_id)
+    if row is None or not row["h"] or not row["w"] or row["u"]:
+        return None
+    return RunEntry(
+        paths=_norm_all(row["w"]), sizing_rel=None, prints={}, declared=_norm_all((*row["p"], *row["x"], *row["e"])), at_ns=0,
+    )
 
 
 def forget_fresh() -> None:
@@ -504,6 +518,148 @@ def _fresh_entry(root: str, run_id: str) -> Optional[RunEntry]:
         return entry
     except (OSError, ValueError):
         return None
+
+
+#: Persisted claim rows, one file for every run: `{run_id: {"g": stat signature of the record files the row was
+#: computed from, "h": 1 when the marker reads `halted`, "w": withheld paths, "p"/"x": manifest and commit-request
+#: paths and prefixes, "u": 1 when a footprint file is unreadable, "e": extra declared paths}}`. A row is valid only
+#: while its signature equals the files' stats now, so a stale row is never wrong, only unused; a lost concurrent
+#: write costs one re-derivation. `halted_run._write` records the row with the marker; a reader that finds none
+#: derives it once and `claims_flush` persists it.
+_CLAIMS_FILE = ".coordinator-local/halt-claims.json"
+_CLAIMS_CAP = 4096
+_CLAIM_ROW = "halt-claim-row"
+_CLAIM_TABLE = "halt-claim-table"
+_CLAIM_ROWS: dict = {}  # repo root -> [(mtime_ns, size) | None, {run id: row}]
+_CLAIM_PENDING: dict = {}  # repo root -> {run id: row} derived here and not yet flushed
+_STATE_SIG = ("halted.json", "manifest.json", "run.json", "run-outcome.json")
+_SCRATCH_SIG = ("manifest.json", "commit-request.txt", "run.json", "run-outcome.json")
+
+
+def claim_sig(root: str, run_id: str) -> list:
+    """Stat signature of the files a claim row derives from: `[mtime_ns, size]`, or 0 for an absent file, in a fixed
+    order over the `state/warp` and `scratch/warp` run dirs. Stats only, no open."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+
+    out: list = []
+    for base, names in (
+        (os.path.join(root, RECORD_DIR_ROOT, run_id), _STATE_SIG), (os.path.join(root, RUN_DIR_ROOT, run_id), _SCRATCH_SIG),
+    ):
+        for name in names:
+            try:
+                st = os.stat(os.path.join(base, name))
+            except OSError:
+                out.append(0)
+                continue
+            out.append([st.st_mtime_ns, st.st_size])
+    return out
+
+
+def _claim_table(root: str) -> dict:
+    """The persisted rows, re-read only when the file's stat moved since this process last read or wrote it."""
+    path = os.path.join(root, _CLAIMS_FILE)
+    try:
+        st = os.stat(path)
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        sig = None
+    held = _CLAIM_ROWS.get(root)
+    if held is not None and held[0] == sig:
+        return held[1]
+    rows: dict = {}
+    if sig is not None:
+        try:
+            with open(path, "rb") as fh:
+                data = json.loads(fh.read().decode("utf-8"))
+            if isinstance(data, dict):
+                rows = data
+        except (OSError, ValueError):
+            rows = {}
+    _CLAIM_ROWS[root] = [sig, rows]
+    return rows
+
+
+def _derive_claim(root: str, run_id: str) -> Optional[dict]:
+    """The claim row of `run_id` from its files, None when its marker is unreadable or the id is unsafe. Takes the
+    signature before reading, so a write racing the read leaves a row that no longer validates."""
+    if not safe_id(run_id):
+        return None
+    try:
+        from coordinator_core.ops import warp_run_deliverable as wrd
+        from coordinator_core.ops.dispatch_emit import halted_run, sibling_claims
+
+        sig = claim_sig(root, run_id)
+        marker = halted_run.read_strict_run(Path(root) / RECORD_DIR_ROOT / run_id) if sig[0] != 0 else None
+        halted = marker is not None and marker.get("status") == STATUS_HALTED
+        paths, prefixes, unreadable = wrd._manifest_declared(run_id, Path(root))
+        extras = sibling_claims._extra_declared_read(Path(root), run_id)
+        return {
+            "g": sig, "h": int(halted), "w": sorted(_withheld_of(marker)) if halted else [], "p": list(paths),
+            "x": list(prefixes), "u": int(bool(unreadable)), "e": sorted(extras),
+        }
+    except Exception:  # noqa: BLE001 -- no row: the caller reads the run's files
+        return None
+
+
+def claim_get(repo_root, run_id: str) -> Optional[dict]:
+    """The valid claim row of `run_id`, else None. One signature check per run per `call_io_scope`."""
+    root = str(Path(repo_root))
+
+    def lookup() -> Optional[dict]:
+        row = _CLAIM_PENDING.get(root, {}).get(run_id) or _claim_table(root).get(run_id)
+        if isinstance(row, dict) and row.get("g") == claim_sig(root, run_id):
+            return row
+        return None
+
+    return call_io_scope.memo(_CLAIM_ROW, f"{root}\0{run_id}", lookup)
+
+
+def claim_footprint(repo_root, run_id: str) -> Optional[dict]:
+    """`claim_get`, deriving and holding the row (flushed by `claims_flush`) when none is valid. None when it cannot
+    be derived: the caller reads the run's files."""
+    row = claim_get(repo_root, run_id)
+    if row is None and call_io_scope.scope_open():  # outside a scope a derivation would parse the files twice
+        root = str(Path(repo_root))
+        if not os.path.exists(os.path.join(root, RECORD_DIR_ROOT, run_id, HALTED_FILE)):
+            return None  # a live run has no marker: its files are read as before, no row to keep
+        row = _derive_claim(root, run_id)
+        if row is not None:
+            _CLAIM_PENDING.setdefault(root, {})[run_id] = row
+            call_io_scope.invalidate(_CLAIM_ROW)
+    return row
+
+
+def claims_flush(repo_root) -> None:
+    """Merge the rows derived since the last flush into the persisted file (one read, one atomic write). Best
+    effort: a failed write leaves the rows to be derived again."""
+    root = str(Path(repo_root))
+    pending = _CLAIM_PENDING.pop(root, None)
+    if not pending:
+        return
+    try:
+        _CLAIM_ROWS.pop(root, None)
+        rows = dict(_claim_table(root))
+        rows.update(pending)
+        for stale in list(rows)[: max(0, len(rows) - _CLAIMS_CAP)]:
+            rows.pop(stale, None)
+        atomic_write_bytes(os.path.join(root, _CLAIMS_FILE), json.dumps(rows, separators=(",", ":")).encode("utf-8"))
+        _CLAIM_ROWS.pop(root, None)
+    except OSError:
+        _CLAIM_PENDING.setdefault(root, {}).update(pending)
+
+
+def record_claim(repo_root, run_id: str) -> None:
+    """Derive and persist `run_id`'s claim row; called with every marker write. Never raises."""
+    try:
+        root = str(Path(repo_root))
+        call_io_scope.invalidate(_CLAIM_ROW)
+        row = _derive_claim(root, run_id)
+        if row is not None:
+            _CLAIM_PENDING.setdefault(root, {})[run_id] = row
+            claims_flush(root)
+        forget_fresh()
+    except Exception:  # noqa: BLE001 -- the row is derived again by the next reader
+        pass
 
 
 def run_ids(repo_root: Path) -> list[str]:

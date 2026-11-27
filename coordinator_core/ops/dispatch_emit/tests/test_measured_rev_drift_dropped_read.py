@@ -41,6 +41,12 @@ def _drop_unbounded(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(commit, "_checkin_blob_sha_read", lambda root, rel: None)
 
 
+def _unhashable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        commit, "diagnose_checkin_blob", lambda root, rel: commit.BlobDiagnosis(None, "file size changed while it was read (being written)")
+    )
+
+
 def test_dropped_bounded_read_falls_back_to_unbounded_and_is_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run_dir = _setup(tmp_path)
     calls = _drop(monkeypatch, times=99)
@@ -61,9 +67,42 @@ def test_unhashable_path_raises_measure_unavailable(tmp_path: Path, monkeypatch:
     run_dir = _setup(tmp_path)
     _drop(monkeypatch, times=99)
     _drop_unbounded(monkeypatch)
+    _unhashable(monkeypatch)
     with pytest.raises(mr.MeasureUnavailable) as exc:
         mr.measured_rev_drift(run_dir, tmp_path)
     assert exc.value.paths == ["a.txt"] and isinstance(exc.value, OSError)
+    assert exc.value.causes == {"a.txt": "file size changed while it was read (being written)"}
+
+
+def test_a_diagnosing_read_that_hashed_is_the_measurement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = _setup(tmp_path)
+    _drop(monkeypatch, times=99)
+    _drop_unbounded(monkeypatch)
+    assert mr.measured_rev_drift(run_dir, tmp_path) == []
+    (tmp_path / "a.txt").write_text("two\n")
+    assert mr.measured_rev_drift(run_dir, tmp_path) == ["a.txt"]
+
+
+def test_stalled_reread_is_measure_unavailable_not_a_hang(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+
+    run_dir = _setup(tmp_path)
+    _drop(monkeypatch, times=99)
+    release = threading.Event()
+    monkeypatch.setattr(mr, "REREAD_DEADLINE_SECS", 0.05)
+    monkeypatch.setattr(commit, "_checkin_blob_sha_read", lambda root, rel: release.wait(5) and None)
+    monkeypatch.setattr(
+        commit, "diagnose_checkin_blob", lambda root, rel: release.wait(5) and commit.BlobDiagnosis(None, "x")
+    )
+    start = time.monotonic()
+    try:
+        with pytest.raises(mr.MeasureUnavailable) as exc:
+            mr.measured_rev_drift(run_dir, tmp_path)
+        assert time.monotonic() - start < 2
+        assert "a.txt" in exc.value.reason() and exc.value.causes["a.txt"] != mr.UNNAMED_CAUSE
+    finally:
+        release.set()
 
 
 def test_truly_absent_recorded_path_stays_drift(tmp_path: Path) -> None:
@@ -76,12 +115,13 @@ def test_land_run_gate_names_measure_unavailable(tmp_path: Path, monkeypatch: py
     run_dir = _setup(tmp_path)
     _drop(monkeypatch, times=99)
     _drop_unbounded(monkeypatch)
+    _unhashable(monkeypatch)
     monkeypatch.setattr(requirements_ledger, "read_ledger", lambda r, d: SimpleNamespace(items=[1], all_of_pm_ask=False))
     monkeypatch.setattr(requirements_ledger, "noted_paths", lambda r, d: [])
     monkeypatch.setattr(requirements_ledger, "judge", lambda *a, **k: {"pass": True, "failures": [], "open": []})
     refusal, _, _ = land_run._ledger_gate(tmp_path, run_dir, VERDICT, None, [], {}, None, {}, None, None)
     reasons = [f["reason"] for f in refusal["ledger_failures"]]
-    assert reasons == ["measure_unavailable: a.txt"]
+    assert reasons == ["measure_unavailable: a.txt (file size changed while it was read (being written))"]
 
 
 def test_test_leg_failure_routes_measure_unavailable_to_test_infra() -> None:

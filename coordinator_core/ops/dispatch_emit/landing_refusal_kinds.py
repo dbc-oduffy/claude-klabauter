@@ -12,6 +12,7 @@ PROVENANCE_KINDS = frozenset({
     "peer-hunks-co-declared",
     "out-of-ask-hunks",
     "unreadable-peer-claims",
+    "co-tenant-hunks-unattributed",
     "shipped-claim-unbacked",
     "import-closure-untracked",
     "since-base-overlap",

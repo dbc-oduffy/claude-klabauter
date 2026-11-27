@@ -44,7 +44,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     PARK_SOURCE_REPLY_KEY,
     PARKED_REPLY_KEY,
     PM_INTENT_FILE,
-    run_base_ref,
+    premise_ref,
     REGISTER_ROWS_UNCLAIMED_REFUSAL,
     RELAYED_ASK_FILE,
     RELAYED_ASK_HEADING,
@@ -138,16 +138,23 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     read_spine,
     with_canonical_disposition,
 )
-from coordinator_core.ops.dispatch_emit import review_floor, run_notes
+from coordinator_core.ops.dispatch_emit import review_floor, run_notes, run_order
 from coordinator_core.ops.dispatch_emit.requirements_ledger import NOTES_FILE
 from coordinator_core.ops.dispatch_emit.wave_map import (
     _RUNTIME_ORDER_GATE_KINDS,
+    _compute_held_out,
+    _predecessors,
     build_waves,
     cap_waves,
+    priority_report,
     dag_from_waves,
 )
 from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo as load_rows
-from coordinator_core.ops._brief_premise import check_brief_claims, render_contradicted
+from coordinator_core.ops._brief_premise import (
+    check_brief_claims,
+    render_contradicted,
+    render_uncommitted,
+)
 from coordinator_core.ops.sizing_intake_contract import read_em_brief
 from coordinator_core.telemetry import op_row_fields
 
@@ -165,6 +172,7 @@ _PARAMS = (
     Field("session_id", "str"),
     Field("only_rows", "str_list"),
     Field("claim_register_rows", "bool"),
+    Field("pivot_resume", "bool"),
     Field("materialise_wave", "str"),
 )
 
@@ -264,16 +272,18 @@ def revisions_block(root: Path, run_id: str, ledger: Optional[requirements_ledge
 def em_brief_block(sizing: Optional[Mapping], root: Optional[Path] = None, base_ref: Optional[str] = None) -> str:
     """The brief's EM-diagnosis section (the sizing's `em_analysis.em_brief`), marked as not the
     PM's words and placed below the PM-intent and relayed-ask blocks. Empty when none is recorded.
-    With ``root``, the brief's tree-contradicted claims follow as CONTRADICTED lines; a claim that
-    held at ``base_ref`` (the run base, what the tree held before the run wrote) is not one."""
+    With ``root``, the brief's tree-contradicted claims follow as CONTRADICTED lines, then the
+    claims only the working tree satisfies as UNCOMMITTED lines; a claim that held at ``base_ref``
+    (the run base, what the tree held before the run wrote) is neither."""
     brief = read_em_brief(sizing) if isinstance(sizing, Mapping) else None
     if not brief:
         return ""
     block = f"## EM diagnosis (not the PM's words)\n\n{brief}\n"
     if root is not None:
-        flagged = render_contradicted(check_brief_claims(brief, root, base_ref))
-        if flagged:
-            block += f"\n{flagged}\n"
+        rows = check_brief_claims(brief, root, base_ref)
+        for flagged in (render_contradicted(rows), render_uncommitted(rows)):
+            if flagged:
+                block += f"\n{flagged}\n"
     return block
 
 
@@ -782,7 +792,7 @@ def _sibling_owner_rows(plan_rows: Sequence[Mapping], sibling_roots: Mapping[str
 
 def _only_rows(
     rows: list, exclusions: list, keep: frozenset, snap: Optional[resume_snapshot.Snapshot] = None,
-    revise_ids: frozenset = frozenset(),
+    revise_ids: frozenset = frozenset(), pivot_resume: bool = False,
 ) -> tuple[list, list, tuple[str, ...], list]:
     """The resume subset of a spine read, the resume rows a re-plan retired, and the dispatchable
     rows dropped as landed: `keep` rows only,
@@ -790,7 +800,9 @@ def _only_rows(
     exclusions. With `snap` (the gate's snapshot), every known row outside `snap.not_to_run` is
     kept, rows a re-plan added included. A `keep` id the spine lacks but `snap.resume_rows` names
     is retired: reported, never staged, never refused. `revise_ids` (a ledger resume's register
-    row ids) retire the same way, snapshot or not. Any other missing id refuses."""
+    row ids) retire the same way, snapshot or not. With `pivot_resume` (a PIVOT-halted refire's
+    from-scratch replan) every missing id retires except one the snapshot records as landed or closed
+    (`snap.not_to_run`), which refuses. Any other missing id refuses."""
     known = {r.id for r in rows} | {e.get("id") for e in exclusions}
     missing = keep - known
     retired: tuple[str, ...] = tuple(sorted(missing & revise_ids))
@@ -798,6 +810,13 @@ def _only_rows(
     if snap is not None:
         retired = tuple(sorted({*retired, *(missing & snap.resume_rows)}))
         missing = missing - snap.resume_rows
+    if pivot_resume and snap is not None and missing & snap.not_to_run:
+        raise AskStageError(
+            f"pivot replan deleted landed or closed row(s): {sorted(missing & snap.not_to_run)}"
+        )
+    if pivot_resume and missing:
+        retired = tuple(sorted({*retired, *missing}))
+        missing = frozenset()
     if missing:
         raise AskStageError(f"resume row id(s) not in the plan's spine: {sorted(missing)}")
     if snap is not None:
@@ -1232,6 +1251,23 @@ def _refuse_misrouted_xs_mint(sizing: Mapping, sizing_rel: str, writes: Sequence
         raise AskStageError(f"XS-MINT-NO-WRITES: {sizing_rel} is an XS arm and needs at least one writes path")
 
 
+def _recorded_xs_writes(root: Path, record: Path, prior: str) -> list[str]:
+    """The `writes` of every row in the halted predecessor's recorded manifest (else this run's own), in order; [] when none is readable.
+
+    A refire of an XS sizing names no writes: the footprint it minted is in the run record."""
+    records = [record_dir(root, prior)] if prior else []
+    records.append(record)
+    for rec in records:
+        manifest = _recorded_manifest(rec)
+        paths = [
+            w for row in (manifest or {}).get("rows") or () if isinstance(row, Mapping)
+            for w in row.get("writes") or () if isinstance(w, str) and w.strip()
+        ]
+        if paths:
+            return list(dict.fromkeys(paths))
+    return []
+
+
 _EXCLUSION_CUE = re.compile(
     r"\b(?:do not|don't|dont|must not|never|should not|shall not)\s+(?:touch|modify|edit|change|write|stage|commit|revert)\b"
     r"|\bnot to be (?:touched|modified|edited|changed)\b|\bleave\b[^.\n]*\balone\b|\bout of scope\b",
@@ -1643,6 +1679,7 @@ def stage(
     only_rows: Optional[Sequence[str]] = None,
     ledger_resume: bool = False,
     claim_register_rows: bool = False,
+    pivot_resume: bool = False,
     classify_receiver: Optional[Callable[[str, bool], object]] = None,
     plan_parse: Optional["_PlanParse"] = None,
     family_report: Optional[dict] = None,
@@ -1660,6 +1697,8 @@ def stage(
     `claim_register_rows=True` (a ledger re-plan) first adds every register row the plan's
     `register_claims.rows` omit to its claims and re-pins them, so the plan the re-plan revised
     claims the rows a later revise minted.
+    `pivot_resume=True` (a PIVOT-halted refire replanned from scratch) retires every requested id the
+    spine no longer holds, so it lands in `retired_resume_rows`; a requested id still present stays staged.
     `plan_parse` is the handler's one parse of an unmodified full plan; it is ignored under
     `claim_register_rows`, which rewrites the plan first.
     """
@@ -1697,6 +1736,8 @@ def stage(
         sizing = load_sizing(root, sizing_rel)
         run_sizing_rel, run_sizing = sizing_rel, sizing
         _refuse_unapproved_design(sizing, sizing_rel)
+        if not any(str(w).strip() for w in writes) and (prior or (record / "manifest.json").is_file()):
+            writes = _recorded_xs_writes(root, record, prior)
         excluded = _excluded_by_ask(sizing, writes)
         writes = [w for w in writes if w not in excluded]
         _refuse_misrouted_xs_mint(sizing, sizing_rel, writes)
@@ -1734,7 +1775,7 @@ def stage(
     try:
         with leg("parse"):
             parse = shared if shared is not None and not restore_run else _parse_plan(
-                root, plan_path, plan_text, restore_run=restore_run,
+                root, plan_path, plan_text, restore_run=restore_run, resume=only_rows is not None,
             )
     except InvalidChangeKindError as exc:
         raise AskStageError(f"INVALID-CHANGE-KIND: {plan_posix}: {exc}") from exc
@@ -1761,7 +1802,7 @@ def stage(
             if ledger_resume else frozenset()
         )
         rows, exclusions, retired_resume, dropped_landed = _only_rows(
-            rows, exclusions, frozenset(only_rows), resume_snap, revise_ids
+            rows, exclusions, frozenset(only_rows), resume_snap, revise_ids, pivot_resume
         )
         if not ledger_resume and not rows and _draft_resume_without_evidence(
             plan_text, dropped_landed, resume_snap
@@ -1806,7 +1847,9 @@ def stage(
         raise AskStageError(f"route: {exc}") from exc
     # Split, not refuse: runtime_cap is CPU-dependent and a refusal would halt hands-off runs.
     with leg("waves"):
-        waves = cap_waves(build_waves(rows), sibling_split.runtime_cap())
+        order = run_order.read_for_sizing(root, run_id, run_sizing_rel) if run_sizing_rel else []
+        applied_order, unhonoured_order = priority_report(rows, order) if order else ([], [])
+        waves = cap_waves(build_waves(rows, priority=order), sibling_split.runtime_cap())
     from coordinator_core.ops.dispatch_emit.memo_rows import memo_close_only
 
     blocking_drops = _criterion_blocking_drops(root, exclusions)
@@ -1908,7 +1951,7 @@ def stage(
     stage_claimed: list[str] = []
     if plan_rel and not ledger_resume and _split is not None:
         stage_claimed = _settle_unclaimed_register_rows(root, plan_path, _split.fm_text, plan_posix, run_sizing_rel, run_sizing)
-    em_block = em_brief_block(run_sizing, root, run_base_ref(root, run_sizing_rel))
+    em_block = em_brief_block(run_sizing, root, premise_ref(root, run_sizing_rel))
     if em_block:
         intent = intent + ("\n" if intent else "") + em_block
     widen_probes: dict = {}
@@ -1935,12 +1978,11 @@ def stage(
         raise AskStageError(f"sizing {run_sizing_rel or ''}: {exc}") from exc
     binding = None
     try:
-        if stage_family_binding.opted_in(run_sizing or {}):
-            if (run_sizing or {}).get("family"):
-                raise AskStageError(
-                    f"sizing {run_sizing_rel or ''} names both family and stage_family_binding; keep one"
-                )
-            binding = stage_family_binding.load()
+        binding = stage_family_binding.from_sizing(run_sizing)
+        if binding is not None and (run_sizing or {}).get("family"):
+            raise AskStageError(
+                f"sizing {run_sizing_rel or ''} names both family and stage_families; keep one"
+            )
     except (ValueError, stage_family_binding.BindingError) as exc:
         if isinstance(exc, AskStageError):
             raise
@@ -1984,9 +2026,27 @@ def stage(
             prior_fingerprint = refire_unchanged.fingerprint(record_dir(root, refire_prior), root)
         except ValueError:
             prior_fingerprint = None
+    from coordinator_core.ops.dispatch_emit import live_run_writes, resume_gate
+
+    takeover_run = resume_gate.takeover_recorded(record)
+
+    def _filters_held(r) -> bool:
+        return isinstance(r.writes, list) and (takeover_run or _adopts_stranded(raw_by_id.get(r.id)))
+
+    live_held_by_path = live_run_writes.live_held(
+        root, session_id, (w for wave in waves for r in wave if _filters_held(r) for w in r.writes)
+    )
     with leg("briefs"):
         for wave_no, wave in enumerate(waves):
             for row in wave:
+                if _filters_held(row):
+                    kept_writes, peer_held = live_run_writes.without_held(row.writes, live_held_by_path)
+                    if peer_held:
+                        logging.getLogger(__name__).warning(
+                            "row %s: left out of its declared writes, held by a live session: %s",
+                            row.id, ", ".join(peer_held),
+                        )
+                        row = row._replace(writes=kept_writes)
                 agent_type = _row_agent_type(row)
                 row_family = "claude"
                 role_family = ""
@@ -2002,11 +2062,7 @@ def stage(
                     and agent_type == _EXECUTOR_AGENT_TYPE
                 ):
                     bound = binding.roles.get(row.stage_role)
-                    if bound is None:
-                        raise AskStageError(
-                            f"row {row.id}: stage_role {row.stage_role!r} has no family in the stage-family binding"
-                        )
-                    if bound != stage_family.FALLBACK:
+                    if bound is not None and bound != stage_family.FALLBACK:
                         agent_type, role_family = stage_family.RUNNER_AGENT, bound
                 if row.agent_model and agent_type in _AGENT_MODELS:
                     row = row._replace(agent_model=None)  # a pinned type takes its pin; the override is dropped
@@ -2195,14 +2251,38 @@ def stage(
             plan_posix=plan_posix,
         )
 
+    closed_ids = {str(e.get("id")) for e in parse.exclusions if _is_closed_exclusion(e)}
+    closed_ids.update(r.id for r in dropped_landed)
+    remaining_rows = _remaining_rows(
+        raw_by_id=raw_by_id,
+        rows=rows,
+        staged={r.id for r in manifest_rows},
+        landed=closed_ids,
+        parse_exclusions=parse.exclusions,
+        gated=gated,
+        owed=owed,
+        slot_withheld=slot_withheld_rows(raw_by_id),
+        memo_close=memo_close,
+        retired=retired_resume,
+        held_ids=held_ids,
+        dropped_rows=dropped_rows,
+        ran_premises=ran_premises,
+        unhonoured_order=unhonoured_order,
+        plan_posix=plan_posix,
+    )
+
     docs = doc_writes(run_id, run_sizing)
     with leg("overlap"):
-        from coordinator_core.ops.dispatch_emit import live_run_writes
+        from coordinator_core.ops.dispatch_emit import live_run_writes, run_withhold
 
+        withheld = run_withhold.read([record, *([record_dir(root, refire_prior)] if refire_prior else [])])
         waiting = _refuse_live_write_overlap(
             root,
             run_id,
-            live_run_writes.file_claims(root, [*declared, *docs, *(w for r in draft_rows for w in r.writes)]),
+            live_run_writes.without_withheld(
+                live_run_writes.file_claims(root, [*declared, *docs, *(w for r in draft_rows for w in r.writes)]),
+                withheld,
+            ),
         )
     if waiting is not None:
         raise StageWaiting(
@@ -2306,6 +2386,9 @@ def stage(
         memo_close=memo_close if not manifest_rows else (),
         held_ids=held_ids,
         dropped_rows=dropped_rows,
+        applied_order=tuple(applied_order),
+        unhonoured_order=tuple(unhonoured_order),
+        remaining_rows=remaining_rows,
     )
     if dropped_rows:
         _record_staging_drops(record, run_id, dropped_rows)
@@ -2435,6 +2518,90 @@ def _plan_sizing_object(root: Path, plan_rel: str) -> Optional[str]:
         return None
     value = read_fm_field_unquoted(split.fm_text, "sizing_object")
     return value if value and value != "null" else None
+
+
+def _remaining_rows(
+    *,
+    raw_by_id: Mapping[str, Mapping],
+    rows: Sequence,
+    staged: set,
+    landed: set,
+    parse_exclusions: Sequence[Mapping],
+    gated: Sequence,
+    owed: Sequence,
+    slot_withheld: Sequence[Mapping],
+    memo_close: Sequence[Mapping],
+    retired: Sequence[str],
+    held_ids: Sequence[str],
+    dropped_rows: Sequence[Mapping],
+    ran_premises: Mapping[str, str],
+    unhonoured_order: Sequence[Mapping],
+    plan_posix: str,
+) -> tuple[dict[str, str], ...]:
+    """`{id, reason, detail}` for each plan row that is neither staged nor finished, from the sources
+    stage already holds. Refuses UNEXPLAINED-REMAINING-ROW naming any with no reason, so a stage
+    never ships short of a row without saying why. `landed` ids and closed dispositions are finished."""
+    from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
+
+    by_id = {r.id: r for r in rows}
+    held = _compute_held_out(list(rows), _predecessors(list(rows))) if rows else {}
+    reasons: dict[str, tuple[str, str]] = {}
+
+    def _note(rid: object, reason: str, detail: str = "") -> None:
+        reasons.setdefault(str(rid), (reason, detail))
+
+    for g in gated:
+        _note(g.id, "gated", f"{g.reason}: {g.gate}")
+    for o in owed:
+        _note(o.id, "owed", f"{o.reason}: {o.detail}" if o.detail else str(o.reason))
+    for e in parse_exclusions:
+        reason = str(e.get("reason") or "")
+        if reason and not _is_closed_exclusion(e):
+            detail = e.get("detail")
+            _note(e.get("id"), reason if reason == "depends_on_plan" else "excluded", f"{reason}: {detail}" if detail else reason)
+    for s in slot_withheld:
+        _note(s.get("id"), "slot-withheld", "needs_slot row waits on a slot")
+    for c in memo_close:
+        _note(c.get("id"), "memo-close", "closed by the memo send")
+    for rid in retired:
+        _note(rid, "retired", "retired by the resume")
+    for rid in held_ids:
+        _note(rid, "held", "held behind an unfinished row")
+    for d in dropped_rows:
+        _note(d.get("id"), "dropped", str(d.get("reason") or ""))
+    for rid, report in ran_premises.items():
+        _note(rid, "premise-ran", f"premise already ran in a prior leg ({report})")
+    for rid, why in held.items():
+        _note(rid, "blocked_by", why)
+    for rid, row in by_id.items():
+        if row.writes is UNDECLARED:
+            _note(rid, "missing_writes", "the row declares no writes")
+    ordered = {str(u.get("id")): str(u.get("reason") or "") for u in unhonoured_order}
+    for rid, why in ordered.items():
+        _note(rid, "unhonoured_order", why)
+
+    out: list[dict[str, str]] = []
+    unexplained: list[str] = []
+    for rid, raw in raw_by_id.items():
+        if rid in staged or rid in landed:
+            continue
+        if (with_canonical_disposition(raw) or {}).get("disposition") in NON_DISPATCHABLE_DISPOSITIONS:
+            continue
+        if rid not in reasons:
+            unexplained.append(rid)
+            continue
+        reason, detail = reasons[rid]
+        if rid in ordered and reason != "unhonoured_order":
+            detail = f"{detail}; ordered but not honoured: {ordered[rid]}".lstrip("; ")
+        out.append({"id": rid, "reason": reason, "detail": detail})
+    if unexplained:
+        raise AskStageError(
+            f"UNEXPLAINED-REMAINING-ROW: {plan_posix} leaves {sorted(unexplained)} out of every wave with no "
+            "reason (not gated, owed, excluded, held, missing writes or unhonoured order); "
+            "the stage is not emitted short",
+            plan_path=plan_posix,
+        )
+    return tuple(out)
 
 
 def _unstaged_row_reasons(
@@ -2708,15 +2875,22 @@ def _stage_write_baseline(
 def _stage_foreign_at_baseline(root: Path, record: Optional[Path], write_baseline: Mapping) -> dict:
     """The dirty-at-baseline marker (`write_baseline.foreign_at_baseline`) for this stage. A first stage
     derives it from the baseline it just captured; a refire (`_baseline_source` finds the chain's first
-    halted record) inherits the first stage's marker, so one run's own earlier dirt is never re-labelled
-    foreign and a peer's dirt present at the first baseline never becomes the chain's own."""
+    halted record) inherits the first stage's marker. Either marker then drops every path the run's own
+    chain wrote (`write_baseline.without_carried`), so one run's own earlier dirt is never re-labelled
+    foreign, including when no predecessor holds a halted base; a peer's dirt the chain never wrote stays
+    foreign."""
     source = _baseline_source(root, record)
     if source is not None and halted_run_base(source):
         inherited = (_recorded_manifest(source) or {}).get("foreign_at_baseline")
         if isinstance(inherited, Mapping):
-            return {p: s for p, s in inherited.items() if p in write_baseline and isinstance(s, str)}
-        return {}
-    return _write_baseline.foreign_at_baseline(root, write_baseline)
+            marker = {p: s for p, s in inherited.items() if p in write_baseline and isinstance(s, str)}
+        else:
+            marker = {}
+    else:
+        marker = _write_baseline.foreign_at_baseline(root, write_baseline)
+    if record is None:
+        return marker
+    return _write_baseline.without_carried(root, record, marker) or {}
 
 
 def _baseline_source(root: Path, record: Optional[Path]) -> Optional[Path]:
@@ -3048,8 +3222,39 @@ class _PlanParse:
     exclusions: tuple
 
 
-def _parse_plan(root: Path, plan_path: Path, plan_text: str, *, restore_run: str | None = None) -> _PlanParse:
-    """Parse `plan_text` once; `InvalidChangeKindError` from the spine read propagates."""
+#: Commits the refire's first-parent checkpoint walk inspects before giving up.
+_CHECKPOINT_WALK_CAP = 500
+
+
+def _checkpoint_landed_chunks(root: Path, plan_path: Path, plan_text: str, raw_by_id: Mapping[str, Mapping]) -> dict:
+    """`{(plan rel, row id): checkpoint sha}` for the open rows a same-plan checkpoint in HEAD's
+    first-parent history already landed (in-process walk, no spawn); `{}` when none or HEAD is unborn.
+    Trap: `Checkpoint-Not-Landed` checkpoints count here (`honour_open_runs=False`): a refire is
+    run-internal and the halted run's own wave commits are done."""
+    open_ids = frozenset(
+        i for i, raw in raw_by_id.items() if raw.get("disposition") in (None, "open")
+    )
+    if not open_ids:
+        return {}
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import checkpoint_rows_landed, plan_created_floor
+
+    head = head_sha(root)
+    if not head:
+        return {}
+    plan_rel = _rel(root, plan_path)
+    walk = checkpoint_rows_landed(
+        root, plan_rel, head, open_ids, floor_epoch=plan_created_floor(plan_text), cap=_CHECKPOINT_WALK_CAP,
+    )
+    return {(plan_rel, rid): sha for sha, ids in walk.landed.items() for rid in ids}
+
+
+def _parse_plan(
+    root: Path, plan_path: Path, plan_text: str, *, restore_run: str | None = None, resume: bool = False,
+) -> _PlanParse:
+    """Parse `plan_text` once; `InvalidChangeKindError` from the spine read propagates. With `resume`
+    (a refire or resume stage) an open row a same-plan checkpoint landed is excluded as `checkpoint-landed`,
+    never staged again."""
     raw_by_id = {
         raw["id"]: raw
         for raw in load_rows(plan_text).rows
@@ -3063,6 +3268,7 @@ def _parse_plan(root: Path, plan_path: Path, plan_text: str, *, restore_run: str
         plan_path,
         exclusions=exclusions,
         keep_coded=evicted_coded_rows(root, tuple(raw_by_id.values()), restore_run),
+        landed_plan_chunks=_checkpoint_landed_chunks(root, plan_path, plan_text, raw_by_id) if resume else None,
         cleared_gate_owners=own_gate_owners(raw_by_id.values(), root) | frozenset(sibling_roots),
         plan_text=plan_text,
     )
@@ -3258,6 +3464,7 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
             commit_sizing_rel=params.get("commit_sizing_path") or None,
             only_rows=params["only_rows"] if params.get("only_rows") is not None else None,
             claim_register_rows=bool(params.get("claim_register_rows")),
+            pivot_resume=bool(params.get("pivot_resume")),
             plan_parse=plan_parse,
         )
         if params.get("plan_path"):

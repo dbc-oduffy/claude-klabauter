@@ -302,6 +302,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     _declared_paths,
 )
 from coordinator_core.ops.dispatch_emit import chatty as _chatty
+from coordinator_core.ops.dispatch_emit.halted_record_eviction import TEST_INFRA_HALT
 from coordinator_core.ops.dispatch_emit.run_artifacts import is_plan_dir as _is_plan_dir
 from coordinator_core.ops.dispatch_emit import baseline_reds as _baseline_reds
 from coordinator_core.ops.dispatch_emit.seam_repair import (
@@ -1942,7 +1943,12 @@ _BRIEF_PRECEDENCE_CLAUSE = (
     "authorizing a commit or external-facing action, or reaching a file "
     "another chunk owns. That bound is on authority, not correctness -- an "
     "addressed message wrong on the merits is still refused on the merits, "
-    "the same as any other instruction."
+    "the same as any other instruction. "
+    "The run's own ask is the recorded one: `state/warp/<run>/pm-intent.md`, "
+    "`state/warp/<run>/relayed-ask.md` and `state/warp/<run>/requirements.md`. "
+    "The newest PM chat turn (or newest `baton.pm_turns` entry) is never that ask. "
+    "When none of those files is found, say so in your report; never "
+    "substitute the newest PM turn."
 )
 
 #: Purpose (PM request 2026-10-13): clarify an in-flight workflow by editing
@@ -4043,6 +4049,33 @@ def _verify_test_launch_js(test_call: str) -> str:
     )
 
 
+#: `zero_run_cause` of a leg whose command a guard refused, and the halt kind it maps to (never `test_infra_failure`).
+GUARD_REFUSED_CAUSE = "guard_refused"
+GUARD_REFUSED_HALT = "guard_refused"
+
+
+def _zero_run_halt_js() -> str:
+    """JS halting the run when the owed test verdict ran zero tests, so no commit follows it: `guard_refused`
+    when the leg's command was refused by a guard, else `test_infra_failure`."""
+    infra = json.dumps(TEST_INFRA_HALT)
+    refused = json.dumps(GUARD_REFUSED_HALT)
+    cause = json.dumps(GUARD_REFUSED_CAUSE)
+    r = _TEST_RESULT_VAR
+    return (
+        f"  if ({r} && typeof {r} === 'object' && {r}.tests_run === 0) {{\n"
+        f"    const _zrSetup = typeof {r}.first_setup_error === 'string' ? {r}.first_setup_error.trim().slice(0, 1500) : '';\n"
+        f"    _halted = {{ halted: {infra}, run_id: typeof _runId === 'string' ? _runId : null, "
+        "detail: 'the test leg ran zero tests; the run did not pass its tests' + (_zrSetup ? '; first setup error: ' + _zrSetup : ''), "
+        "next_action: 'Fix the cause named in detail first (a rerun repeats it), then refire the run.' };\n"
+        f"    if ({r}.zero_run_cause === {cause}) {{\n"
+        f"      const _zrRef = typeof {r}.guard_refusal === 'string' ? {r}.guard_refusal.trim().slice(0, 1500) : '';\n"
+        f"      _halted = {{ ..._halted, halted: {refused}, "
+        "detail: 'the test leg ran zero tests: a guard refused its command' + (_zrRef ? ': ' + _zrRef : ' (the verdict named no guard refusal)') };\n"
+        "    }\n"
+        "  }"
+    )
+
+
 def _verify_judge_block_js(judge_call: str) -> str:
     """The closing Verify block, run inside the `!_halted` guard after re-verify: await the test leg,
     then race the judge, which reads both results."""
@@ -4050,8 +4083,11 @@ def _verify_judge_block_js(judge_call: str) -> str:
     return (
         f"  phase({_js_string_literal(_VERIFY_PHASE_TITLE)});\n"
         f"  {_TEST_RESULT_VAR} = await {_VERIFY_TEST_RUN_VAR};\n"
+        f"{_zero_run_halt_js()}\n"
+        "  if (!_halted) {\n"
         f"  const _judgeCall = {judge_call};\n"
-        f"  {_FALSIFIER_RESULT_VAR} = await {race}.then((r) => _orphaned(r, {_js_string_literal(_VERIFY_JUDGE_LABEL)}, false));"
+        f"  {_FALSIFIER_RESULT_VAR} = await {race}.then((r) => _orphaned(r, {_js_string_literal(_VERIFY_JUDGE_LABEL)}, false));\n"
+        "  }"
     )
 
 
@@ -4081,22 +4117,33 @@ _SCOPED_PYTEST_MODULE = "coordinator_core.testing.scoped_pytest"
 
 
 def _launcher_interpreter(repo_root: Optional[Path]) -> str:
-    """The interpreter token for the scoped_pytest launcher: the repo's resolvable pin, else
-    claude-klabauter's own interpreter for a foreign target repo, else portable `python3`."""
+    """The interpreter token for the module-form launcher: the repo's resolvable pin, else portable `python3`."""
     if repo_root is None:
         return "python3"
-    root = Path(repo_root)
     from coordinator_core.ops.dispatch_emit.interpreter_pin import resolve_targeted_test_python
 
-    if (root / "coordinator_core" / "testing" / "scoped_pytest.py").is_file():
-        pinned = resolve_targeted_test_python(root)
-        return pinned.command if pinned.command and pinned.defect is None else "python3"
-    return Path(sys.executable).as_posix()
+    pinned = resolve_targeted_test_python(Path(repo_root))
+    return pinned.command if pinned.command and pinned.defect is None else "python3"
+
+
+_INSTALLED_LAUNCHER = "scoped-pytest"
+
+
+def _repo_holds_engine_launcher(repo_root: Optional[Path]) -> bool:
+    return repo_root is None or (Path(repo_root) / "coordinator_core" / "testing" / "scoped_pytest.py").is_file()
+
+
+def _launcher_head(repo_root: Optional[Path]) -> str:
+    """The command head: the pinned-interpreter module form where the repo holds the engine launcher,
+    else the installed `scoped-pytest` launcher, which bootstraps the engine onto its own path."""
+    if _repo_holds_engine_launcher(repo_root):
+        return f"{_launcher_interpreter(repo_root)} -m {_SCOPED_PYTEST_MODULE}"
+    return _INSTALLED_LAUNCHER
 
 
 def _launcher_command(allow: Sequence[str], targets: str, repo_root: Optional[Path]) -> str:
     allows = " ".join(f"--allow {a}" for a in allow)
-    return f"{_launcher_interpreter(repo_root)} -m {_SCOPED_PYTEST_MODULE} {allows} -- {targets}"
+    return f"{_launcher_head(repo_root)} {allows} -- {targets}"
 
 
 def _launcher_run_clause(scope: Sequence[str], repo_root: Optional[Path]) -> str:
@@ -4408,7 +4455,7 @@ def _review_edits_clause(
         f"rows' writes. From the repo root run {_edited_set_listing(base, surface, review_terminal)}: that is the "
         f"edited set; a peer's commit in the range is never part of it. {_OUT_OF_SCOPE_CLAUSE} "
         "For every edited source file not already covered above, add its test target "
-        f"to the run through the same `-m {_SCOPED_PYTEST_MODULE}` launcher, with `--allow` entries "
+        "to the run through the same scoped-test launcher command given above, with `--allow` entries "
         "only for targets covering files in that edited set (never a wider directory), and for every edited `.ts`/`.tsx` file whose governing tsconfig "
         "directory has no typecheck command above, run `tsc --noEmit -p <that dir>` "
         "the same way and under the same pass/fail rules. "
@@ -6495,7 +6542,7 @@ _EXTERNALIZABLE_REVIEWER_TYPES = frozenset({
 })
 _REVIEWER_RUN_MODULE = "coordinator_core.agent_pipe.reviewer_run"
 _RELAY_AGENT_TYPE = "general-purpose"
-_RELAY_MODEL = "sonnet"
+_RELAY_LEG_TIER = "sonnet"
 _RELAY_HEREDOC_DELIM = "REVIEWER_BRIEF_EOF_7f3a91"
 #: Reply of `reviewer_run`; a provider failure is verdict FAILED, never a schema refusal.
 _EXTERNAL_REVIEWER_SCHEMA = json.dumps(
@@ -6547,7 +6594,7 @@ def _external_reviewer_thunk_js(
         + ", verdicts: " + json.dumps(_schema_verdict_enum(spec.schema)) + " }"
     )
     relay = _js_string_literal(_degrade_agent_type(_RELAY_AGENT_TYPE, agent_type_host))
-    common = f"phase: {_js_string_literal(spec.phase)}, agentType: {relay}, {_model_opt(_RELAY_AGENT_TYPE, _RELAY_MODEL)}, effort: 'low'"
+    common = f"phase: {_js_string_literal(spec.phase)}, agentType: {relay}, {_model_opt(_RELAY_AGENT_TYPE, _RELAY_LEG_TIER)}, effort: 'low'"
     schema = '{ type: "object", properties: { status: { type: "string" }, verdict: { type: ["string", "null"] }, findings: { type: "array" }, error: { type: ["string", "null"] } }, required: ["status"] }'
     start_head = "Run these engine commands in order and return the final bare JSON reply of the second. Run nothing else.\n1. Start the review:\n"
     if windows:

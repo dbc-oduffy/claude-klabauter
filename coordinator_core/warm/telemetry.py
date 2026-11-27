@@ -96,7 +96,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from coordinator_core import locked_write
 from coordinator_core.warm.breadcrumb import svc_dir
@@ -164,6 +164,8 @@ __all__ = [
     "degrade_path",
     "record_degrade",
     "degrade_samples",
+    "DOOR_COLD_LEG_KILL_CAUSE_PREFIX",
+    "door_cold_leg_kill_rows",
     "PUBLISH_WARM_FILENAME",
     "publish_warm_path",
     "record_publish_warm_attempt",
@@ -508,6 +510,8 @@ def election_lost_samples(engine_root: Optional[Path] = None) -> list:
 
 
 WORKER_POOL_DEPTH_FILENAME = "worker-pool-depth.jsonl"
+WORKER_POOL_DEPTH_HEARTBEAT_SECS = 600.0
+_LAST_DEPTH_WRITE: "dict[tuple, tuple]" = {}
 
 
 def worker_pool_depth_path(engine_root: Optional[Path] = None) -> Path:
@@ -534,7 +538,10 @@ def record_worker_pool_depth(
     never a new sampling process or loop of its own (CLAUDE.md § Load
     norm).
 
-    Best-effort: never raises, matching every other recorder here.
+    Best-effort: never raises, matching every other recorder here. Writes only when the depth
+    differs from this process's last written depth for the file, or after
+    `WORKER_POOL_DEPTH_HEARTBEAT_SECS`: the only consumer reads a depth below
+    `WORKER_POOL_SIZE`, which a change row always carries.
     """
     record = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -542,11 +549,17 @@ def record_worker_pool_depth(
         "pid": pid,
     }
     path = worker_pool_depth_path(engine_root)
+    key = (str(path), pid)
+    now = time.monotonic()
+    last = _LAST_DEPTH_WRITE.get(key)
+    if last is not None and last[0] == depth and now - last[1] < WORKER_POOL_DEPTH_HEARTBEAT_SECS:
+        return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with locked_write.held_lock(path, holder_label="warm.telemetry.worker_pool_depth", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        _LAST_DEPTH_WRITE[key] = (depth, now)
     except Exception:
         return
 
@@ -644,7 +657,9 @@ def slow_request_rows(rows, threshold_secs: float = SLOW_REQUEST_SECS) -> list:
 
 
 def flush_requests(engine_root: Optional[Path] = None) -> None:
-    """Drain the ring into `request_telemetry_path` with one locked append.
+    """Drain the ring into `request_telemetry_path` with one locked append. Its only per-request
+    disk write; the request path itself writes the ring only, and callers flush on a slow request,
+    a stall watcher or the idle tick. Consumer: stall diagnosis and `warm_restart_stall_bench`.
     Best-effort: never raises; rows are dropped if the lock or write fails.
 
     Size bound: under the held lock the file rotates (log_rotation cascade) before an append that
@@ -665,12 +680,27 @@ def flush_requests(engine_root: Optional[Path] = None) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with locked_write.held_lock(path, holder_label="warm.telemetry.requests", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
-            payload = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+            payload = "".join(json.dumps(_compact_row(r), ensure_ascii=False) + "\n" for r in rows)
             _rotate_requests_before_append(path, len(payload.encode("utf-8")))
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(payload)
     except Exception:
         return
+
+
+_FAST_OK_DROPPED_KEYS = ("spans", "dispatch_key", "slow_phase")
+
+
+def _compact_row(row: dict) -> dict:
+    """The persisted form of a ring row. A fast `ok` row loses `spans`, `dispatch_key` and
+    `slow_phase`: their only consumer is stall diagnosis, which reads slow or failed rows, and
+    the preuse `spans` list is most of a row's bytes. The ring keeps the full row in memory."""
+    enq, end = row.get("enqueue_ts"), row.get("end_ts")
+    if row.get("outcome") != "ok" or enq is None or end is None or end - enq > SLOW_REQUEST_SECS:
+        return row
+    if row.get("drive_fault") or not any(k in row for k in _FAST_OK_DROPPED_KEYS):
+        return row
+    return {k: v for k, v in row.items() if k not in _FAST_OK_DROPPED_KEYS}
 
 
 def _rotate_requests_before_append(path: Path, incoming_bytes: int) -> None:
@@ -829,8 +859,30 @@ def boot_wait_samples(engine_root: Optional[Path] = None) -> list:
     return rows
 
 
-def client_cold_count(engine_root: Optional[Path] = None) -> int:
-    path = client_cold_path(engine_root)
+#: Longest a hot-path engine-root read waits on the filesystem. Same contract as
+#: `server._bounded_fs_step` (not imported: server imports this module).
+_FS_READ_DEADLINE_SECS = 0.2
+
+#: Last answered value per read key, served (marked stale) while the filesystem does not answer.
+_LAST_READ: "dict[str, Any]" = {}
+
+
+def _bounded_fs_read(key: str, fn: Callable[[], Any], default: Any) -> Any:
+    """`fn()` bounded by `_FS_READ_DEADLINE_SECS`; `default` when the filesystem does not answer.
+    A kernel-blocked open cannot be cancelled, so the caller stops waiting and the stalled key
+    answers `default` at once until the call returns."""
+    from coordinator_core.bounded_io import run_bounded
+
+    try:
+        return run_bounded(key, fn, deadline=_FS_READ_DEADLINE_SECS, default=default)
+    except Exception:  # noqa: BLE001 -- advisory read: never raises into an op
+        return default
+
+
+_UNANSWERED = object()
+
+
+def _count_lines(path: Path) -> int:
     try:
         with path.open("r", encoding="utf-8") as fh:
             return sum(1 for _ in fh)
@@ -838,11 +890,31 @@ def client_cold_count(engine_root: Optional[Path] = None) -> int:
         return 0
 
 
-def warm_rate(engine_root: Optional[Path] = None) -> dict:
+def client_cold_count_or_unknown(engine_root: Optional[Path] = None) -> Optional[int]:
+    """File-sourced client cold-fallback row count, or None when the read did not answer in time."""
+    path = client_cold_path(engine_root)
+    key = f"telemetry-read:{path}"
+    value = _bounded_fs_read(key, lambda: _count_lines(path), _UNANSWERED)
+    if value is _UNANSWERED:
+        return None
+    _LAST_READ[key] = value
+    return value  # type: ignore[return-value]
+
+
+def client_cold_count(engine_root: Optional[Path] = None) -> int:
+    """Row count of the client cold-fallback file. A read that does not answer within the deadline
+    returns the last answered count for this path, else 0; `client_cold_count_or_unknown` tells
+    the cases apart."""
+    value = client_cold_count_or_unknown(engine_root)
+    if value is not None:
+        return value
+    last = _LAST_READ.get(f"telemetry-read:{client_cold_path(engine_root)}")
+    return last if isinstance(last, int) else 0
+
+
+def _sum_warm_cold(path: Path) -> "tuple[int, int]":
     warm_count = 0
     cold_count = 0
-
-    path = telemetry_path(engine_root)
     try:
         with path.open("r", encoding="utf-8") as fh:
             for line in fh:
@@ -857,8 +929,29 @@ def warm_rate(engine_root: Optional[Path] = None) -> dict:
                 cold_count += record.get("cold_count", 0) or 0
     except OSError:
         pass
+    return warm_count, cold_count
 
-    cold_count += client_cold_count(engine_root)
+
+def warm_rate(engine_root: Optional[Path] = None) -> dict:
+    """Warm/cold counts from the server telemetry file plus the client cold-fallback file. Each read
+    is bounded; a read that does not answer serves its last answered value (0 when none) and the
+    result carries `stale: True`."""
+    path = telemetry_path(engine_root)
+    key = f"telemetry-read:{path}"
+    stale = False
+    pair = _bounded_fs_read(key, lambda: _sum_warm_cold(path), _UNANSWERED)
+    if pair is _UNANSWERED:
+        stale = True
+        pair = _LAST_READ.get(key, (0, 0))
+    else:
+        _LAST_READ[key] = pair
+    warm_count, cold_count = pair  # type: ignore[misc]
+
+    client_cold = client_cold_count_or_unknown(engine_root)
+    if client_cold is None:
+        stale = True
+        client_cold = client_cold_count(engine_root)
+    cold_count += client_cold
 
     total = warm_count + cold_count
     return {
@@ -866,6 +959,7 @@ def warm_rate(engine_root: Optional[Path] = None) -> dict:
         "cold_count": cold_count,
         "total": total,
         "warm_rate": (warm_count / total) if total else None,
+        "stale": stale,
     }
 
 
@@ -944,7 +1038,12 @@ def record_degrade(
 
 
 def degrade_samples(engine_root: Optional[Path] = None) -> list:
+    """Parsed `degrade.jsonl` rows; `[]` when the file is absent or the read does not answer in time."""
     path = degrade_path(engine_root)
+    return _bounded_fs_read(f"telemetry-read:{path}", lambda: _read_degrade_rows(path), [])
+
+
+def _read_degrade_rows(path: Path) -> list:
     rows: list = []
     try:
         with path.open("r", encoding="utf-8") as fh:
@@ -959,6 +1058,25 @@ def degrade_samples(engine_root: Optional[Path] = None) -> list:
     except OSError:
         return []
     return rows
+
+
+DOOR_COLD_LEG_KILL_CAUSE_PREFIX = "door.cold_leg_kill"
+
+
+def door_cold_leg_kill_rows(engine_root: Optional[Path] = None) -> list:
+    """Every `degrade_samples` row with `kind == KIND_HOOK_TIMEOUT` and a cause starting
+    `DOOR_COLD_LEG_KILL_CAUSE_PREFIX`, oldest first. Never raises: an unreadable or absent sink
+    reads as `[]`."""
+    try:
+        return [
+            row
+            for row in degrade_samples(engine_root)
+            if isinstance(row, dict)
+            and row.get("kind") == KIND_HOOK_TIMEOUT
+            and str(row.get("cause", "")).startswith(DOOR_COLD_LEG_KILL_CAUSE_PREFIX)
+        ]
+    except Exception:  # noqa: BLE001 -- advisory reader
+        return []
 
 
 PUBLISH_WARM_FILENAME = "publish-warm.jsonl"

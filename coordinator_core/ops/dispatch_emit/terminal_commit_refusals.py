@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Callable, Sequence, Optional
+from typing import Callable, Mapping, Sequence, Optional
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.review_test_blocker import TEST_BLOCKER
 from coordinator_core.ops.dispatch_emit import review_floor
@@ -501,12 +501,11 @@ def _tests_not_run_refusal(
     unfinished = set(params.get("incomplete_chunks") or ()) - set(params.get("landed_chunks") or ())
     within = [p for c in chunks if c.id not in unfinished for p in c.paths] if chunks is not None else None
     session = params.get("session_id")
+    run_id = params.get("run_id") if isinstance(params.get("run_id"), str) else None
     owed = review_owed_refusal(
         worktree_root, inline_review, within,
-        run_agent_pin_events(
-            worktree_root, session if isinstance(session, str) else None,
-            params.get("run_id") if isinstance(params.get("run_id"), str) else None, inline_review,
-        ),
+        run_agent_pin_events(worktree_root, session if isinstance(session, str) else None, run_id, inline_review),
+        run_id,
     )
     if owed is not None:
         return _error(
@@ -684,13 +683,14 @@ def _landing_integrity_gate(
     own_declared: Sequence[str] = (), session_id: Optional[str] = None,
     carried_paths: Optional[Sequence[str]] = None, minted_before: Optional[tuple] = None,
     landed_text: Optional[Callable[[str], Optional[str]]] = None,
-    withheld: Sequence[str] = (),
+    withheld: Sequence[str] = (), landing_blobs: Optional[Mapping[str, str]] = None,
 ) -> dict:
     """Pre-commit integrity findings over the product landing set (unparseable ``.py``, a landing
     ``.py`` importing a name only a ``withheld`` path binds (``import-closure-untracked``), an
     import-closure hit where a ``.py`` the commit deletes (or a top-level def/class it removes) is
     still imported by a residue or landing ``.py``: ``import-closure-untracked`` naming the importer,
-    with ``residue_import_check: "no-snapshot"`` when ``residue_known`` is false; a
+    with ``residue_import_check: "head-importers"`` when ``residue_known`` is false (the importers are
+    then read from HEAD, ``landing_integrity.committed_image_import_findings``); a
     blob dropping lines a foreign commit added since the run base, and the test verdict
     (a valid fresh retest verdict, else the carried one) naming a run-caused failure:
     ``targeted-tests-failed``, with ``targeted_tests_check`` always set and ``retested_tests`` on
@@ -705,7 +705,7 @@ def _landing_integrity_gate(
     ``carried_paths`` (None: every landing path), and a fresh-token sibling minted at or after
     ``minted_before`` is junior and holds nothing. ``landed_text(rel)`` supplies the bytes the
     commit lands for a path (a kept blob), so the residue import check judges those and not the
-    worktree; None judges the worktree."""
+    worktree; None judges ``landing_blobs`` (``{path: kept blob sha}``) over the worktree bytes."""
     from coordinator_core.ops.dispatch_emit import landing_integrity as li
     from coordinator_core.ops.dispatch_emit import landing_retest
     from coordinator_core.ops.dispatch_emit import landing_targeted_tests
@@ -718,28 +718,23 @@ def _landing_integrity_gate(
             pass
     paths = [p for p in all_paths if p not in skip]
     findings = li.unparseable_py(worktree_root, paths)
-    findings += li.lost_definition_findings(worktree_root, paths, deleted_paths, landed_text=landed_text)
+    if landed_text is None:
+        landed_text = li.committed_image_text(worktree_root, li.landing_py_bytes(worktree_root, paths, landing_blobs))
     findings += li.withheld_closure_findings(
         worktree_root, paths, deleted_paths, withheld, landed_text=landed_text,
     )
     extra: dict = {}
     if not residue_known:
-        # Fail-open by design: with no snapshot only landing importers are scanned; untested.
-        extra["residue_import_check"] = "no-snapshot"
-    try:
-        from coordinator_core.authoring_leaks import import_closure
-
-        findings += [
-            landing_targeted_tests.Finding(f.path, li.IMPORT_CLOSURE_UNTRACKED, f"{f.line}: {f.detail}")
-            for f in import_closure.residue_findings(
-                worktree_root, residue_py, paths, deleted_paths, landed_text=landed_text,
-            )
-        ]
-    except Exception as exc:  # fail closed: an unreadable closure must not land
-        findings.append(landing_targeted_tests.Finding(
-            "", li.IMPORT_CLOSURE_UNTRACKED,
-            f"residue import-closure detector failed: {type(exc).__name__}: {exc}",
-        ))
+        extra["residue_import_check"] = "head-importers"
+    committed = li.committed_image_import_findings(
+        worktree_root, paths, deleted_paths, {}, residue_py=residue_py if residue_known else None,
+        landed_text=landed_text,
+    )
+    seen = {(f.path, f.reason, f.detail) for f in findings}
+    findings += [
+        landing_targeted_tests.Finding(f.path, f.reason, f.detail)
+        for f in committed if (f.path, f.reason, f.detail) not in seen
+    ]
     base = li.run_base_for(worktree_root, run_id, params)
     if merge_open:
         # A conflict resolution taking the other side drops this side's lines by design.
@@ -771,26 +766,31 @@ def _landing_integrity_gate(
         ))
     hp_settled: dict = {}
     if run_id and not merge_open:
-        # A conflict resolution rewrites hunks by design; a run with no recorded write_baseline
-        # has nothing to prove against (the since-base arm's `no-base` case).
+        # A conflict resolution rewrites hunks by design. A declared path with no recorded write_baseline
+        # blob cannot show which of its hunks are the run's: `unproduced_hunks` withholds it.
         from coordinator_core.ops.dispatch_emit import halted_hunk_attribution, hunk_provenance
 
         hp_base = halted_hunk_attribution._baseline(worktree_root, run_id)
-        if hp_base is not None:
+        if hp_base is None:
+            # Only a path the run's manifest declares is the run's to prove; the rest has no record to read.
+            try:
+                declared = hunk_provenance.run_invariants(worktree_root, run_id).declared()
+            except Exception:  # noqa: BLE001 -- no readable manifest declares nothing
+                declared = frozenset()
+            untouched = {p for p in contested if p not in declared}
+        else:
             from coordinator_core.ops.dispatch_emit import write_baseline
 
             # A path the run left byte-identical to its baseline holds no hunk the run could own
             # or disown: the pre-existing-dirt gates judge it, not the foreign-hunk check.
             untouched = set(write_baseline.unwritten(worktree_root, hp_base, contested))
-            hp_advisories: list = []
-            findings += hunk_provenance.unproduced_hunks(
-                worktree_root, run_id, [p for p in contested if p not in untouched], own_plan=plan,
-                advisories=hp_advisories, settled=hp_settled,
-            )
-            if hp_advisories:
-                extra["hunk_provenance_advisory"] = hp_advisories
-        else:
-            extra["hunk_provenance_check"] = "no-baseline"
+        hp_advisories: list = []
+        findings += hunk_provenance.unproduced_hunks(
+            worktree_root, run_id, [p for p in contested if p not in untouched], own_plan=plan,
+            advisories=hp_advisories, settled=hp_settled,
+        )
+        if hp_advisories:
+            extra["hunk_provenance_advisory"] = hp_advisories
     if run_id and session_id:
         for held_path, stem, line in peer_hunk_gate.out_of_ask_holds(
             worktree_root, session_id, run_id, paths,
@@ -939,6 +939,7 @@ def _measured_rev_drift_refusal(
         TEST_LEG_INFRA_CAUSE,
         TEST_LEG_INFRA_RETRY,
         leg_stale_met_failures,
+        remeasure_stale_gap,
         test_infra_refusal,
         test_leg_failure,
         test_leg_superseded_by_reverify,
@@ -953,6 +954,8 @@ def _measured_rev_drift_refusal(
         return None
     try:
         drifted = measured_rev.foreign_drift(run_dir, worktree_root)
+    except measured_rev.MeasureUnavailable as exc:
+        reason = detail = exc.reason()
     except (OSError, ValueError) as exc:
         reason, detail = "measured-rev-record-unreadable", f"measured-rev record unreadable ({exc})"
     else:
@@ -961,6 +964,11 @@ def _measured_rev_drift_refusal(
         reason = detail = "measured-rev-drift: " + ", ".join(drifted)
     if test_leg_superseded_by_reverify(reason, inline_review):
         return None
+    fresh = remeasure_stale_gap(reason, inline_review, run_dir, worktree_root)
+    if fresh is None:
+        return None
+    if fresh != reason:
+        reason = detail = fresh
     infra = test_infra_refusal(reason, inline_review)
     if infra is not None:
         return infra

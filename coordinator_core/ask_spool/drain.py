@@ -63,6 +63,18 @@ _NEVER_LAUNCHED_FILE = "never-launched.json"
 #: Not `.json`: the spool lists that suffix as pending entries.
 _BACKLOG_CURSOR_FILE = "never-launched-backlog.cursor"
 
+#: Failed mints past which an entry is unfireable: `FIRE_ATTEMPT_CAP` failure-notice periods, so a failure notice has
+#: gone out at each `_FAILURE_NOTICE_EVERY`th attempt before the entry is withdrawn.
+UNFIREABLE_ATTEMPTS = FIRE_ATTEMPT_CAP * _FAILURE_NOTICE_EVERY
+#: Age past which an entry at `UNFIREABLE_ATTEMPTS` is withdrawn. Attempts alone are not the bound: every served request
+#: retries a failed entry, so an engine outage reaches the cap in seconds and a withdrawal then would drop a live ask.
+UNFIREABLE_AGE_S = float(MINTED_SWEEP_LOOKBACK_SECONDS)
+#: The engine's refusal of a resume for a run another session drives: no retry changes it, so it is terminal at first sight.
+_DRIVEN_BY_SESSION = "is driven by session"
+#: Engine-written refire entries (`pending_oracle.spool_refire`, `stranded_wait.SOURCE`) carry their source label as the
+#: session id, so no session reads their notices.
+_REFIRE_SESSIONS = frozenset({"stranded-wait", "pending-oracle"})
+
 Evaluate = Callable[[dict], dict]
 
 
@@ -430,6 +442,57 @@ def _reclaim_stale(root: str, stale_after_s: float, now: float) -> None:
             continue
 
 
+def _is_unfireable(header: dict) -> bool:
+    """True for an entry the engine refuses for good: a refusal naming the session driving its run, or `UNFIREABLE_ATTEMPTS`
+    failures on an entry spooled over `UNFIREABLE_AGE_S` ago. `header` already carries this failure's `attempts` and `last_error`."""
+    if _DRIVEN_BY_SESSION in str(header.get("last_error") or ""):
+        return True
+    old = time.time() - float(header.get("spooled_at") or 0) >= UNFIREABLE_AGE_S
+    return old and int(header.get("attempts") or 0) >= UNFIREABLE_ATTEMPTS
+
+
+def _resume_owner_session(root: str, payload: bytes) -> Optional[str]:
+    """The session driving the run a refire entry resumes (its run-token record's session), else the live G-EM, else None."""
+    try:
+        args = json.loads(payload)["tool_input"]["args"]
+        run_id = args.get("resume_run_id") if isinstance(args, dict) else None
+        if isinstance(run_id, str) and run_id:
+            from coordinator_core.ops.dispatch_emit import run_token
+
+            owner = (run_token._read_rec(Path(root), run_id) or {}).get("session_id")
+            if isinstance(owner, str) and _SAFE_NAME.match(owner):
+                return owner
+    except Exception:  # noqa: BLE001 - no resolvable owner falls to the G-EM
+        pass
+    return _gem_session()
+
+
+def _addressed_to_reader(root: str, header: dict, payload: bytes) -> dict:
+    """`header` with `session_id` replaced by the resumed run's owner session when the entry is an engine-written refire."""
+    if header.get("session_id") not in _REFIRE_SESSIONS:
+        return header
+    return {**header, "session_id": _resume_owner_session(root, payload)}
+
+
+def _withdraw_unfireable(root: str, sid: str, header: dict, payload: bytes, counts: dict) -> bool:
+    """Withdraw the claimed entry as `unfireable: <last_error>` and notify who must know; False when it is still fireable.
+
+    The submitter is told; an engine-written refire entry (`_REFIRE_SESSIONS`) names no reading session, so its notice goes
+    to the session driving the run it resumes. A withdrawal that cannot land returns False: the entry stays pending."""
+    if not _is_unfireable(header):
+        return False
+    try:
+        if not record.withdraw(root, sid, "unfireable: " + str(header.get("last_error") or ""), by="drain")["withdrawn"]:
+            return False
+    except (OSError, ValueError):
+        return False
+    counts["withdrawn"] += 1
+    fields = {"status": "withdrawn", "reason": "unfireable: " + str(header.get("last_error") or ""), "attempts": header["attempts"]}
+    if _notify(root, _addressed_to_reader(root, header, payload), fields):
+        counts["notified"] += 1
+    return True
+
+
 def _fail(root: str, sid: str, path: str, header: dict, payload: bytes, why: str, counts: dict, loaded: bool) -> None:
     """`loaded` False (entry unreadable or still being written) keeps the entry's bytes untouched."""
     attempts = int(header.get("attempts") or 0) + 1
@@ -439,6 +502,8 @@ def _fail(root: str, sid: str, path: str, header: dict, payload: bytes, why: str
             _rewrite(path, header, payload)
         except OSError:
             pass
+        if _withdraw_unfireable(root, sid, header, payload, counts):
+            return
     try:
         record.release(root, sid)
     except OSError:
@@ -1046,7 +1111,8 @@ def run(
     `coalesced` joined the run another entry of the same sizing or run key holds, `withdrawn`
     was retired as stale (its sizing, plan or run is gone, or the plan's rows all closed) or as
     superseded (a bare ask whose normalized text a live run token already records, any session or age;
-    or a sizing/run-keyed entry whose key a live run token holds that this drain did not mint).
+    or a sizing/run-keyed entry whose key a live run token holds that this drain did not mint), or as unfireable
+    (`_is_unfireable`: refused for a run another session drives, or past `UNFIREABLE_ATTEMPTS` failures and `UNFIREABLE_AGE_S`).
     A drainer killed mid-entry leaves a claim that `stale_after_s` later returns to pending."""
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 
@@ -1113,7 +1179,7 @@ def run(
             fields = {"status": "withdrawn", "reason": "stale: " + why} if why else {
                 "status": "withdrawn", "reason": "superseded", "run_id": superseded,
             }
-            if _notify(repo_root, header, fields):
+            if _notify(repo_root, _addressed_to_reader(repo_root, header, payload), fields):
                 counts["notified"] += 1
             continue
         if key and key not in by_key:

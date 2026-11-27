@@ -1,0 +1,11 @@
+{
+  "doc_types": {
+    "runbook": {
+      "path_globs": ["ops/runbooks/*.md"],
+      "path_globs_source": "repo-declared",
+      "identity": {"from": "path"},
+      "fields": {"title": {"type": "string", "derive": {"from": "first_h1"}}}
+    }
+  },
+  "joins": [["runbook", "$body", "decision", "id", "body_citation"]]
+}

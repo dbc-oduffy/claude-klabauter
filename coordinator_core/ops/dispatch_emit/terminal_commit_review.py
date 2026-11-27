@@ -507,18 +507,22 @@ def _row_fix(row: dict) -> tuple:
     return (b if isinstance(b, str) else "", a if isinstance(a, str) else "")
 
 
-def review_applied_in_tree(worktree_root: Path, inline_review: object) -> Optional[tuple]:
+def review_applied_in_tree(
+    worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None,
+) -> Optional[tuple]:
     """``(applied, owed)`` derived from the landed tree, never from the reviewer's own count.
 
     ``applied`` counts the wave's verified ``applied`` ledger rows whose change is present in the
     file now (``_carries_applied_fix``). ``owed`` lists ``"<sidecar>:<id>"`` for every other row not
     suspended or rejected, but only from a sidecar whose frontmatter ``verdict`` is
-    ``REQUIRES_CHANGES``: those findings are outstanding and the verdict stands. ``None`` when the
-    run names no wave sidecar or one has no readable ledger: the reviewer's count is then the only
-    evidence."""
+    ``REQUIRES_CHANGES``: those findings are outstanding and the verdict stands. A row marked
+    ``out_of_ask`` is a peer's finding and is skipped unless its file is one of ``within`` (the
+    paths this commit carries). ``None`` when the run names no wave sidecar or one has no readable
+    ledger: the reviewer's count is then the only evidence."""
     listed = inline_review.get("wave_sidecar_paths") if isinstance(inline_review, dict) else None
     if not isinstance(listed, list) or not listed:
         return None
+    own = {_slash_path(str(p)) for p in within} if within is not None else set()
     applied, owed = 0, []
     for w in listed:
         if not (isinstance(w, str) and w):
@@ -533,9 +537,10 @@ def review_applied_in_tree(worktree_root: Path, inline_review: object) -> Option
         standing = _claimed_standing(_sidecar_verdict(text))
         for i, row in enumerate(rows):
             status = row.get("status") or "applied"
-            if status in _DISPOSED_STATUSES or row.get("out_of_ask") is True:
-                continue
             f = row.get("file")
+            peer = row.get("out_of_ask") is True and not (isinstance(f, str) and _slash_path(f) in own)
+            if status in _DISPOSED_STATUSES or peer:
+                continue
             carried = (
                 status == "applied" and row.get("verified") is True and isinstance(f, str) and bool(f)
                 and (row.get("before") or row.get("after"))
@@ -888,26 +893,100 @@ def _real_pin_mismatches(
     return [p for p in stale if p in real or p not in covered]
 
 
-def review_owed_refusal(
+def _passing_agent_types(worktree_root: Path, inline_review: dict) -> set:
+    """``agent_type`` of each of the call's ``wave_reviews`` whose verdict, the sidecar's own stated
+    verdict first, is present and not standing: a later pass that supersedes a recorded standing one."""
+    out: set = set()
+    reviews = inline_review.get("wave_reviews")
+    for w in reviews if isinstance(reviews, list) else []:
+        if not isinstance(w, dict) or not isinstance(w.get("agent_type"), str):
+            continue
+        verdict = w.get("verdict")
+        path = w.get("sidecar_path")
+        if isinstance(path, str) and path:
+            try:
+                stated = _sidecar_verdict((worktree_root / path).read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError):
+                stated = None
+            verdict = stated if stated is not None else verdict
+        if isinstance(verdict, str) and verdict.strip() and not _claimed_standing(verdict):
+            out.add(w["agent_type"])
+    return out
+
+
+def _with_recorded_standing(worktree_root: Path, inline_review: object, run_id: Optional[str]) -> object:
+    """``inline_review`` plus the standing (``REQUIRES_CHANGES``/``BLOCKED``) reviews this run, and the
+    halted run it resumes, recorded in their own ``run-outcome.json``: a recomposed commit leg whose
+    review names none of them still owes their findings. A recorded sidecar the call already lists,
+    or whose ``agent_type`` the call re-reviewed with a passing verdict, is not added. One read per
+    run id; ``inline_review`` itself when nothing is added."""
+    if not isinstance(inline_review, dict):
+        return inline_review
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_outcome
+
+    ids = [r for r in dict.fromkeys([run_id, inline_review.get(RESUMED_RUN_ID_KEY)]) if isinstance(r, str) and r]
+    listed = inline_review.get("wave_sidecar_paths")
+    paths = [p for p in (listed if isinstance(listed, list) else []) if isinstance(p, str) and p]
+    superseded = None
+    added: list = []
+    for rid in ids:
+        recorded = read_run_outcome(worktree_root, rid)
+        recorded_review = recorded.get("inline_review") if isinstance(recorded, dict) else None
+        reviews = recorded_review.get("wave_reviews") if isinstance(recorded_review, dict) else None
+        for w in reviews if isinstance(reviews, list) else []:
+            path = w.get("sidecar_path") if isinstance(w, dict) else None
+            if not (isinstance(path, str) and path) or path in paths or not _claimed_standing(w.get("verdict")):
+                continue
+            if superseded is None:
+                superseded = _passing_agent_types(worktree_root, inline_review)
+            if w.get("agent_type") in superseded:
+                continue
+            paths.append(path)
+            added.append(w)
+    if not added:
+        return inline_review
+    reviews = inline_review.get("wave_reviews")
+    return {
+        **inline_review,
+        "wave_sidecar_paths": paths,
+        "wave_reviews": [*(reviews if isinstance(reviews, list) else []), *added],
+    }
+
+
+def review_owed_findings(
     worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None,
-    run_agent_events: Optional[Callable[[Sequence[str]], dict]] = None,
+    run_id: Optional[str] = None,
 ) -> Optional[str]:
-    """The refusal reason when a ``REQUIRES_CHANGES`` verdict is unresolved, else ``None``: a
-    reviewer's findings not all in the landed tree, or a standing verdict no ledger can resolve
-    (``_unverifiable_standing``). Names what is owed. With nothing owed, a verdict whose pinned
-    ``judged_sha256`` no longer matches the tree refuses, naming only the changed files (of
-    ``within`` when given: the paths this commit carries)."""
-    derived = review_applied_in_tree(worktree_root, inline_review)
+    """The owed-findings reason of ``review_owed_refusal`` alone, never the pin-staleness arm."""
+    standing = _with_recorded_standing(worktree_root, inline_review, run_id)
+    derived = review_applied_in_tree(worktree_root, standing, within)
     owed = list(derived[1]) if derived is not None else []
-    owed.extend(_unverifiable_standing(worktree_root, inline_review))
+    owed.extend(_unverifiable_standing(worktree_root, standing))
     if not owed:
-        stale = _real_pin_mismatches(worktree_root, inline_review, within, run_agent_events)
-        return verdict_pin_refusal(stale) if stale else None
+        return None
     applied = derived[0] if derived is not None else 0
     return (
         f"review verdict {REQUIRES_CHANGES} or {BLOCKED} stands with {len(owed)} finding(s) not in the landed tree "
         f"({applied} applied): {', '.join(owed[:8])}{' ...' if len(owed) > 8 else ''}"
     )
+
+
+def review_owed_refusal(
+    worktree_root: Path, inline_review: object, within: Optional[Sequence[str]] = None,
+    run_agent_events: Optional[Callable[[Sequence[str]], dict]] = None,
+    run_id: Optional[str] = None,
+) -> Optional[str]:
+    """The refusal reason when a ``REQUIRES_CHANGES`` verdict is unresolved, else ``None``: a
+    reviewer's findings not all in the landed tree, or a standing verdict no ledger can resolve
+    (``_unverifiable_standing``), whether the call's ``inline_review`` names it or the run's own
+    record does (``_with_recorded_standing``). Names what is owed. With nothing owed, a verdict whose
+    pinned ``judged_sha256`` no longer matches the tree refuses, naming only the changed files (of
+    ``within`` when given: the paths this commit carries)."""
+    owed = review_owed_findings(worktree_root, inline_review, within, run_id)
+    if owed is not None:
+        return owed
+    stale = _real_pin_mismatches(worktree_root, inline_review, within, run_agent_events)
+    return verdict_pin_refusal(stale) if stale else None
 
 
 class _WavePaths(frozenset):

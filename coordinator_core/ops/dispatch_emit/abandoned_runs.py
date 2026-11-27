@@ -2,15 +2,19 @@
 record dirs of ask runs that died before any terminal or halted commit, and the stranded plan,
 handoff, sidecar, delivery note or sizing of a run whose record dir already landed.
 
-Params: ``{}``, ``{"dry_run": bool}``, ``{"run_ids": [str]}`` (reap only those; combinable with dry_run).
+Params: ``{}``, ``{"dry_run": bool}``, ``{"run_ids": [str]}`` (reap only those; combinable with dry_run),
+``{"correct_closed": true}`` (rewrite each stored ``shipped`` outcome whose run's ``halted.json`` reads
+``closed`` to ``closed`` and commit only those; no reap; reply ``{ok, corrected: [run_id], committed_sha}``).
 Reply: ``{ok, reaped: [run_id], sizings: [rel], artifacts: {run_id: [rel]}, committed_sha | null,
-skipped: [{run_id, reason, path?}]}``.
+skipped: [{run_id, reason, path?}]}``; a commit that loses the ref CAS is re-called on the new HEAD
+(bounded) and an overlap or exhaustion replies ``{ok: False, refused: <ref_cas_retry kind>, error}``.
 
 A run is ended when it has changed top-level record files or a dirty artifact that
 ``run_artifacts.runs_of_artifacts`` maps to it (newest mtime then comes from those artifacts), no run token with activity inside
 ``TOKENLESS_QUIET_SECONDS`` (an idle token is released, and its live-run index entry dropped,
 when its run is reaped), and either its newest record file is older than ``TOKENLESS_QUIET_SECONDS`` (``run_token.TTL_SECONDS``
-is the outer bound), or older than ``QUIET_SECONDS`` and the run is superseded by a later record dir binding the
+is the outer bound), or started more than ``ORPHAN_WALL_SECONDS`` ago with no live session, token
+or stage, or older than ``QUIET_SECONDS`` and the run is superseded by a later record dir binding the
 same sizing, halt-marked, or carries a tracked top-level file modified after its commit. Each
 ended run lands with its ``run_artifacts`` candidates (sizing, baton, plan, sidecars, slice
 sizings, delivery note).
@@ -26,6 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Mapping, Optional
 
+from coordinator_core.git.ref_cas_retry import commit_v2_retrying
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
@@ -35,7 +40,7 @@ from coordinator_core.ops.dispatch_emit.worktree_snapshot import record_dir_chan
 from coordinator_core.ops.dispatch_emit.halted_run import _STAMP, HALTED_FILE, STATUS_CLOSED, STATUS_RESUMED
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 from coordinator_core.session.record_homes import home_dir
-from coordinator_core.warm.live_runs import run_owner_holds, run_stage_live
+from coordinator_core.warm.live_runs import owner_live as _owner_live, run_owner_holds, run_stage_live
 
 OP_NAME = "dispatch.reap_abandoned_runs"
 HALTED_KIND = "abandoned"
@@ -43,6 +48,7 @@ SIZING_ROOT = Path(home_dir("", "sizings")).as_posix()
 RUN_FILE = "run.json"
 QUIET_SECONDS = 600
 TOKENLESS_QUIET_SECONDS = 3600
+ORPHAN_WALL_SECONDS = 14400
 STATUS_ROOTS = [
     RECORD_DIR_ROOT, SIZING_ROOT, Path(home_dir("", "handoffs")).as_posix(), "docs/plans", "docs/delivery",
     run_artifacts.EVIDENCE_ROOT,
@@ -64,6 +70,7 @@ def abandoned_run_ids(
     late_written: Optional[set[str]] = None,
     artifact_runs: Optional[set[str]] = None,
     minted: Optional[set[str]] = None,
+    past_wall: Optional[set[str]] = None,
 ) -> list[str]:
     """Sorted run ids with a changed file directly under ``<record_root>/<run_id>/`` or named in
     ``artifact_runs`` (runs owning a dirty plan, handoff, sidecar, delivery note or sizing), absent
@@ -71,8 +78,10 @@ def abandoned_run_ids(
     TTL, or older than ``QUIET_SECONDS`` when the run is superseded (a key of ``later_stamp_of``),
     halt-marked (in ``halted``) or has a tracked top-level file modified after its commit (in
     ``late_written``), or a ``minted`` run (never fired; a candidate without a changed file)
-    quiet for ``QUIET_SECONDS``. A run id with no ``newest_mtime`` entry is not abandoned. Pure."""
+    quiet for ``QUIET_SECONDS``, or a ``past_wall`` run (started more than ``ORPHAN_WALL_SECONDS``
+    ago) whatever its newest mtime. A run id with no ``newest_mtime`` entry is not abandoned. Pure."""
     prefix = record_root.rstrip("/") + "/"
+    past_wall = past_wall or set()
     superseded = later_stamp_of or {}
     halted = halted or set()
     late_written = late_written or set()
@@ -89,7 +98,7 @@ def abandoned_run_ids(
         if run_id not in newest_mtime:
             return False
         age = now - newest_mtime[run_id]
-        if age > run_token.TTL_SECONDS:
+        if age > run_token.TTL_SECONDS or run_id in past_wall:
             return True
         # A run mid-flight always holds a token, so an hour of tokenless quiet means it ended.
         if age > TOKENLESS_QUIET_SECONDS:
@@ -182,10 +191,10 @@ def _held_marker(root: Path, run_id: str) -> Path:
 
 def _already_reaped(root: Path, run_id: str, newest: Optional[float], changed: set[str]) -> bool:
     """True when this run was reaped before and nothing new has landed in it: its tracked
-    ``outcome.json`` reads ``abandoned`` and is itself committed (not in ``changed``), or a non-host
+    ``outcome.json`` reads ``abandoned`` or ``closed`` and is itself committed (not in ``changed``), or a non-host
     repo's held-back marker is at least as new as the run's newest file. Two stats and one read."""
     outcome = run_artifacts.outcome_rel(run_id)
-    if outcome not in changed and run_artifacts.read_tracked_outcome(root, run_id).get("state") == "abandoned":
+    if outcome not in changed and run_artifacts.read_tracked_outcome(root, run_id).get("state") in ("abandoned", STATUS_CLOSED):
         return True
     try:
         held_at = _held_marker(root, run_id).stat().st_mtime
@@ -304,12 +313,63 @@ def _sizing_ships_run(root: Path, run_id: str) -> bool:
     return any(_bare(m) == _bare(run_id) for m in _SIZING_RUN_ID.findall(text))
 
 
+def _halted_closed(root: Path, run_id: str) -> bool:
+    try:
+        data = json.loads((root / RECORD_DIR_ROOT / run_id / HALTED_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("status") == STATUS_CLOSED
+
+
+def _mislabeled_closed(root: Path) -> list[str]:
+    """Run ids whose tracked outcome reads ``shipped`` while the run's ``halted.json`` reads ``closed``:
+    the outcomes an earlier reaper mislabeled. One scandir plus two small reads per evidence dir."""
+    try:
+        with os.scandir(root / run_artifacts.EVIDENCE_ROOT) as it:
+            names = sorted(e.name for e in it if e.is_dir())
+    except OSError:
+        return []
+    return [
+        r for r in names
+        if run_artifacts.read_tracked_outcome(root, r).get("state") == "shipped" and _halted_closed(root, r)
+    ]
+
+
+def _correct_closed(root: Path, params: dict, session_id: Optional[str]) -> dict:
+    """Rewrite every mislabeled ``shipped`` outcome to ``closed`` (``sizing_rel`` included) and commit
+    only those files; ``dry_run`` reports without writing."""
+    from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
+
+    runs = _mislabeled_closed(root)
+    base: dict = {"ok": True, "corrected": runs, "committed_sha": None}
+    if not runs or params.get("dry_run") is True:
+        return base
+    paths = [p for r in runs if (p := run_artifacts.write_tracked_outcome(root, r, STATUS_CLOSED))]
+    commit_params: dict = {"paths": paths, "message": f"warp: correct shipped outcome to closed for {', '.join(runs)}"}
+    if session_id:
+        commit_params["session_id"] = session_id
+    try:
+        reply, refused = commit_v2_retrying(root, root, commit_params, reentrant_dispatch)
+    except OpUnavailableError:
+        return {**base, "ok": False, "error": "ceremony.commit_v2 is not registered"}
+    if refused:
+        return {**base, "ok": False, "refused": refused}
+    if not isinstance(reply, dict) or reply.get("error") or not reply.get("committed"):
+        if isinstance(reply, dict) and reply.get("nothing_to_commit"):
+            return base
+        return {**base, "ok": False, "error": f"commit_v2 landed nothing: {reply!r}"}
+    return {**base, "committed_sha": reply.get("sha")}
+
+
 def _terminal_state(root: Path, run_id: str) -> Optional[str]:
-    """``landed`` or ``shipped`` when the run's own records say it ended that way, else ``None``:
-    the outcome file (the archive's source), the ``halted.json`` status (``closed`` reads shipped),
-    ``run-stage.json``, then the run's sizing. In-process reads only. A landed run is never ``abandoned``."""
+    """``landed``, ``shipped`` or ``closed`` when the run's own records say it ended that way, else
+    ``None``: the outcome file (the archive's source), the ``halted.json`` status (``closed`` is a halt
+    that will never land and stays ``closed``, never ``shipped``), ``run-stage.json``, then the run's
+    sizing. In-process reads only. An ended run is never ``abandoned``."""
     state = run_artifacts.read_tracked_outcome(root, run_id).get("state")
-    if state in TERMINAL_STATES:
+    if state == "shipped" and _halted_closed(root, run_id):
+        return STATUS_CLOSED
+    if state in TERMINAL_STATES or state == STATUS_CLOSED:
         return state
     rec = root / RECORD_DIR_ROOT / run_id
     for name, key in (("halted.json", "status"), (RUN_STAGE_FILE, "stage")):
@@ -321,7 +381,7 @@ def _terminal_state(root: Path, run_id: str) -> Optional[str]:
         if value in TERMINAL_STATES:
             return value
         if name == "halted.json" and value == STATUS_CLOSED:
-            return "shipped"
+            return STATUS_CLOSED
     return "shipped" if _sizing_ships_run(root, run_id) else None
 
 
@@ -349,6 +409,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if wanted is not None and not (isinstance(wanted, list) and wanted and all(isinstance(r, str) and r for r in wanted)):
         return {"error": f"{OP_NAME}: run_ids must be a non-empty list of run id strings"}
     root = main_worktree_root(Path(repo_root))
+    if params.get("correct_closed") is True:
+        sid = params.get("session_id")
+        return _correct_closed(root, params, sid if isinstance(sid, str) and _UUID_RE.fullmatch(sid) else None)
     base: dict = {"ok": True, "reaped": [], "sizings": [], "committed_sha": None, "skipped": []}
 
     status = _status(root)
@@ -361,6 +424,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     files: dict[str, list[str]] = {}
     deleted: list[str] = []
     newest: dict[str, float] = {}
+    oldest: dict[str, float] = {}
     record_runs = {
         rel[len(RECORD_DIR_ROOT) + 1:].split("/", 1)[0]
         for rel in snapshot.changed
@@ -369,8 +433,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     artifact_of = run_artifacts.runs_of_artifacts(root, snapshot.changed)
     artifact_runs = set(artifact_of.values())
     run_ids = record_runs | artifact_runs
+    changed_of: dict[str, set[str]] = {}
+    for rel in snapshot.changed:
+        owner = _top_level_run(rel)
+        if owner is not None:
+            changed_of.setdefault(owner, set()).add(rel)
+    artifacts_of_run: dict[str, list[str]] = {}
+    for rel, owner in artifact_of.items():
+        artifacts_of_run.setdefault(owner, []).append(rel)
     for run_id in sorted(run_ids):
-        present, gone = record_dir_changes(root, f"{RECORD_DIR_ROOT}/{run_id}", snapshot.changed)
+        present, gone = record_dir_changes(root, f"{RECORD_DIR_ROOT}/{run_id}", changed_of.get(run_id, set()))
         files[run_id] = present
         deleted += gone
         mtimes = []
@@ -380,16 +452,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             except OSError:
                 pass
         if not mtimes:
-            for rel, owner in artifact_of.items():
-                if owner == run_id:
-                    try:
-                        mtimes.append((root / rel).stat().st_mtime)
-                    except OSError:
-                        pass
+            for rel in artifacts_of_run.get(run_id, ()):
+                try:
+                    mtimes.append((root / rel).stat().st_mtime)
+                except OSError:
+                    pass
         if mtimes:
             newest[run_id] = max(mtimes)
+            oldest[run_id] = min(mtimes)
 
     now = time.time()
+    # A run's start is its oldest changed file; a tracked file older than that only understates the age.
+    past_wall = {r for r, at in oldest.items() if now - at > ORPHAN_WALL_SECONDS}
     for run_id in sorted(run_ids):
         if _already_reaped(root, run_id, newest.get(run_id), snapshot.changed):
             run_ids.discard(run_id)
@@ -402,7 +476,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     for run_id, at in minted.items():
         newest.setdefault(run_id, at)
     run_ids |= set(minted)
-    active = [r for r in records if _token_active(root, r, newest, now)]
+    # Past the wall a record file's mtime no longer holds a token; only the token's own activity or a live session does.
+    token_newest = {r: at for r, at in newest.items() if r not in past_wall}
+    active = [
+        r for r in records
+        if _token_active(root, r, token_newest, now) or (r["run_id"] in past_wall and _owner_live(r.get("session_id")))
+    ]
     live_ids = {r["run_id"] for r in active}
     workflow_live = {r for r in run_ids - live_ids if run_stage_live(root, r)}
     live_ids |= workflow_live
@@ -431,6 +510,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         late_written=late_written,
         artifact_runs=artifact_runs,
         minted=set(minted),
+        past_wall=past_wall,
     )
     if wanted is not None:
         reaped = [r for r in reaped if r in set(wanted)]
@@ -453,6 +533,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     sizings: list[str] = []
     artifact_gone: list[str] = []
     ignored_state: list[str] = []
+    contain_cache: dict[str, bool] = {}
+    changed_norm = set(snapshot.changed)
+    ignored_norm = {p.replace("\\", "/") for p in snapshot.ignored}
     for run_id in reaped:
         kept, state_files = run_artifacts.split_run_state(files.get(run_id, []))
         paths += kept
@@ -468,14 +551,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if sizing and sizing in held_sizings:  # the record files still land; the graph beyond them waits
             base["skipped"].append({"run_id": run_id, "reason": "sizing-held-by-live-token", "path": sizing})
             continue
-        artifacts = run_artifacts.candidate_paths(root, run_id)
+        artifacts = run_artifacts.candidate_paths(root, run_id, contain_cache=contain_cache)
         outside = run_artifacts.RunArtifacts(
             run_id=run_id,
             by_class={k: v for k, v in artifacts.by_class.items() if k != "record-dir"},
             record_dirs=(),
             root=root,
         )
-        landing = run_artifacts.landable(root, outside, snapshot.changed, snapshot.ignored, session_id=session_id)
+        landing = run_artifacts.landable(
+            root, outside, changed_norm, ignored_norm, session_id=session_id, prenormalized=True
+        )
         extra = [p for p in landing.present if p not in paths and p not in sizings]
         for path, why in sorted(landing.withheld.items()):
             base["skipped"].append({"run_id": run_id, "reason": why, "path": path})
@@ -528,7 +613,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_halted_trailer_lines
 
     abandoned = [r for r in reaped if r not in terminal]
-    message = reap_message(abandoned) if abandoned else f"warp: record landed run artifacts for {', '.join(reaped)}"
+    message = reap_message(abandoned) if abandoned else f"warp: record ended run artifacts for {', '.join(reaped)}"
     bases = [b for run_id in abandoned for b in landing_integrity.closing_bases(root, run_id, {})]
     for line in run_halted_trailer_lines(bases):
         message += "\n" + line
@@ -543,9 +628,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if session_id:
         commit_params["session_id"] = session_id
     try:
-        reply = reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=root)
+        reply, refused = commit_v2_retrying(root, root, commit_params, reentrant_dispatch)
     except OpUnavailableError:
         return {**base, "ok": False, "error": "ceremony.commit_v2 is not registered"}
+    if refused:
+        error = reply.get("error") if isinstance(reply, dict) else None
+        return {**base, "ok": False, "refused": refused, "error": f"commit_v2 lost the ref CAS ({refused}): {error}"}
     if not isinstance(reply, dict) or reply.get("error") or not reply.get("committed"):
         if isinstance(reply, dict) and reply.get("nothing_to_commit"):
             return base  # the reap's records already match HEAD: nothing left to commit is success

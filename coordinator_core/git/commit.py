@@ -78,8 +78,8 @@ import threading
 import time
 from contextvars import ContextVar, Token
 from pathlib import Path
-from stat import S_ISREG
-from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
+from stat import S_ISDIR, S_ISREG
+from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union, cast
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.git_lock_retry import DEFAULT_BACKOFF_SCHEDULE_S
@@ -99,6 +99,8 @@ from coordinator_core.git.git_index import parse_index_identity
 from coordinator_core.git.git_objects import (
     _obj_path,
     _ref_exists_loose_or_packed,
+    PackReadDeadline,
+    _retry_transient_read,
     cas_ref,
     packed_contains,
     read_object,
@@ -107,7 +109,7 @@ from coordinator_core.git.git_objects import (
     object_batch,
     write_object,
 )
-from coordinator_core.git.git_state import IndexParseError, head_blobs, head_sha, head_tree_sha, index_read_cache_scope, read_commit, read_index, read_tree_spine
+from coordinator_core.git.git_state import IndexParseError, head_blobs, head_branch, head_sha, head_tree_sha, index_read_cache_scope, read_commit, read_index, read_tree_spine
 from coordinator_core.git import published_tree_classification
 from coordinator_core.git import rollback_check
 from coordinator_core.git.worktree_sync import sync_landed_paths
@@ -325,7 +327,28 @@ class FilterUnsupported(CommitRefused):
     (an LFS/`filter.*.clean` driver, or an explicit `text`/`eol` attribute
     pin). Refused rather than guessed: writing the RAW bytes would produce a
     blob sha git disagrees with, and the commit would look fine while the
-    path reads permanently modified to every peer."""
+    path reads permanently modified to every peer.
+
+    `shape` names the refused surface in one clause (`_unsupported`); "" when unset."""
+
+    shape: str = ""
+
+
+def _unsupported(message: str, shape: str) -> "FilterUnsupported":
+    exc = FilterUnsupported(message)
+    exc.shape = shape
+    return exc
+
+
+class IndexFormUndecided(FilterUnsupported):
+    """A `text=auto` path with CR bytes whose check-in form hinges on the index blob, and that blob
+    could not be read. `candidates` are the two byte forms git could have hashed: raw, LF-folded."""
+
+    def __init__(self, message: str, candidates: Tuple[bytes, ...], detail: str = "") -> None:
+        super().__init__(message)
+        self.candidates = candidates
+        self.detail = detail or message
+        self.shape = "check-in form depends on the git index blob, which could not be read"
 
 
 class StagedRollbackRefused(CommitRefused):
@@ -452,7 +475,8 @@ def _text_pin_checkin(root: Path, rel: str, data: bytes) -> Optional[bytes]:
     """git's checkin bytes for CR-bearing `data` at a path pinned by `text`, `text=auto` or
     `eol=lf` or `eol=crlf`, or None when this shape is not reproduced (`-text`, a macro or an
     unmodelled spelling, an unreadable index). Under `text=auto`, git skips conversion when
-    the path's index blob already carries a CR; that blob is read here, never guessed."""
+    the path's index blob already carries a CR; that blob is read here, never guessed. Raises
+    `IndexFormUndecided` when that index blob cannot be read."""
     pin = checkin_attrs.resolve_text_pin(root, rel)
     if pin is None or pin.text == checkin_attrs.TEXT_UNSET:
         return None
@@ -462,18 +486,62 @@ def _text_pin_checkin(root: Path, rel: str, data: bytes) -> Optional[bytes]:
         return data.replace(b"\r\n", b"\n")
     if _auto_looks_binary(data):
         return data
+    folded = data.replace(b"\r\n", b"\n")
     try:
-        entry = call_io_scope.memo("pin-index", str(root), lambda: read_index(root)).get(rel)
-        if entry is not None:
+        sha = call_io_scope.memo(f"pin-index-sha:{rel}", str(root), lambda: _index_entry_sha(root, rel))
+        if sha is not None:
             common = call_io_scope.memo("pin-common-dir", str(root), lambda: resolve_git_common_dir(root))
-            obj = read_object(common, entry.sha)
+            obj = read_object(common, sha)
             if obj is None:
-                return None
+                raise IndexFormUndecided(f"{rel}: index blob {sha} is not readable from the object store", (data, folded), f"index blob {sha} is not readable from the object store")
             if b"\r" in obj[1]:
                 return data
-    except IndexParseError:
+    except IndexParseError as exc:
+        raise IndexFormUndecided(f"{rel}: the git index is unreadable ({exc})", (data, folded), f"the git index is unreadable ({exc})") from exc
+    return folded
+
+
+def _index_entry_sha(root: Path, rel: str) -> Optional[str]:
+    """The stage-0 blob sha the index records for `rel`, None when untracked; `IndexParseError` for any
+    index shape `read_index` refuses (v4, split, truncated) or a conflicted `rel`.
+
+    Trap: a whole-index parse scales with index size. This locates the entry by a byte search
+    for its NUL-terminated name and accepts a hit only on an entry-aligned start whose flags carry
+    the name's length at stage 0; a path that is merely a suffix of a longer tracked path fails that check."""
+    gitdir = resolve_git_dir(root)
+    index_path = gitdir / "index"
+    try:
+        raw = cast(bytes, _retry_transient_read(index_path.read_bytes))
+    except FileNotFoundError:
         return None
-    return data.replace(b"\r\n", b"\n")
+    except OSError as exc:
+        raise IndexParseError(f"could not read {index_path}: {exc}") from exc
+    if any(True for _ in gitdir.glob("sharedindex.*")):
+        raise IndexParseError(f"split index detected alongside {index_path}")
+    if len(raw) < 12 or raw[:4] != b"DIRC":
+        raise IndexParseError(f"{index_path}: not a git index")
+    version = int.from_bytes(raw[4:8], "big")
+    if version not in (2, 3):
+        raise IndexParseError(f"{index_path}: index version {version} is not scanned here")
+    needle = rel.encode("utf-8", "surrogateescape")
+    needle_nul = needle + b"\x00"
+    at = raw.find(needle_nul, 12)
+    while at != -1:
+        for fixed in (62, 64):
+            start = at - fixed
+            if start < 12 or (start - 12) % 8:
+                continue
+            flags = int.from_bytes(raw[start + 60:start + 62], "big")
+            extended = bool(flags & 0x4000)
+            if extended != (fixed == 64) or (extended and version < 3):
+                continue
+            if (flags & 0x0FFF) != min(len(needle), 0x0FFF):
+                continue
+            if (flags >> 12) & 0x3:
+                raise IndexParseError(f"{index_path}: {rel} is unmerged")
+            return raw[start + 40:start + 60].hex()
+        at = raw.find(needle_nul, at + 1)
+    return None
 
 
 def _checkin_bytes(
@@ -521,10 +589,11 @@ def _checkin_bytes_uncached(
     """
     lfs = checkin_attrs.clean_filter_may_apply(root, rel)
     if lfs is not None:
-        raise FilterUnsupported(
+        raise _unsupported(
             f"{rel}: {lfs} -- this path's blob is produced by a clean filter "
             "this commit path does not run, so its sha cannot be computed in "
-            "process. Refused rather than written wrong."
+            "process. Refused rather than written wrong.",
+            "a filter.*.clean driver may apply to this path",
         )
 
     # REFUSE every path whose checkin conversion this module has not been
@@ -559,17 +628,19 @@ def _checkin_bytes_uncached(
         converted = _text_pin_checkin(root, rel, data)
         if converted is not None:
             return converted
-        raise FilterUnsupported(
+        raise _unsupported(
             f"{rel}: a text/eol attribute ({disposition}) pins this path's "
             "checkin conversion and its content contains CR bytes -- "
             "normalizing that in process is not proven byte-identical to "
             "git, so it is refused to the batched fallback rather than "
-            "guessed."
+            "guessed.",
+            "CR bytes under a text/eol attribute spelling this module does not model",
         )
     if disposition == checkin_attrs.UNRESOLVED:
-        raise FilterUnsupported(
+        raise _unsupported(
             f"{rel}: an [attr] macro governs this path's checkin attribute "
-            "and is not resolved in process. Refused rather than guessed."
+            "and is not resolved in process. Refused rather than guessed.",
+            "an [attr] macro governs this path's check-in attribute",
         )
 
     # UNSET -- no attribute matched, so `core.autocrlf` decides. A CR byte
@@ -579,11 +650,12 @@ def _checkin_bytes_uncached(
     if bytes([13]) in data:
         if (autocrlf or (lambda: _repo_autocrlf_true(root)))():
             return _autocrlf_checkin_normalize(data)
-        raise FilterUnsupported(
+        raise _unsupported(
             f"{rel}: contains CR bytes -- checkin normalization for this path "
             "is not reproduced in process, and the raw bytes hash to a blob "
             "git disagrees with. Refused rather than silently committing "
-            "different content."
+            "different content.",
+            "CR bytes with no text attribute and core.autocrlf not true",
         )
     return data
 
@@ -672,6 +744,43 @@ def _checkin_blob_sha_read(root: Path, rel: str) -> Optional[str]:
     digest = hashlib.sha1(b"blob %d\0" % len(out))
     digest.update(out)
     return digest.hexdigest()
+
+
+class BlobDiagnosis(NamedTuple):
+    """Why `_checkin_blob_sha_read` answered None. `cause` is one named clause; `alt_shas` are the blob
+    shas git could have recorded when the form hinges on an unreadable index (`IndexFormUndecided`);
+    `sha` is set only when the diagnosing read itself hashed (the earlier None was a stall)."""
+
+    sha: Optional[str]
+    cause: str
+    alt_shas: Tuple[str, ...] = ()
+
+
+def _blob_sha1(payload: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(payload) + payload).hexdigest()
+
+
+def diagnose_checkin_blob(root: Path, rel: str) -> BlobDiagnosis:
+    """Name the reason `_checkin_blob_sha_read(root, rel)` answers None, by one more unbounded in-process
+    read; call it only after a None. Spawns nothing and counts no bytes."""
+    base = Path(root)
+    try:
+        path = base / rel
+        st = os.stat(path)
+        if not S_ISREG(st.st_mode):
+            return BlobDiagnosis(None, "not a regular file (a read of it could block)")
+        data = path.read_bytes()
+    except OSError as exc:
+        return BlobDiagnosis(None, f"worktree file unreadable ({type(exc).__name__}: {exc.strerror or exc})")
+    if len(data) != st.st_size:
+        return BlobDiagnosis(None, "file size changed while it was read (being written)")
+    try:
+        out = _checkin_bytes(base, rel, data)
+    except IndexFormUndecided as exc:
+        return BlobDiagnosis(None, f"{exc.shape}: {exc.detail}", tuple(_blob_sha1(c) for c in exc.candidates))
+    except FilterUnsupported as exc:
+        return BlobDiagnosis(None, exc.shape or "check-in form not reproduced in process")
+    return BlobDiagnosis(_blob_sha1(out), "read stalled past its deadline, then answered")
 
 
 #: Caller-wait ceiling for one worktree read; past it the hash is "unknown" (None).
@@ -1349,6 +1458,37 @@ def _in_object_batch(fn):
     return run
 
 
+PUSH_DUE_MARKER = "push-due"
+
+
+def write_due_marker(common_dir: Union[str, Path], sha: str) -> None:
+    """Atomically create `<common_dir>/push-due` holding `sha`, for the warm push cadence to find.
+
+    Temp sibling then `os.replace`; never raises (the 600s sweep stays the backstop)."""
+    target = Path(common_dir) / PUSH_DUE_MARKER
+    tmp = target.with_name(f"{PUSH_DUE_MARKER}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(sha, encoding="utf-8")
+        os.replace(tmp, target)
+    except Exception:  # noqa: BLE001 -- a marker is advisory; the commit already landed
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def mark_cold_commit(root: Union[str, Path], sha: str) -> None:
+    """Cold-process commit seam: on a work branch, leave the due marker. No spawn, never raises."""
+    try:
+        from coordinator_core.hooks.auto_push import branch_gate
+
+        branch = head_branch(root)
+        if branch and branch_gate(branch, str(root))[0]:
+            write_due_marker(resolve_git_common_dir(root), sha)
+    except Exception:  # noqa: BLE001 -- advisory, see write_due_marker
+        pass
+
+
 from coordinator_core.ops.workflow_fire.finalizer import guarded_commit as _private_guarded_commit
 
 
@@ -1373,8 +1513,13 @@ def commit_paths(
     expected_blobs: Optional[Mapping[str, str]] = None,
     expected_content_sha256: Optional[Mapping[str, str]] = None,
     finish_merge: bool = False,
+    written_content: Optional[Mapping[str, Tuple[bytes, int]]] = None,
 ) -> CommitOutcome:
     """Commit exactly `paths` (+ remove `deleted_paths`). Zero git spawns.
+
+    `written_content` ({path: (bytes, mtime_ns)}): bytes the caller just wrote. A path whose
+    worktree stat still shows that length and mtime_ns commits those bytes without a re-read;
+    any other path is read as usual.
 
     `finish_merge` (DEFAULT FALSE): with `<gitdir>/MERGE_HEAD` present, commit the merge
     with parents HEAD then MERGE_HEAD. `paths` + `deleted_paths` + `untracked_paths` must
@@ -1490,6 +1635,7 @@ def commit_paths(
     gitdir = resolve_git_dir(repo)
     supplied = dict(supplied_blobs or {})
 
+    root_s = str(root)
     path_list = [_index_key(root, p) for p in paths]
     delete_list = [_index_key(root, p) for p in deleted_paths]
     untrack_list = [_index_key(root, p) for p in untracked_paths]
@@ -1508,13 +1654,19 @@ def commit_paths(
         # A tracked .git/... entry makes GitHub's fsck (hasDotgit) reject every later push.
         if any(part.casefold() == ".git" for part in p.replace("\\", "/").split("/")):
             raise CommitRefused(f"{p} has a '.git' path component -- never committable")
+    written = {p.replace("\\", "/"): v for p, v in (written_content or {}).items()}
+
+    def _directory_refusal(p: str) -> CommitRefused:
+        return CommitRefused(
+            f"{p} is a directory -- pass explicit file paths; a directory "
+            "pathspec matches whatever lands inside it at commit time, "
+            "including a peer's file added after the caller computed it"
+        )
+
     for p in path_list:
-        if (root / p).is_dir():
-            raise CommitRefused(
-                f"{p} is a directory -- pass explicit file paths; a directory "
-                "pathspec matches whatever lands inside it at commit time, "
-                "including a peer's file added after the caller computed it"
-            )
+        # invariant: a written path is stat'd again in the read pass below, which refuses a directory
+        if p not in written and os.path.isdir(os.path.join(root_s, p)):
+            raise _directory_refusal(p)
 
     exp_blobs = _normalise_expectations(
         root, "expected_blobs", expected_blobs, (40, 64), path_list, delete_list, untrack_list
@@ -1748,6 +1900,9 @@ def commit_paths(
     index_updates: Dict[str, object] = {}
     staged_preferred = []
     staged_passed_over: list = []
+    # invariant: a path's entry exists only while its committed blob is the checked-in form of the
+    # worktree bytes read under that (size, mtime_ns); a substitution or fallback drops it.
+    worktree_fingerprint: Dict[str, Tuple[int, int]] = {}
     refused: list = []
     # path -> blob shas the object store lacked BEFORE `blob_fallback` wrote
     # anything: the fallback's result landing in this set proves it novel.
@@ -1788,7 +1943,14 @@ def commit_paths(
             staged_preferred.append(p)
         else:
             try:
-                data = (root / p).read_bytes()
+                pre_stat = os.stat(os.path.join(root_s, p))
+                if S_ISDIR(pre_stat.st_mode):
+                    raise _directory_refusal(p)
+                known = written.get(p)
+                if known is not None and len(known[0]) == pre_stat.st_size and known[1] == pre_stat.st_mtime_ns:
+                    data = known[0]
+                else:
+                    data = (root / p).read_bytes()
             except FileNotFoundError as exc:
                 # Tracked at the INDEX (unstaged `rm`) or at HEAD only (a
                 # `git rm` already dropped the index entry): both are a
@@ -1828,6 +1990,8 @@ def commit_paths(
                 absent_before_fallback[p] = _absent_blob_guesses(gitdir, repo, data)
                 continue
             mode = declared_modes.get(p) or (entry.mode if entry is not None else _mode_for(root / p))
+            if S_ISREG(pre_stat.st_mode) and b"\r" not in data:
+                worktree_fingerprint[p] = (pre_stat.st_size, pre_stat.st_mtime_ns)
             if entry is not None and blob != entry.sha:
                 # CANDIDATE ONLY -- the worktree differs from the index, which
                 # is NOT yet evidence that anything was deliberately staged.
@@ -1912,6 +2076,7 @@ def commit_paths(
                 index_updates[p] = (entry.mode, entry.sha)
                 staged_preferred.append(p)
                 content_digest.pop(p, None)
+                worktree_fingerprint.pop(p, None)
             else:
                 worktree_over_staged.append(p)
 
@@ -2166,7 +2331,7 @@ def commit_paths(
     # The index lock is taken BEFORE the ref moves and held across it: an index left at its
     # pre-commit bytes under a moved HEAD reads as staged deletions of every added path, and
     # only the lock holder can write it. A busy lock is therefore a pre-ref refusal.
-    prepared = _prepare_index_splice(repo, index_updates, merge_view)
+    prepared = _prepare_index_splice(repo, index_updates, merge_view, worktree_fingerprint)
     if dispatch_fence.current_dispatch_fenced():
         prepared.abort()
         raise CommitRefused(
@@ -2221,7 +2386,11 @@ def commit_paths(
         # would otherwise re-open every attribute file and re-parse the index per landed path.
         token = call_io_scope._SCOPE.set(pass_io_scope)
         try:
-            synced = sync_landed_paths(repo, sync_plan)
+            fast_equal = _fingerprint_confirmed(root, sync_plan, worktree_fingerprint)
+            synced = sync_landed_paths(
+                repo, {p: v for p, v in sync_plan.items() if p not in fast_equal}
+            )
+            synced = synced._replace(head_equal=tuple(fast_equal) + synced.head_equal)
             already = tuple(
                 p for p in synced.refused
                 if _landed_hunks_already_in_worktree(repo, p, *sync_plan[p])
@@ -2262,6 +2431,8 @@ def commit_paths(
     cadence = sys.modules.get("coordinator_core.warm.push_cadence")
     if cadence is not None:
         cadence.note_commit(root)
+    else:
+        mark_cold_commit(root, commit_sha)
     if publish_error is not None:
         stale = tuple(sorted(index_updates))
         if _reset_index_paths(repo, stale):
@@ -2275,6 +2446,35 @@ def commit_paths(
         ) from publish_error
 
     return outcome
+
+
+def _fingerprint_confirmed(
+    root: Path,
+    sync_plan: Mapping[str, Tuple[Optional[Tuple[int, str]], Optional[Tuple[int, str]]]],
+    fingerprints: Mapping[str, Tuple[int, int]],
+) -> List[str]:
+    """Plan paths whose worktree file is still the exact bytes the landed blob was built from.
+
+    One stat each, no object read: the 3-way sync would find ours == theirs and write nothing.
+
+    Trap: (size, mtime_ns) equality is not content equality; a same-size edit inside the
+    filesystem's mtime granularity is indistinguishable from no edit.
+    """
+    out: List[str] = []
+    root_s = str(root)
+    for p, (parent, landed) in sync_plan.items():
+        fp = fingerprints.get(p)
+        if fp is None or landed is None or landed[0] in (0o120000, 0o160000):
+            continue
+        if parent is not None and parent[0] in (0o120000, 0o160000):
+            continue
+        try:
+            st = os.stat(os.path.join(root_s, p))
+        except OSError:
+            continue
+        if (st.st_size, st.st_mtime_ns) == fp:
+            out.append(p)
+    return out
 
 
 def _landed_hunks_already_in_worktree(
@@ -2305,7 +2505,7 @@ def _landed_hunks_already_in_worktree(
         ours = checkin_form(root, rel, target.read_bytes())
         base_obj = read_object(common, parent[1])
         theirs_obj = read_object(common, landed[1])
-    except OSError:
+    except (OSError, PackReadDeadline):
         return False
     if ours is None or base_obj is None or theirs_obj is None:
         return False
@@ -2337,6 +2537,7 @@ def _prepare_index_splice(
     repo: Union[str, Path],
     index_updates: Mapping[str, object],
     merge_view: Optional[object],
+    trusted_stats: Optional[Mapping[str, Tuple[int, int]]] = None,
 ) -> "index_write.PreparedSplice":
     """Take `index.lock` and build the spliced index, retrying a peer-held lock on
     `_SPLICE_LOCK_BACKOFF_SECS`; past the schedule, `CommitRefused` -- nothing committed,
@@ -2346,6 +2547,7 @@ def _prepare_index_splice(
             return index_write.prepare_splice(
                 repo, index_updates, stat_fallback=True,
                 collapse_unmerged=merge_view.unmerged if merge_view is not None else (),
+                trusted_stats=trusted_stats,
             )
         except index_write.IndexWriteLockBusy as exc:
             if pause is None:
@@ -2613,6 +2815,7 @@ def refresh_stat_in_process(repo: Union[str, Path], paths: Sequence[str]) -> Tup
     size and mtime already match the file is skipped after one `stat`.
     """
     root = Path(repo)
+    root_s = str(root)
     keys = {_index_key(root, raw_path) for raw_path in paths}
     if not keys:
         return ()
@@ -2623,9 +2826,8 @@ def refresh_stat_in_process(repo: Union[str, Path], paths: Sequence[str]) -> Tup
         entry = existing.get(p)
         if entry is None:
             continue
-        target = root / p
         try:
-            st = target.stat()
+            st = os.stat(os.path.join(root_s, p))
         except OSError:
             continue
         if (
@@ -2634,6 +2836,7 @@ def refresh_stat_in_process(repo: Union[str, Path], paths: Sequence[str]) -> Tup
             and st.st_mtime_ns % 1_000_000_000 == entry.mtime_nsec
         ):
             continue
+        target = root / p
         if not target.is_file() or checkin_attrs.clean_filter_may_apply(root, p) is not None:
             continue
         try:

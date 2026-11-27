@@ -32,13 +32,13 @@ from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.workflow_fire import fire
 
-_DEFAULT_TIMEOUT_S = 7200
+DEFAULT_TIMEOUT_S = 14400
 
 
 def _deadline(record: dict) -> tuple[Optional[float], Optional[float]]:
     timeout_s = record.get("timeout_s")
     if not isinstance(timeout_s, (int, float)) or isinstance(timeout_s, bool):
-        timeout_s = _DEFAULT_TIMEOUT_S
+        timeout_s = DEFAULT_TIMEOUT_S
     start = record.get("started_at") or record.get("reserved_at")
     if not isinstance(start, (int, float)):
         return timeout_s, None

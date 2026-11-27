@@ -494,6 +494,16 @@ def _recent_dir_names(base: Path, now: float, bound: float) -> set:
         return set()
 
 
+def _chained_research_run(root: Path, run_id: str, ask_sizing: str) -> Optional[str]:
+    """The pipeline-research run an ask chained into; None for a non-ask run or one without a sizing."""
+    from coordinator_core.ops.dispatch_emit import ask_contract as ac
+
+    ask_stamp = run_id[4:] if run_id.startswith("ask-") else ""
+    if not ask_sizing or not ac._BASE_REF_RUN_STAMP.fullmatch(ask_stamp):
+        return None
+    return ac._ask_research_run(root, ask_stamp, ask_sizing)
+
+
 def _descendant_activity_epoch(
     root: Path, run_id: str, now: float, bound: float = MINTED_STALE_SECONDS, budget: Optional[list] = None,
 ) -> Optional[float]:
@@ -508,10 +518,15 @@ def _descendant_activity_epoch(
         Path(root) / RUN_DIR_ROOT, now, bound,
     )
     recent.discard(run_id)
+    research = _chained_research_run(root, run_id, ask_sizing)
+    if research and research != run_id:
+        recent.add(research)
     for name in sorted(recent):
         if budget is not None and budget[0] <= 0:
             break
-        if not safe_id(name) or not _descends_from(root, name, run_id, ask_sizing):
+        if not safe_id(name) or not (
+            name == research or _descends_from(root, name, run_id, ask_sizing)
+        ):
             continue
         if _halted(root, name) or _landed(root, name):
             continue

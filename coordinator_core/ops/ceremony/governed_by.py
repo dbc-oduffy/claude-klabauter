@@ -1,13 +1,4 @@
-"""Governed-By provenance ledger: trailer builder, parser and the ``governed_by.ledger`` read op.
-
-A commit's ``Governed-By: <sha> <ISO ts> <path>`` trailer names the commit that landed the governing plan or
-sizing file, never the path alone (distillation deletes plan files; the commit is the durable record). No side
-file is stored: the ledger is derived from ``git log`` trailers.
-
-``governed_by.ledger`` (COMPUTE_ONLY): params ``repo_root`` (optional), ``path`` (required, repo-relative),
-``limit`` (optional, default 200). One ``git log`` spawn. Reply ``{ok, path, heading, entries}`` where each entry
-is ``{sha, ts, path, commit}``.
-"""
+"""Governed-By provenance: trailer builder, parser, land-check rows and the ``governed_by.ledger`` read op."""
 
 from __future__ import annotations
 
@@ -24,7 +15,12 @@ DEFAULT_LIMIT = 200
 _PLAN_HISTORY_DEPTH = 20
 _RS = "\x1e"
 _US = "\x1f"
+_DIFF_HEADER_RE = re.compile(r"(?m)^diff --git a/(.+) b/\1\r?$")
 _LINE_RE = re.compile(rf"^{KEY}: ([0-9a-f]{{7,40}}) (\S+) (.+?)\s*$")
+_RUN_ID_TRAILER_RE = re.compile(r"(?m)^(?:Checkpoint-)?Run-Id:[ \t]*(\S+)")
+_RUN_ID_TOKEN_RE = re.compile(r"\bwarp-\d{4}-\d{2}-\d{2}-[A-Za-z0-9][\w-]*")
+_PLAN_TRAILER_RE = re.compile(r"(?m)^Plan:[ \t]*(.+)$")
+_GOVERNING_PATH_RE = re.compile(r"(?<![\w/.-])((?:docs/plans|state/sizings)/[\w./-]+?\.(?:md|ya?ml))(?![\w/-])")
 
 
 def format_trailer(sha: str, ts: str, path: str) -> str:
@@ -44,8 +40,7 @@ def parse_trailers(message: str) -> List[dict]:
 
 
 def governing_commits(root: Path, paths: Sequence[str]) -> List[dict]:
-    """``[{sha, ts, path}]``: the newest commit that touched each of ``paths`` (one ``git log`` spawn). A path
-    never committed contributes nothing, so an unlanded plan yields no unresolvable link."""
+    """``[{sha, ts, path}]``: the newest commit touching each of ``paths``, one ``git log`` spawn."""
     wanted = [p.replace("\\", "/") for p in paths if p]
     if not wanted:
         return []
@@ -73,8 +68,7 @@ def governing_commits(root: Path, paths: Sequence[str]) -> List[dict]:
 
 
 def run_governing_paths(root: Path, run_id: str) -> List[str]:
-    """Repo-relative plan and sizing paths the run record names (``run.json`` then ``manifest.json``: keys
-    ``plan_rel``, ``plan_path``, ``sizing_rel``); ``[]`` when the run has no readable record."""
+    """Plan and sizing paths the run's ``run.json`` / ``manifest.json`` name; ``[]`` without a record."""
     import json
 
     from coordinator_core.session import record_homes
@@ -95,30 +89,107 @@ def run_governing_paths(root: Path, run_id: str) -> List[str]:
     return paths
 
 
-def trailer_lines(root: Path, run_id: Optional[str]) -> List[str]:
-    """The ``Governed-By`` lines for the plan and sizing files governing ``run_id``; ``[]`` when the run id is
-    unknown or nothing governing is committed. Never raises: provenance is stamped, not gated, at commit time."""
-    if not isinstance(run_id, str) or not run_id:
-        return []
+def message_run_ids(message: str) -> List[str]:
+    """Run ids a message names: ``Run-Id:`` / ``Checkpoint-Run-Id:`` trailers, then ``warp-<date>-...`` tokens."""
+    ids: List[str] = []
+    for value in [*_RUN_ID_TRAILER_RE.findall(message), *_RUN_ID_TOKEN_RE.findall(message)]:
+        if value not in ids:
+            ids.append(value)
+    return ids
+
+
+def message_governing_paths(message: str) -> List[str]:
+    """Plan and sizing paths named on the message's ``Plan:`` trailer lines; a prose mention does not govern."""
+    paths: List[str] = []
+    plan_lines = "\n".join(m.group(1) for m in _PLAN_TRAILER_RE.finditer(message))
+    for value in _GOVERNING_PATH_RE.findall(plan_lines.replace("\\", "/")):
+        if value not in paths:
+            paths.append(value)
+    return paths
+
+
+def trailer_lines(root: Path, run_id: Optional[str], extra_paths: Sequence[str] = ()) -> List[str]:
+    """``Governed-By`` lines for the files governing ``run_id`` plus ``extra_paths``; never raises."""
     try:
-        paths = run_governing_paths(root, run_id)
+        paths = run_governing_paths(root, run_id) if isinstance(run_id, str) and run_id else []
+        paths.extend(p for p in extra_paths if p not in paths)
         return [format_trailer(c["sha"], c["ts"], c["path"]) for c in governing_commits(root, paths)]
-    except Exception:  # noqa: BLE001 -- an unreadable record stamps nothing; it never blocks a landing
+    except Exception:  # noqa: BLE001
         return []
+
+
+def stamp(message: str, root: Path, run_id: Optional[str] = None) -> str:
+    """`message` with ``Governed-By`` lines for its run (``run_id`` or the first run id it names) and ``Plan:`` paths."""
+    from coordinator_core.ops.ceremony.commit_message import append_trailer_lines
+
+    run = run_id or next((r for r in message_run_ids(message) if run_governing_paths(root, r)), None)
+    return append_trailer_lines(message, trailer_lines(root, run, message_governing_paths(message)))
 
 
 def unresolved_shas(root: Path, shas: Iterable[str]) -> List[str]:
-    """The ``shas`` that name no commit object, from one ``cat-file --batch-check`` spawn."""
+    """The ``shas`` naming no commit object, one ``cat-file --batch-check`` spawn; ``[]`` when git fails."""
     wanted = sorted({s for s in shas if s})
     if not wanted:
         return []
     from coordinator_core.git.run import run_git
 
-    res = run_git(["-C", str(root), "cat-file", "--batch-check"], input="".join(f"{s}^{{commit}}\n" for s in wanted).encode("ascii", "replace"))
+    request = "".join(f"{s}^{{commit}}\n" for s in wanted).encode("ascii", "replace")
+    res = run_git(["-C", str(root), "cat-file", "--batch-check"], input=request)
     if res.returncode != 0:
-        return wanted
+        return []
     missing = [ln.split(" ", 1)[0] for ln in res.stdout.splitlines() if ln.endswith(" missing")]
     return sorted({s for s in wanted for m in missing if m == f"{s}^{{commit}}"})
+
+
+def pending_rows(log_text: str) -> List[dict]:
+    """``[{commit, paths, shas}]`` for each agent commit in ``log_text`` that touches code."""
+    from coordinator_core.commenting.added_types import SUFFIXES
+    from coordinator_core.commenting.authorship import is_agent_commit
+
+    pending: List[dict] = []
+    for chunk in log_text.split(_RS):
+        parts = chunk.split(_US, 2)
+        if len(parts) != 3 or not is_agent_commit(parts[1]):
+            continue
+        code = sorted({m.group(1) for m in _DIFF_HEADER_RE.finditer(parts[2]) if Path(m.group(1)).suffix.lower() in SUFFIXES})
+        if code:
+            pending.append({"commit": parts[0].strip(), "paths": code, "shas": [e["sha"] for e in parse_trailers(parts[1])]})
+    return pending
+
+
+def pending_shas(log_text: str) -> List[str]:
+    """The sorted distinct trailer shas that `provenance_findings` must resolve for ``log_text``."""
+    return sorted({s for row in pending_rows(log_text) for s in row["shas"]})
+
+
+def unresolved_from_batch(out: bytes, skip: int, shas: Sequence[str]) -> Optional[set]:
+    """The ``shas`` that are not commits in ``cat-file --batch`` output, past ``skip`` foreign entries; None when short."""
+    pos = 0
+    bad: set = set()
+    for i in range(skip + len(shas)):
+        eol = out.find(b"\n", pos)
+        if eol < 0:
+            return None
+        header = out[pos:eol].split()
+        pos = eol + 1
+        if len(header) == 3:
+            pos += int(header[2]) + 1
+        if i >= skip and not (len(header) == 3 and header[1] == b"commit"):
+            bad.add(shas[i - skip])
+    return bad
+
+
+def provenance_findings(root: Path, log_text: str, unresolved: Optional[Iterable[str]] = None) -> List[dict]:
+    """Major rows ``{commit, paths, severity, scope, reason: missing|unresolved, shas}`` for agent code commits
+    lacking a resolvable ``Governed-By``; ``unresolved`` is the pre-resolved bad shas, None spawns one lookup."""
+    pending = pending_rows(log_text)
+    bad = set(unresolved) if unresolved is not None else set(unresolved_shas(root, [s for row in pending for s in row["shas"]]))
+    rows: List[dict] = []
+    for row in pending:
+        reason = "missing" if not row["shas"] else "unresolved" if bad.intersection(row["shas"]) else None
+        if reason:
+            rows.append({**row, "severity": "major", "scope": "default-path", "reason": reason})
+    return rows
 
 
 def ledger(root: Path, path: str, limit: int = DEFAULT_LIMIT) -> List[dict]:

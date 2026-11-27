@@ -575,56 +575,6 @@ _REVIEWED_STATUSES = frozenset({"reviewed", "approved"})
 _STATUS_LINE = re.compile(r"^status:\s*['\"]?([A-Za-z_-]+)", re.MULTILINE)
 
 
-def _halt_marker_field(run_dir: Path, field: str) -> object:
-    """`field` of the run's `halted.json`, None when the marker is absent or unreadable."""
-    try:
-        data = json.loads((run_dir / "halted.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data.get(field) if isinstance(data, dict) else None
-
-
-def _sizing_run_dirs(root: Path, sizing_rel: str) -> list[Path]:
-    """Record dirs of every run bound to `sizing_rel` (run.json `sizing_rel`), date-floored like
-    `run_credit.credits_for_sizing`: one scandir plus one `run.json` read per candidate."""
-    import os
-
-    from coordinator_core.ops.dispatch_emit.halted_run import _DATE_PREFIX, _STAMP
-    from coordinator_core.ops.dispatch_emit.run_credit import _binds_sizing
-
-    sizing = PurePosixPath(str(sizing_rel).replace("\\", "/")).as_posix()
-    stem = PurePosixPath(sizing).stem
-    dated = _DATE_PREFIX.match(stem)
-    if dated is None:
-        return []
-    floor = "".join(dated.groups())
-    prefix = f"warp-{stem}-"
-    out: list[Path] = []
-    try:
-        with os.scandir(root / RECORD_DIR_ROOT) as it:
-            for entry in it:
-                name = entry.name
-                if name.startswith("ask-"):
-                    stamp = name[4:]
-                    if not (_STAMP.fullmatch(stamp) and stamp[:8] >= floor):
-                        continue
-                elif name.startswith(prefix):
-                    if not _STAMP.fullmatch(name[len(prefix):]):
-                        continue
-                else:
-                    continue
-                try:
-                    if entry.is_dir() and (
-                        _binds_sizing(Path(entry.path), sizing) or _halt_marker_field(Path(entry.path), "sizing_rel") == sizing
-                    ):
-                        out.append(Path(entry.path))
-                except OSError:
-                    continue
-    except OSError:
-        return []
-    return out
-
-
 def _stopped_unreviewed_plan(root: Path, sizing_rel: str, plan_rel: str, plan_text: str, rows: Sequence) -> bool:
     """True when the plan was authored by a prior run of this sizing and nothing shows it was reviewed.
 
@@ -640,21 +590,24 @@ def _stopped_unreviewed_plan(root: Path, sizing_rel: str, plan_rel: str, plan_te
         return False
     if _coded_rows(rows):
         return False
-    dirs = _sizing_run_dirs(root, sizing_rel)
-    if not dirs:
+    from coordinator_core.ops.dispatch_emit.halted_run import bound_runs
+
+    bound = bound_runs(root, sizing_rel)
+    if not bound:
         return False
     from coordinator_core.ops.dispatch_emit import run_truth_contract as rtc
     from coordinator_core.ops.dispatch_emit.ask_stage_receipt import RECEIPT_NAME
     from coordinator_core.ops.dispatch_emit import kept_work
     from coordinator_core.ops.dispatch_emit.stage_receipts import read_receipt
 
-    for d in dirs:
+    for name, halt in bound.items():
+        d = root / RECORD_DIR_ROOT / name
         got = read_receipt(d, rtc.STAGE_PLAN_REVIEW)
         if got is not None and got.artifact in (None, "", plan_rel):
             return False
         if (d / RECEIPT_NAME).is_file() or (d / "manifest.json").is_file():
             return False
-        if _halt_marker_field(d, "halted") == "ledger-check":
+        if halt.get("halted") == "ledger-check":
             return False
         if (d / "kept.json").is_file():
             gate = kept_work.read(d)["plan_gate"]

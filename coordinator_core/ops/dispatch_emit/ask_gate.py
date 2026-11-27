@@ -54,6 +54,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KIND_FIELD,
     RESUME_LEDGER_LEG_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
+    RESUME_LEDGER_PIVOT_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
     RESUME_LEDGER_REVISED_FIELD,
     RESUME_LEDGER_LANDED_MET_BY_FIELD,
@@ -66,6 +67,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUMED_RUN_ID_KEY,
     RUN_OUTCOME_FILE,
     GateVerdict,
+    halt_carries_pivot,
     read_run_outcome,
     record_dir,
     stamp_plan_phase,
@@ -501,6 +503,7 @@ def gate(
     reasons_sink: Optional[list] = None,
     em_size: Optional[str] = None,
     family: Optional[str] = None,
+    declined_sink: Optional[list] = None,
 ) -> GateVerdict:
     """Arm for the sizing at `sizing_rel`, or the single halt that stops it, naming every cause.
 
@@ -550,6 +553,7 @@ def gate(
     verdict = _arm_verdict(
         root, sizing_rel, writes=writes, baton=baton, landed_sink=landed_sink, run_id=run_id, kept_sink=kept_sink,
         phase_sink=phase_sink, held_sink=held_sink, reasons_sink=reasons_sink, em_size=em_size,
+        declined_sink=declined_sink,
     )
     if route_payload is not None and verdict.design_route is None:
         verdict = replace(verdict, design_route=route_payload)
@@ -896,13 +900,34 @@ def _family_named_refusal(sizing: Mapping) -> Optional[str]:
     return None
 
 
+def _plan_preference_declines_research(repo_root: Path, run_id: Optional[str], sizing: dict) -> Optional[str]:
+    """The `research_declined` reason when the run's EM preference is plan and the sizing names no missing
+    fact (`route_preference.honours_plan`); None with no run, no record, or an unreadable one."""
+    if not run_id:
+        return None
+    from coordinator_core.ops.dispatch_emit import requirements_ledger, route_preference as rp
+
+    try:
+        record = requirements_ledger.run_dir(repo_root, run_id) / rp.ROUTE_PREFERENCE_FILE
+        if not record.is_file():
+            return None
+        pref = rp.from_json(record.read_text(encoding="utf-8"))
+    except (requirements_ledger.LedgerRefused, OSError):
+        return None
+    if not rp.honours_plan(pref, sizing):
+        return None
+    return "route_preference plan honoured: the sizing's research block names no missing fact"
+
+
 def _arm_verdict(
     repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None,
     landed_sink: Optional[list] = None, run_id: Optional[str] = None, kept_sink: Optional[list] = None,
     phase_sink: Optional[list] = None, held_sink: Optional[list] = None, reasons_sink: Optional[list] = None,
-    em_size: Optional[str] = None,
+    em_size: Optional[str] = None, declined_sink: Optional[list] = None,
 ) -> GateVerdict:
     """The arm-or-halt verdict, before the design-registry leg.
+
+    `declined_sink`, when given, receives the reason a plan route preference declined the research split.
 
     `em_size` is the EM's stated size: M or below against an engine XL/XXL is the one sizing-time halt."""
     from coordinator_core import sizing_assemble as sa
@@ -954,7 +979,17 @@ def _arm_verdict(
             handback=handback_line(sizing),
         )
     research = sizing.get("research")
-    if isinstance(research, dict) and research and not research_is_bounded_single_write(sizing, writes):
+    research_declined = (
+        _plan_preference_declines_research(repo_root, run_id, sizing)
+        if isinstance(research, dict) and research
+        else None
+    )
+    if research_declined and declined_sink is not None:
+        declined_sink.append(research_declined)
+    if (
+        isinstance(research, dict) and research and not research_declined
+        and not research_is_bounded_single_write(sizing, writes)
+    ):
         if writes or research.get("then_build") is True:
             return _research_build_split_verdict(repo_root, sizing, sizing_rel, writes)
         return _halt(
@@ -1465,6 +1500,19 @@ def _landed_met_by(repo_root: Path, run_id: str) -> dict[str, str]:
     return {str(k): v for k, v in raw.items() if isinstance(v, str) and v}
 
 
+def _halt_is_pivot(repo_root: Path, run_id: str) -> bool:
+    """True when the halting run's `halted.json` marks a PIVOT verdict (`halt_carries_pivot`); False when
+    the file is absent, unreadable or the run id is unsafe. One bounded file read, no spawn."""
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import bounded_json_object
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused, run_dir
+
+    try:
+        halted = bounded_json_object(run_dir(repo_root, run_id) / "halted.json")
+    except (LedgerRefused, OSError):
+        return False
+    return halted is not None and halt_carries_pivot(halted)
+
+
 def _unserved_revise_rows(revised: Sequence[str], remaining: Mapping, unclaimed: Sequence[str], halt, repo_root: Path) -> list[str]:
     """Revise-minted blocking ids with no halt steps, no serving plan row and no unclaimed claim: the
     ledger-replan leg serves them. An unreadable plan adds nothing. Reads the plan once per candidate
@@ -1568,6 +1616,8 @@ def _resume_ledger(
     landed_met_by = {} if halt.run_id == ALL_LANDED_NO_RUN else _landed_met_by(Path(repo_root), halt.run_id)
     if landed_met_by:
         verdict[RESUME_LEDGER_LANDED_MET_BY_FIELD] = landed_met_by
+    if halt.run_id != ALL_LANDED_NO_RUN and _halt_is_pivot(Path(repo_root), halt.run_id):
+        verdict[RESUME_LEDGER_PIVOT_FIELD] = True
     if credited:
         verdict[RESUME_LEDGER_CREDITED_FIELD] = credited
     if em_done:
@@ -1908,11 +1958,12 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
     phases: list = []
     held: list = []
     reasons: list = []
+    declined: list = []
     verdict = gate(
         root, sizing_rel, writes=writes, baton=params.get("baton"),
         mint_design_rows=bool(params.get("run_id")), landed_sink=landed, run_id=params.get("run_id"),
         kept_sink=kept, phase_sink=phases, held_sink=held, reasons_sink=reasons, em_size=params.get("em_size"),
-        family=params.get("family"),
+        family=params.get("family"), declined_sink=declined,
     )
     if landed and verdict.halt is None and verdict.resume_plan and verdict.resume_rows:
         _stamp_landed_rows(root, verdict.resume_plan, landed)
@@ -1938,6 +1989,8 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
         from coordinator_core.ops.dispatch_emit import phase_ledger
 
         out[phase_ledger.RESUME_PHASES_FIELD] = phases[0]
+    if declined:
+        out["research_declined"] = declined[0]
     if route_verdicts:
         from coordinator_core.ops.dispatch_emit import route_preference as rp
 

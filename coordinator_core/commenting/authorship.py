@@ -36,7 +36,11 @@ def _norm(line: str) -> str:
     return _MARKER_PREFIX_RE.sub("", line.strip()).strip()
 
 
-def _default_runner(args: list[str], cwd: Path, stdin: Optional[bytes]) -> Optional[bytes]:
+def _ends_at_boundary(line: str, tail: str) -> bool:
+    return line.endswith(tail) and (len(line) == len(tail) or not line[-len(tail) - 1].isalnum())
+
+
+def default_runner(args: list[str], cwd: Path, stdin: Optional[bytes]) -> Optional[bytes]:
     proc = subprocess.run(
         ["git", "-c", "core.quotepath=off", *args],
         cwd=str(cwd),
@@ -62,7 +66,7 @@ def _agent_added_lines(log_out: str) -> dict[str, list[str]]:
             if line.startswith("diff --git "):
                 path, in_header = None, True
             elif in_header and line.startswith("+++ "):
-                target = line[4:]
+                target = line[4:].rstrip("\t")
                 path = target[2:] if target.startswith("b/") else None
             elif line.startswith("@@"):
                 in_header = False
@@ -99,13 +103,9 @@ def agent_added_comments(
     runner: Optional[GitRunner] = None,
     comments_fn: Optional[Callable[[str, str, str], list[AddedComment]]] = None,
 ) -> list[AddedComment]:
-    """Comments present at `head` and absent at `base` whose text sits in an added line of an agent commit.
-
-    At most two git spawns whatever the range size: one `log -p -U0` and, only when an agent commit
-    added lines, one `cat-file --batch`. Any git failure returns [].
-    """
+    """Comments at `head` absent at `base` whose text sits in an agent commit's added lines; at most two git spawns, [] on git failure."""
     root = Path(repo_root)
-    run = runner or _default_runner
+    run = runner or default_runner
     rng = f"{base}..{head}"
     log_raw = run(
         [
@@ -118,14 +118,11 @@ def agent_added_comments(
     if not log_raw:
         return []
     added = _agent_added_lines(log_raw.decode("utf-8", errors="replace"))
-    paths = sorted(p for p in added if Path(p).suffix in SUFFIXES)
+    paths = sorted(p for p in added if Path(p).suffix.lower() in SUFFIXES)
     if not paths:
         return []
     if comments_fn is None:
-        try:
-            from .added import added_comments as comments_fn
-        except ImportError:
-            from .added_types import added_comments as comments_fn
+        from .added import added_comments as comments_fn
     request = "".join(f"{base}:{p}\n{head}:{p}\n" for p in paths).encode("utf-8")
     blobs_raw = run(["cat-file", "--batch"], root, request)
     if blobs_raw is None:
@@ -136,10 +133,10 @@ def agent_added_comments(
         after = blobs[2 * i + 1]
         if after is None:
             continue
-        agent_text = "\n".join(added[path])
+        agent_lines = [ln.rstrip() for ln in added[path]]
         for comment in comments_fn(path, blobs[2 * i] or "", after):
             lines = [_norm(ln) for ln in comment.text.split("\n")]
             lines = [ln for ln in lines if ln]
-            if lines and all(ln in agent_text for ln in lines):
+            if lines and all(any(_ends_at_boundary(a, ln) for a in agent_lines) for ln in lines):
                 found.append(comment)
     return found

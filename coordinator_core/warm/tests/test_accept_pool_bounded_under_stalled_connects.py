@@ -1,11 +1,12 @@
-"""The pending-listener pool stays at PENDING_LISTENER_POOL_SIZE under stalled connects."""
+"""The pending-listener pool stays at PENDING_LISTENER_POOL_SIZE under stalled connects, and the
+warm runtime dir (which holds the stall dumps) follows the machine-local runtime-base key."""
 
 from __future__ import annotations
 
 import threading
 import time
 
-from coordinator_core.warm import server
+from coordinator_core.warm import breadcrumb, server
 
 _POOL = 4
 
@@ -94,3 +95,24 @@ def test_a_listener_thread_over_the_bound_closes_its_handle_and_never_connects(t
     for _ in range(_POOL):
         gate.release()
     assert _wait(lambda: ctx._listener_slots == 0)
+
+
+def test_the_runtime_dir_and_its_stall_dumps_resolve_from_the_machine_local_key(tmp_path, monkeypatch):
+    base = tmp_path / "fast-drive"
+    home = tmp_path / "settings-home"
+    (home / "machine-local").mkdir(parents=True)
+    (home / "machine-local" / breadcrumb.RUNTIME_BASE_KEY_FILE).write_text(str(base) + "\n", encoding="utf-8")
+    monkeypatch.delenv(breadcrumb.RUNTIME_BASE_ENV, raising=False)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+
+    svc = breadcrumb.svc_dir(tmp_path / "engine")
+
+    assert base in svc.parents
+    assert (svc / server._STALL_DUMPS_DIRNAME).parent == svc
+
+
+def test_an_unset_key_keeps_the_default_runtime_base(tmp_path, monkeypatch):
+    monkeypatch.delenv(breadcrumb.RUNTIME_BASE_ENV, raising=False)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "empty-home"))
+
+    assert breadcrumb._machine_local_runtime_base() == ""

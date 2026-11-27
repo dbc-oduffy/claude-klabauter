@@ -64,9 +64,15 @@ def _code_span_edges(js: str, run: list[tuple[int, int]], text: str) -> tuple[in
     """The ``[lead, tail)`` slice of ``text`` safe to stage: a run with an odd backtick count opens or closes a
     code span around a neighbouring JS operand (`cmd '` + params + `' --repo r`), so the edge touching that
     operand stays inline. Trap: staging the whole run leaves the agent the params alone, the command cut
-    away into the file."""
+    away into the file. A balanced run that ends mid-line before an operand keeps that last line inline too,
+    so the staged file never ends mid-sentence at the operand split."""
     if text.count("`") % 2 == 0:
-        return 0, len(text)
+        tail = len(text)
+        if js[run[-1][1] : run[-1][1] + len(_JOIN)] == _JOIN and not text.endswith("\n"):
+            eol = text.rfind("\n")
+            if eol >= 0:
+                tail = eol + 1
+        return 0, tail
     lead, tail = 0, len(text)
     if js[max(0, run[0][0] - len(_JOIN)) : run[0][0]] == _JOIN:
         eol = text.find("\n", text.index("`"))
@@ -267,6 +273,8 @@ def stage_literal_runs(js: str, name: str, stager: Stager) -> str:
                 if b < te - 1:
                     tail = text.rfind("\n", 0, text.rindex("`")) + 1
                 tail = max(lead, tail)
+            elif b < te - 1 and not text.endswith("\n") and "\n" in text:
+                tail = text.rfind("\n") + 1
             body = text[lead:tail]
             if len(body.encode("utf-8")) < MIN_STAGE_BYTES:
                 continue

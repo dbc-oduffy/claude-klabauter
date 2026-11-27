@@ -113,6 +113,9 @@ def _owner_live(session_id: object, memo: Optional[dict] = None) -> bool:
     return live
 
 
+owner_live = _owner_live  # public name for cross-module callers
+
+
 def _token_held(repo_root: Path, run_id: str) -> bool:
     """True when the run holds a live run token or a claimed one (mid terminal-commit); pathlib reads only.
 

@@ -569,3 +569,65 @@ def test_a_land_scope_peer_view_is_never_held_into_a_following_scope(repo, live)
     live.add(PEER)
     with land_deadline.scope(60.0):
         assert _claims(repo, ["a.py"]) == {}
+
+
+ASK = "ask-20261127T140010-df8872"
+RESEARCH = "pipeline-research-20261127T140320-b93a37"
+CHAIN_SIZING = "state/sizings/2026-11/chained.yaml"
+
+
+def _chained_ask(repo: Path, now: float, child_age: float, child_record: bool = False) -> None:
+    import os
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir, write_run_stage_at
+
+    old = now - 3 * wrd.MINTED_STALE_SECONDS
+    ask_dir = record_dir(repo, ASK)
+    ask_dir.mkdir(parents=True)
+    (ask_dir / "run.json").write_text(json.dumps({"sizing_rel": CHAIN_SIZING}), encoding="utf-8")
+    write_run_stage_at(ask_dir, "minted", now=datetime.fromtimestamp(old, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    for entry in [*ask_dir.iterdir(), ask_dir]:
+        os.utime(entry, (old, old))
+    scratch = repo / "scratch/warp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    (scratch / f"{RESEARCH}.workflow.mjs.emitted.json").write_text(
+        json.dumps({"sizing": CHAIN_SIZING}), encoding="utf-8",
+    )
+    child = scratch / RESEARCH
+    (child / "stages").mkdir(parents=True)
+    (child / "stages" / "s1.json").write_text("{}", encoding="utf-8")
+    when = now - child_age
+    for entry in [child / "stages" / "s1.json", child / "stages", child]:
+        os.utime(entry, (when, when))
+    if child_record:
+        rdir = record_dir(repo, RESEARCH)
+        rdir.mkdir(parents=True)
+        (rdir / "halted.json").write_text(json.dumps({"status": "halted", "halted": "commit"}), encoding="utf-8")
+        os.utime(rdir, (old, old))
+
+
+def test_minted_ask_with_active_chained_research_child_is_not_stale(repo) -> None:
+    now = time.time()
+    _chained_ask(repo, now, child_age=60)
+    assert wrd._stale_at_minted(repo, ASK, now) is False
+
+
+def test_minted_ask_with_idle_chained_research_child_is_stale(repo) -> None:
+    now = time.time()
+    _chained_ask(repo, now, child_age=2 * wrd.MINTED_STALE_SECONDS)
+    assert wrd._stale_at_minted(repo, ASK, now) is True
+
+
+def test_minted_ask_with_halted_chained_research_child_is_stale(repo) -> None:
+    now = time.time()
+    _chained_ask(repo, now, child_age=60, child_record=True)
+    assert wrd._stale_at_minted(repo, ASK, now) is True
+
+
+def test_minted_ask_whose_research_child_names_another_sizing_is_stale(repo) -> None:
+    now = time.time()
+    _chained_ask(repo, now, child_age=60)
+    receipt = repo / "scratch/warp" / f"{RESEARCH}.workflow.mjs.emitted.json"
+    receipt.write_text(json.dumps({"sizing": "state/sizings/other.yaml"}), encoding="utf-8")
+    assert wrd._stale_at_minted(repo, ASK, now) is True

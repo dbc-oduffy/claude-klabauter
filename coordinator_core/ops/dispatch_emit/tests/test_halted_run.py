@@ -28,6 +28,9 @@ def _dir(root, stamp):
     return root / RECORD_DIR_ROOT / f"warp-{STEM}-{stamp}"
 
 
+NO_LEG_STAMP = {"measured_at": None, "head_sha": None, "current_head": None, "stale": True}
+
+
 def test_round_trip(tmp_path: Path) -> None:
     d = _dir(tmp_path, "20261016T010000-aaaaaa")
     p = hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)
@@ -35,7 +38,7 @@ def test_round_trip(tmp_path: Path) -> None:
     written = json.loads(p.read_text())
     written.pop(hr.HALT_ENGINE_FIELD, None)
     assert written == {
-        "status": "halted", "halted": "criterion_not_met", "sizing_rel": SIZING,
+        "status": "halted", "halted": "criterion_not_met", "sizing_rel": SIZING, "test_leg": NO_LEG_STAMP,
     }
     assert hr.halted_run_for(tmp_path, SIZING) == d.name
     assert hr.mark_resumed(d) is True
@@ -191,6 +194,63 @@ def test_a_started_or_staged_successor_keeps_the_refire_close(tmp_path: Path) ->
     assert hr._read(d)["status"] == hr.STATUS_SUPERSEDED
     _successor(tmp_path, SUCCESSOR, stage="staged")
     assert hr.void_unstarted_supersede(tmp_path, SIZING) is None
+    assert hr._read(d)["status"] == hr.STATUS_SUPERSEDED
+
+
+def _minted_refire_closed(root: Path) -> Path:
+    """A never-staged halt (not named minted-not-started) closed superseded-by-refire onto SUCCESSOR."""
+    (root / ".git").mkdir(exist_ok=True)
+    d = _dir(root, "20261016T010000-aaaaaa")
+    hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
+    assert not hr.is_unstarted_mint_halt(d)
+    assert hr.mark_superseded_by_refire(d, prior_engine=None, engine=ENGINE_B, at="t", successor=SUCCESSOR) is True
+    return d
+
+
+def _start(root: Path, run_id: str) -> dict:
+    from coordinator_core.ops.dispatch_emit import minted_run
+
+    return minted_run._handler({"run_id": run_id, "action": "start"}, root / ".git")
+
+
+def test_a_start_of_a_refire_closed_run_whose_successor_never_launched_is_not_past_minted(tmp_path: Path) -> None:
+    d = _minted_refire_closed(tmp_path)
+    _successor(tmp_path, SUCCESSOR)
+
+    out = _start(tmp_path, d.name)
+
+    assert "run-past-minted" not in (out["refusal"] or "")
+    assert hr._read(d)["status"] == hr.STATUS_HALTED
+    assert hr._read(d)[hr.VOIDED_SUPERSEDE_FIELD]["successor"] == SUCCESSOR
+
+
+def test_a_start_of_a_refire_closed_run_whose_successor_started_stays_past_minted(tmp_path: Path) -> None:
+    d = _minted_refire_closed(tmp_path)
+    _successor(tmp_path, SUCCESSOR, started=True)
+
+    out = _start(tmp_path, d.name)
+
+    assert "run-past-minted" in out["refusal"]
+    assert hr._read(d)["status"] == hr.STATUS_SUPERSEDED
+
+
+def test_a_refused_start_of_a_prior_run_that_staged_leaves_its_close_untouched(tmp_path: Path) -> None:
+    d = _minted_refire_closed(tmp_path)
+    _successor(tmp_path, SUCCESSOR)
+    (d / "run-stage.json").write_text(json.dumps({"stage": "commit", "staged_at": "t"}), encoding="utf-8")
+
+    assert "run-past-minted" in _start(tmp_path, d.name)["refusal"]
+    assert hr._read(d)["status"] == hr.STATUS_SUPERSEDED
+
+
+def test_a_start_never_voids_a_close_that_is_not_a_refire_close(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
+    assert hr.mark_superseded(d, hr._read(d), {"kind": "other", "successor": SUCCESSOR}) is True
+    _successor(tmp_path, SUCCESSOR)
+
+    assert "run-past-minted" in _start(tmp_path, d.name)["refusal"]
     assert hr._read(d)["status"] == hr.STATUS_SUPERSEDED
 
 
@@ -536,6 +596,7 @@ def test_reopen_red_writes_a_marker_when_absent(tmp_path: Path) -> None:
     path = hr.reopen_red(d, "c" * 40, ["t1", "t2"])
     assert json.loads(path.read_text()) == {
         "status": "halted", "halted": hr.HALT_POST_LAND_TRIPWIRE_RED, "sha": "c" * 40, "reds": ["t1", "t2"],
+        "test_leg": NO_LEG_STAMP,
     }
 
 
@@ -956,3 +1017,26 @@ def test_unstarted_mint_halt_refuses_other_halts_and_staged_runs(tmp_path):
     stage_file.write_text(json.dumps({**data, "staged_at": "2026-11-15T00:00:00Z"}), encoding="utf-8")
     assert hr.is_unstarted_mint_halt(staged) is False
     assert hr.is_unstarted_mint_halt(tmp_path / "absent-run") is False
+
+
+def test_halt_marker_stamps_the_leg_it_read_once_and_carries_its_fixture_edits(tmp_path: Path) -> None:
+    d = _dir(tmp_path, "20261016T010000-bbbbbb")
+    d.mkdir(parents=True)
+    edits = [{"test": "t.py::test_a", "path": "t.py"}]
+    (d / "test-leg.json").write_text(json.dumps({
+        "measured_at": "2026-10-16T01:00:00+00:00", "head_sha": "a" * 40, hr.HALT_FIXTURE_EDITS_KEY: edits,
+    }), encoding="utf-8")
+    written = json.loads(hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING).read_text())
+    assert written["test_leg"]["measured_at"] == "2026-10-16T01:00:00+00:00"
+    assert written["test_leg"]["head_sha"] == "a" * 40
+    assert written["test_leg"]["stale"] is True
+    assert written[hr.HALT_FIXTURE_EDITS_FIELD] == edits
+
+
+def test_halt_marker_reads_a_non_object_leg_as_no_leg(tmp_path: Path) -> None:
+    d = _dir(tmp_path, "20261016T010000-cccccc")
+    d.mkdir(parents=True)
+    (d / "test-leg.json").write_text("[1]", encoding="utf-8")
+    written = json.loads(hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING).read_text())
+    assert written["test_leg"] == NO_LEG_STAMP
+    assert hr.HALT_FIXTURE_EDITS_FIELD not in written

@@ -138,10 +138,18 @@ def _norm_rel(raw: object) -> Optional[str]:
     return PurePosixPath(*parts).as_posix()
 
 
-def _contained(root: Path, rel: str) -> bool:
+def _contained(root: Path, rel: str, parents: Optional[dict[str, bool]] = None) -> bool:
+    """True when ``root / rel`` resolves inside ``root``. ``parents`` memoises the resolved verdict
+    per parent directory across calls, leaving only a symlink test on the leaf."""
     from coordinator_core.ops._path_guard import contained_path
 
-    return contained_path(root / rel, [root]) is not None
+    if parents is None:
+        return contained_path(root / rel, [root]) is not None
+    parent = rel.rpartition("/")[0]
+    ok = parents.get(parent)
+    if ok is None:
+        ok = parents[parent] = contained_path(root / parent, [root]) is not None if parent else True
+    return ok and not os.path.islink(root / rel)
 
 
 def _read_text(root: Path, rel: Optional[str]) -> Optional[str]:
@@ -231,16 +239,18 @@ def candidate_paths(
     sizing_rel: Optional[str] = None,
     plan_rel: Optional[str] = None,
     doc_paths: Sequence[str] = (),
+    contain_cache: Optional[dict[str, bool]] = None,
 ) -> RunArtifacts:
     """Read ``run_id``'s record graph into a per-class candidate set. Zero spawns; a missing or
-    unreadable file contributes nothing and never raises."""
+    unreadable file contributes nothing and never raises. A caller reading many runs passes one
+    ``contain_cache`` dict so each parent directory is resolved once."""
     root = Path(worktree_root)
     classes: dict[str, list[str]] = {}
     seen: set[str] = set()
 
     def add(cls: str, rel: Optional[str], *, must_exist: bool = True) -> None:
         norm = _norm_rel(rel)
-        if norm is None or _is_scratch(norm) or norm in seen or not _contained(root, norm):
+        if norm is None or _is_scratch(norm) or norm in seen or not _contained(root, norm, contain_cache):
             return
         if must_exist and not (root / norm).is_file():
             return
@@ -597,21 +607,85 @@ def outcome_rel(run_id: str) -> str:
     return f"{EVIDENCE_ROOT}/{run_id}/{OUTCOME_FILE}"
 
 
-def write_tracked_outcome(worktree_root: Path, run_id: str, state: str, **extra: object) -> Optional[str]:
+CLOSURE_FINISHED = "finished"
+CLOSURE_PARTIAL = "partial"
+
+
+def closure_verdict(worktree_root: Path, sizing_rel: Optional[str], ledger_verdict: object = None) -> dict:
+    """The closure of a landing: ``{verdict, open_rows, not_met_items, ledger_met_open_rows, register, ledger}``.
+
+    ``verdict`` is ``partial`` while any register row of ``sizing_rel`` still blocks ``sizing.ship``
+    (open, partial, unruled deferred/waived, met but unwired) or any ``ledger_verdict`` item is
+    ``not_met``, or the sizing is named but unreadable; ``finished`` otherwise. ``register`` and
+    ``ledger`` map row/item id to status at the call. ``ledger_met_open_rows`` names a ledger-met
+    item whose register row still blocks. Reads the one sizing file; no spawn, never raises."""
+    from coordinator_core.ops import requirement_register as rr
+
+    register: dict = {}
+    open_rows: list = []
+    error: Optional[str] = None
+    if isinstance(sizing_rel, str) and sizing_rel:
+        text = _read_text(Path(worktree_root), sizing_rel)
+        reg = rr.read_register(text) if text else None
+        if text is None:
+            error = f"sizing unreadable: {sizing_rel}"
+        for row in (reg.rows if reg is not None else []):
+            rid = str(row.get(rr.ROW_ID))
+            register[rid] = str(row.get(rr.ROW_STATUS))
+            reason = rr._row_block(row)
+            if reason:
+                open_rows.append({"id": rid, "status": register[rid], "reason": reason})
+    items = ledger_verdict.get("items") if isinstance(ledger_verdict, dict) else None
+    ledger = {
+        str(i["id"]): str(i.get("status"))
+        for i in (items if isinstance(items, list) else []) if isinstance(i, dict) and i.get("id") is not None
+    }
+    not_met = [i for i, s in ledger.items() if s == "not_met"]
+    blocking = {r["id"] for r in open_rows}
+    out: dict = {
+        "verdict": CLOSURE_PARTIAL if (open_rows or not_met or error) else CLOSURE_FINISHED,
+        "open_rows": open_rows,
+        "not_met_items": not_met,
+        "ledger_met_open_rows": [i for i, s in ledger.items() if s == "met" and i in blocking],
+        "register": register,
+        "ledger": ledger,
+    }
+    if error:
+        out["error"] = error
+    return out
+
+
+def write_tracked_outcome(
+    worktree_root: Path, run_id: str, state: str, *, ledger_verdict: object = None,
+    cited_sizing: Optional[str] = None, **extra: object,
+) -> Optional[str]:
     """Write the run's tracked ``outcome.json`` (``run_id``, ``state``, sizing and plan pointers read
     from the local record dir, plus ``extra``) and return its repo-relative path; ``None`` when
-    ``run_id`` is not a safe name or the write fails. One small file per run, never a copy of the run dir."""
+    ``run_id`` is not a safe name or the write fails. One small file per run, never a copy of the run dir.
+    A ``landed`` outcome also carries ``closure`` (``closure_verdict`` over the run's sizing, ``cited_sizing``
+    overriding the record's, and ``ledger_verdict`` or the record's own), so it never reads finished
+    while a row is owed."""
     if not _safe_run_id(run_id):
         return None
     root = Path(worktree_root)
     local = _read_json(root, f"{_RECORD_ROOT}/{run_id}/run-outcome.json") or {}
     run = _read_json(root, f"{_RECORD_ROOT}/{run_id}/{_RUN_FILE}") or {}
     body = {"run_id": run_id, "state": state}
-    if isinstance(run.get("sizing_rel"), str):
-        body["sizing_rel"] = run["sizing_rel"]
+    sizing_rel = run.get("sizing_rel")
+    for fallback in ("halted.json", "manifest.json"):
+        if isinstance(sizing_rel, str) and sizing_rel:
+            break
+        sizing_rel = (_read_json(root, f"{_RECORD_ROOT}/{run_id}/{fallback}") or {}).get("sizing_rel")
+    sizing_rel = cited_sizing or sizing_rel
+    if isinstance(sizing_rel, str) and sizing_rel:
+        body["sizing_rel"] = sizing_rel
     for key in ("plan_path", "landed_chunks", "incomplete_chunks", "ledger_verdict"):
         if key in local:
             body[key] = local[key]
+    if state == "landed":
+        body["closure"] = closure_verdict(
+            root, sizing_rel if isinstance(sizing_rel, str) else None, ledger_verdict if ledger_verdict is not None else local.get("ledger_verdict"),
+        )
     body.update({k: v for k, v in extra.items() if v is not None})
     rel = outcome_rel(run_id)
     target = root / rel
@@ -658,13 +732,20 @@ def landable(
     ignored: Iterable[str],
     *,
     session_id: Optional[str],
+    prenormalized: bool = False,
 ) -> Landable:
     """Split the changed, un-ignored candidates into present files and tracked deletions, and
     withhold peer-held paths and docs-stage paths this session does not claim. Ignored candidates
-    and ignored ``prompts/`` files are named in ``ignored_excluded``, never dropped silently."""
+    and ignored ``prompts/`` files are named in ``ignored_excluded``, never dropped silently.
+    ``prenormalized`` means ``changed`` and ``ignored`` are already sets of posix-separated paths."""
     root = Path(worktree_root)
-    changed_set = {str(p).replace("\\", "/") for p in changed}
-    ignored_set = {str(p).replace("\\", "/") for p in ignored}
+    changed_set: set[str]
+    ignored_set: set[str]
+    if prenormalized and isinstance(changed, set) and isinstance(ignored, set):
+        changed_set, ignored_set = changed, ignored
+    else:
+        changed_set = {str(p).replace("\\", "/") for p in changed}
+        ignored_set = {str(p).replace("\\", "/") for p in ignored}
     cands = [p for p in artifacts.paths() if p in changed_set and p not in ignored_set and not _is_scratch(p)]
     ignored_excluded = tuple(sorted(
         p for p in {*artifacts.paths(), *(_prompt_files(root, artifacts) if ignored_set else ())}

@@ -12,7 +12,7 @@ import contextlib
 import os
 import time
 from pathlib import Path, PurePosixPath
-from typing import Iterator, Mapping, Optional, Sequence
+from typing import Iterable, Iterator, Mapping, Optional, Sequence
 
 from coordinator_core import warp_live
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
@@ -207,6 +207,34 @@ def file_claims(root: Path, writes: Sequence[str]) -> list[str]:
             continue
         out.append(w)
     return out
+
+
+def without_withheld(writes: Sequence[str], withheld: Iterable[str]) -> list[str]:
+    """`writes` minus the entries a run's withhold list names, or sits under one: a withheld path is never claimed."""
+    out = {_norm_s(p) for p in withheld if p}
+    if not out:
+        return list(writes)
+    return [w for w in writes if not (_norm_s(w) in out or any(a in out for a in _ancestors_s(_norm_s(w))))]
+
+
+def live_held(root: Path, session_id: Optional[str], writes: Iterable[str]) -> dict[str, list[str]]:
+    """`{path: [peer sessions]}` for the `writes` a live peer of `session_id` holds: one
+    `scope.contested_by_live_peers` read over the whole set. A dead-held or unheld path is absent.
+    Fails open (`{}`): no session id, a contest that cannot be established, or a read that raises."""
+    paths = sorted({w for w in writes if isinstance(w, str) and w})
+    if not session_id or not paths:
+        return {}
+    try:
+        from coordinator_core.session import scope
+
+        return scope.contested_by_live_peers(paths, session_id, cwd=str(Path(root))) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def without_held(writes: Sequence[str], held: Mapping[str, object]) -> tuple[list[str], list[str]]:
+    """`(kept, dropped)` over `writes`: `dropped` are the entries `held` names."""
+    return [w for w in writes if not held.get(w)], [w for w in writes if held.get(w)]
 
 
 def overlaps(writes: Sequence[str], footprints: Mapping[str, Optional[frozenset[str]]]) -> dict[str, list[str]]:

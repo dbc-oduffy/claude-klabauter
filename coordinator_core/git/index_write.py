@@ -242,7 +242,7 @@ def _build_entry(name: bytes, mode: int, sha_hex: str, st: os.stat_result) -> by
 _SINGLE_READ_MAX = 1 << 24  # one read call below this; larger files stream in 1 MiB chunks
 
 
-def _worktree_matches_blob(file: Path, mode: int, sha_hex: str, st: os.stat_result) -> bool:
+def _worktree_matches_blob(file: Union[str, Path], mode: int, sha_hex: str, st: os.stat_result) -> bool:
     """False only when `file` is a regular file whose git blob hash differs from `sha_hex`.
 
     An entry carrying a differing blob next to the worktree's stat reads clean to git, hiding
@@ -343,6 +343,7 @@ def prepare_splice(
     *,
     stat_fallback: bool = False,
     collapse_unmerged: Collection[str] = frozenset(),
+    trusted_stats: Optional[Mapping[str, Tuple[int, int]]] = None,
 ) -> PreparedSplice:
     """Take `index.lock` and build the spliced index in it; `.git/index` is untouched until
     `PreparedSplice.publish()`. Raises `IndexWriteLockBusy` when a peer holds the lock, with
@@ -351,6 +352,9 @@ def prepare_splice(
     `collapse_unmerged`: paths whose stage 1-3 entries are dropped and replaced by their stage-0
     update. Each must appear in `updates` (an ABSENT value resolves it to deletion); any other
     unmerged entry refuses.
+
+    `trusted_stats` ({path: (size, mtime_ns)}): a path whose worktree stat still equals this was
+    hashed by the caller from those very bytes, so the blob re-read is skipped.
 
     `stat_fallback`: a path whose worktree file cannot be stat'ed still gets its entry, with a zeroed
     stat that git reads as changed and re-hashes. Off, one unstat-able path refuses the whole splice.
@@ -390,7 +394,8 @@ def prepare_splice(
         prepared._claim_owner()
         with os.fdopen(fd, "wb") as handle:
             _splice_locked(
-                handle, root, index_path, lock_path, updates, stat_fallback, collapse
+                handle, root, index_path, lock_path, updates, stat_fallback, collapse,
+                trusted_stats or {},
             )
         if dispatch_abandon.is_abandoned():
             raise IndexWriteError(
@@ -410,7 +415,9 @@ def _splice_locked(
     updates: Mapping[str, object],
     stat_fallback: bool = False,
     collapse: frozenset = frozenset(),
+    trusted_stats: Optional[Mapping[str, Tuple[int, int]]] = None,
 ) -> None:
+    trusted_stats = trusted_stats or {}
     try:
         raw = index_path.read_bytes()
     except FileNotFoundError:
@@ -440,6 +447,7 @@ def _splice_locked(
             )
 
     replacements: Dict[bytes, Optional[bytes]] = {}
+    root_str = str(root).rstrip("\\/")
     for path, value in updates.items():
         normalized = path.replace("\\", "/")
         if normalized.startswith("/") or (
@@ -469,16 +477,19 @@ def _splice_locked(
                 replacements[key] = None
             continue
         mode, sha_hex = value  # type: ignore[misc]
+        abs_path = root_str + os.sep + normalized
         try:
-            st = (root / path).stat()
+            st = os.stat(abs_path)
         except OSError as exc:
             if not stat_fallback:
                 raise IndexWriteError(
                     f"cannot stat {path} to record its index entry: {exc}"
                 ) from exc
             st = _ZERO_STAT
-        if st is not _ZERO_STAT and not _worktree_matches_blob(
-            root / path, int(mode), str(sha_hex), st
+        if (
+            st is not _ZERO_STAT
+            and trusted_stats.get(path) != (st.st_size, st.st_mtime_ns)
+            and not _worktree_matches_blob(abs_path, int(mode), str(sha_hex), st)
         ):
             st = _ZERO_STAT
         replacements[key] = _build_entry(key, int(mode), str(sha_hex), st)

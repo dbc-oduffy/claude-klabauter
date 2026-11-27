@@ -135,11 +135,17 @@ import hashlib
 import json
 import re
 import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.commenting import authorship
+from coordinator_core.commenting.added import added_comments
+from coordinator_core.commenting.allow import strip_marker
+from coordinator_core.commenting.authorship import agent_added_comments
+from coordinator_core.ops.ceremony import governed_by
 from coordinator_core.git import git_objects, git_state
 from coordinator_core.git.content_hash import eol_folded_sha256
 from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -1121,6 +1127,68 @@ def _open_probe(
     return probe_io.open_probe(repo_root, snapshot_dir, writes, rerun, run_id=run_id, live_runs=live_runs)
 
 
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def _land_findings(repo_root: Path, base: str) -> Tuple[List[dict], List[dict]]:
+    """Major ``(comment rows, provenance rows)`` for ``base..HEAD``; both empty unless ``base`` is a full sha."""
+    if not _FULL_SHA_RE.fullmatch(base):
+        return [], []
+    sink: List[bytes] = []
+    folded: List[Optional[set]] = []
+    heads: Dict[str, str] = {}
+
+    def runner(args: List[str], cwd: Path, stdin: Optional[bytes]) -> Optional[bytes]:
+        if args[:2] == ["cat-file", "--batch"] and sink and stdin is not None:
+            shas = governed_by.pending_shas(sink[0].decode("utf-8", errors="replace"))
+            extra = "".join(f"{s}\n" for s in shas).encode("ascii", "replace")
+            out = authorship.default_runner(args, cwd, stdin + extra)
+            if out is not None:
+                requested = stdin.decode("utf-8", errors="replace").splitlines()
+                blobs = authorship._parse_cat_file(out, len(requested))
+                for spec, blob in zip(requested[1::2], blobs[1::2]):
+                    if blob is not None:
+                        heads[spec.split(":", 1)[1]] = blob
+                folded.append(governed_by.unresolved_from_batch(out, stdin.count(b"\n"), shas))
+            return out
+        out = authorship.default_runner(args, cwd, stdin)
+        if out and args[:1] == ["log"]:
+            sink.append(out)
+        return out
+
+    try:
+        found = agent_added_comments(repo_root, base, "HEAD", runner=runner)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return [], []
+    log_text = sink[0].decode("utf-8", errors="replace") if sink else ""
+    provenance = governed_by.provenance_findings(repo_root, log_text, folded[0] if folded else None) if sink else []
+    return _present_comments(repo_root, found, heads), provenance
+
+
+def _comment_key(text: str) -> str:
+    return " ".join(strip_marker(text).split())
+
+
+def _present_comments(repo_root: Path, found: list, heads: Dict[str, str]) -> List[dict]:
+    """Rows for untagged comments in the worktree that are a still-open found comment or that the review added over HEAD."""
+    rows: List[dict] = []
+    for path in dict.fromkeys(c.path for c in found):
+        try:
+            current = (repo_root / path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        open_keys = {_comment_key(c.text) for c in found if c.path == path}
+        if path in heads:
+            open_keys |= {_comment_key(c.text) for c in added_comments(path, heads[path], current)}
+        for comment in added_comments(path, "", current):
+            if _comment_key(comment.text) in open_keys:
+                rows.append({
+                    "path": path, "line": comment.line, "text": comment.text,
+                    "severity": "major", "scope": "default-path",
+                })
+    return rows
+
+
 def review_reverify(
     repo_root: Path,
     *,
@@ -1207,6 +1275,7 @@ def review_reverify(
         except TripwireScanUnavailable as exc:
             picked = {"owned": [], "tripwires": [], "tripwires_not_selected": [], "notice": ""}
             scan_error = f"tripwire scan unavailable: {exc}"
+        land_comments, land_provenance = _land_findings(repo_root, base)
         out = {
             "edited": edited,
             "created": created,
@@ -1218,6 +1287,8 @@ def review_reverify(
             "tripwires_not_selected": picked["tripwires_not_selected"],
             "notice": picked["notice"],
             "snapshot": snapshot_rel,
+            "comment_findings": land_comments,
+            "provenance_findings": land_provenance,
             "error": scan_error,
         }
         if derived:

@@ -87,7 +87,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.daily_branch import has_remote_prefix, is_work_branch
+from coordinator_core.daily_branch import has_remote_prefix, is_user_branch, is_work_branch
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.push_stall import PUSH_STALL_MARKER
 from coordinator_core.win_portability import no_console_creationflags
@@ -824,11 +824,13 @@ def resolve_branch(repo_root: str | None) -> str | None:
     return raw_branch
 
 
-def branch_gate(branch: str) -> tuple[bool, str | None]:
+def branch_gate(branch: str, repo_root: str | None = None) -> tuple[bool, str | None]:
     """Return (should_push, message).
 
     message is a notice to print when pushing, or the skip reason when not.
-    `work/*` -> proceed (True, None). `origin/work/*` (one leading `origin/`)
+    `work/*` -> proceed (True, None). With `repo_root`, a branch whose first
+    segment equals that repo's `git config user.name` (`<user>/<box>/<topic>`)
+    also proceeds; main/release/migration/other users' prefixes stay refused. `origin/work/*` (one leading `origin/`)
     -> proceed with a rename notice (True, notice). `migration/*|release/*|feature/*` ->
     skip with a stderr message (False, message). Anything else (including
     `main`) -> skip with a stderr message naming the branch and the work/*-only
@@ -843,8 +845,11 @@ def branch_gate(branch: str) -> tuple[bool, str | None]:
     `resolve_branch()`'s for-each-ref normalization handles this on the push
     side too. Do NOT remove that normalization.
 
-    Doctrine: work/* only -- feature/* removed so auto-push cannot propagate a
-    non-canonical branch. The create-time denier this originally leaned on
+    Doctrine: work/* plus the repo user's own `<user.name>/*` -- feature/* removed
+    so auto-push cannot propagate a non-canonical branch. EM working branches on
+    the boxes are `<git user.name>/<box>/<topic>`, which `work/*` alone left
+    unpublished; main/release/migration/feature and other
+    users' prefixes stay refused. The create-time denier this originally leaned on
     (`block-off-daily-branch.sh`) was retired 2026-07-05, which makes this
     allowlist the surviving enforcement point, not a redundant second one.
     the Staff Engineer F12 (auto-push tightening) + c474ee1 follow-up.
@@ -885,12 +890,14 @@ def branch_gate(branch: str) -> tuple[bool, str | None]:
     if branch.startswith(("migration/", "release/", "feature/")):
         msg = (
             f"coordinator-auto-push: skipping {branch} (recognized long-lived "
-            "workstream shape; doctrine: work/* only). Push manually if intended."
+            "workstream shape; doctrine: work/* or <user.name>/* only). Push manually if intended."
         )
         return False, msg
+    if branch != "main" and repo_root is not None and is_user_branch(branch, repo_root):
+        return True, None
     msg = (
-        f"coordinator-auto-push: skipping {branch} (not a work/* branch; "
-        "doctrine: work/* only). Push manually if intended."
+        f"coordinator-auto-push: skipping {branch} (not a work/* or <user.name>/* branch; "
+        "doctrine: work/* or <user.name>/* only). Push manually if intended."
     )
     return False, msg
 

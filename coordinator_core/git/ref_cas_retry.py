@@ -13,6 +13,8 @@ from typing import Callable, Optional, Sequence, TypeVar
 REF_CAS_ATTEMPTS = 4
 
 REFUSED_OVERLAP = "ref-moved-overlap"
+REFUSED_EXHAUSTED = "ref-moved-exhausted"
+REFUSED_UNVERIFIABLE = "ref-moved-unverifiable"
 
 _CAS_LOST_MARKER = "compare-and-swap failed --"
 _MOVED_MARKER = " moved since "
@@ -91,9 +93,10 @@ def retry_ref_moved(
 ) -> "tuple[T, Optional[str]]":
     """Call ``attempt`` until it does not lose the ref CAS, at most ``REF_CAS_ATTEMPTS`` times.
 
-    Returns ``(last_result, None)``, or ``(lost_result, "ref-moved-overlap")`` when a peer commit
-    touched one of ``paths`` and a retry would overwrite it. An unreadable HEAD or tree stops
-    the loop with ``(lost_result, None)``. An exception from ``attempt`` propagates and ends the loop.
+    Returns ``(result, None)`` for a won attempt. A lost result comes back with a named kind, never
+    ``None``: ``REFUSED_OVERLAP`` when a peer commit touched one of ``paths``, ``REFUSED_UNVERIFIABLE``
+    when HEAD or a tree is unreadable, ``REFUSED_EXHAUSTED`` when the last attempt still lost.
+    An exception from ``attempt`` propagates and ends the loop.
 
     Trap: the first HEAD is read here, before ``commit_paths`` captures its own. A peer move in
     between only widens the compared range, which is conservative.
@@ -103,15 +106,77 @@ def retry_ref_moved(
     for _ in range(REF_CAS_ATTEMPTS - 1):
         if not lost(result):
             return result, None
-        now = head_sha(worktree_root)
-        if seen is None or now is None:
-            return result, None
-        if now != seen:
-            unchanged = paths_unchanged_between(worktree_root, seen, now, paths)
-            if unchanged is None:
-                return result, None
-            if not unchanged:
-                return result, REFUSED_OVERLAP
+        now, kind = _retry_verdict(worktree_root, seen, paths)
+        if kind is not None:
+            return result, kind
         seen = now
         result = attempt()
-    return result, None
+    return (result, REFUSED_EXHAUSTED) if lost(result) else (result, None)
+
+
+def _retry_verdict(
+    worktree_root: Path, seen: Optional[str], paths: Sequence[str]
+) -> "tuple[Optional[str], Optional[str]]":
+    """``(current_head, None)`` when a re-attempt is safe, else ``(current_head, refused_kind)``."""
+    now = head_sha(worktree_root)
+    if seen is None or now is None:
+        return now, REFUSED_UNVERIFIABLE
+    if now != seen:
+        unchanged = paths_unchanged_between(worktree_root, seen, now, paths)
+        if unchanged is None:
+            return now, REFUSED_UNVERIFIABLE
+        if not unchanged:
+            return now, REFUSED_OVERLAP
+    return now, None
+
+
+def retry_ref_moved_raising(worktree_root: Path, paths: Sequence[str], attempt: Callable[[], T]) -> T:
+    """Call ``attempt`` (which raises ``CommitRefused`` on a lost ref CAS, as ``commit_paths`` does)
+    until it returns, at most ``REF_CAS_ATTEMPTS`` times; returns its outcome.
+
+    A lost CAS that cannot be re-attempted re-raises the last ``CommitRefused`` with ``.refused`` set
+    to ``REFUSED_OVERLAP`` / ``REFUSED_UNVERIFIABLE`` / ``REFUSED_EXHAUSTED``. Any other exception
+    propagates unannotated.
+    """
+    seen = head_sha(worktree_root)
+    for n in range(REF_CAS_ATTEMPTS):
+        try:
+            return attempt()
+        except Exception as exc:  # noqa: BLE001 -- re-raised unless it is a lost ref CAS
+            if not is_ref_moved(exc):
+                raise
+            if n == REF_CAS_ATTEMPTS - 1:
+                setattr(exc, "refused", REFUSED_EXHAUSTED)
+                raise
+            seen, kind = _retry_verdict(worktree_root, seen, paths)
+            if kind is not None:
+                setattr(exc, "refused", kind)
+                raise
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def commit_v2_retrying(
+    worktree_root: Path, repo_root: Path, commit_params: dict, dispatch: Optional[Callable[..., object]] = None
+) -> "tuple[object, Optional[str]]":
+    """``ceremony.commit_v2`` over ``commit_params``, re-called on the new HEAD while a peer commit wins
+    the ref CAS (``retry_ref_moved``, bounded). Returns ``(reply, kind)``: ``kind`` is ``None`` for a won
+    attempt, else the ``REFUSED_*`` kind that ended the loop; a dict reply with an error also carries it
+    as ``refused``. ``dispatch`` defaults to ``reentrant_dispatch``. Raises ``OpUnavailableError``.
+
+    Trap: every call rebuilds from the then-current HEAD and the named paths; never reuse a prior tree.
+    """
+    if dispatch is None:
+        from coordinator_core.warm.entry_seam import reentrant_dispatch as dispatch
+
+    def _attempt() -> object:
+        return dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
+
+    def _cas_lost(reply: object) -> bool:
+        return isinstance(reply, dict) and not reply.get("committed") and is_ref_moved_text(reply.get("error"))
+
+    reply, kind = retry_ref_moved(
+        worktree_root, [*commit_params.get("paths", ()), *commit_params.get("deleted_paths", ())], _attempt, _cas_lost,
+    )
+    if kind and isinstance(reply, dict) and isinstance(reply.get("error"), str):
+        reply["refused"] = kind
+    return reply, kind

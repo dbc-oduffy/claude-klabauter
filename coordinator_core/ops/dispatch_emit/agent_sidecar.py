@@ -22,11 +22,18 @@ _WINDOWS_RESERVED_NAMES = frozenset(
     | {f"LPT{i}" for i in range(1, 10)}
 )
 
+#: invariant: no coordinator CLI is reliably on PATH; a bareword exits 127 and drops every agent to the heredoc.
+_INVOKE_CLI = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
+
 _CLAUSE_HEAD = (
     "\n\n"
-    "Sidecar dir (yours, always writable): create it with `mkdir -p`; keep run notes there. "
-    "If the harness denies the Write tool on a file your task declares or on a file in this dir "
-    "(\"Subagents should return findings as text\"), write it with a Bash heredoc, "
+    "Sidecar dir (yours, always writable): keep run notes there. Write files in it with "
+    "`" + _INVOKE_CLI + " sidecar.write --params-file - <<'JSON'` followed by "
+    "`{\"dir\":\"<sidecar_dir>\",\"name\":\"<file>\",\"content\":\"...\"}` and a closing `JSON` line "
+    "(JSON-escape newlines and quotes in content). "
+    "If that op is unavailable, or the harness denies the Write tool on a file your task declares "
+    "or on a file in this dir "
+    "(\"Subagents should return findings as text\"), `mkdir -p` the dir and write it with a Bash heredoc, "
     "`cat > <path> <<'EOF'` -- never skip it -- and name the path in your report. "
     "Use the heredoc only for a path the Write tool refused; once Write has written a path, "
     "keep editing it with Write/Edit, never overwrite it by heredoc (blob drift at commit). "

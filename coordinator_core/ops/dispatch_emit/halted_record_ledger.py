@@ -5,7 +5,7 @@ Imports ``halted_record_request`` only."""
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Union
 
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import halt_product_gates, halted_run, review_edits
@@ -161,12 +161,41 @@ def _carried_returns(root: Path, record_dir: Path, returns: dict) -> dict:
     return out
 
 
+def _co_tenant_print(root: Path, run_id: str, path: str) -> Union[str, dict, None]:
+    """The print of a path another run also holds uncommitted: the blob of HEAD plus only this run's
+    attributed hunks, or ``{"kind": "co_tenant", "owner": <run id>}`` when no hunk is attributable to
+    this run alone (equal baselines, a path absent from HEAD, an unreadable diff). None when no peer
+    owns the path or the owner lookup fails: the caller prints the tree's bytes. No git spawn."""
+    from coordinator_core.ops.dispatch_emit import co_tenant_owner, own_hunk_stage, run_hunk_claims
+
+    try:
+        owner = co_tenant_owner.owner_of(root, path, exclude_run_id=run_id).get("run_id")
+    except Exception:  # noqa: BLE001 -- no nameable owner: the tree's bytes stand
+        return None
+    if not owner:
+        return None
+    typed = {"kind": "co_tenant", "owner": owner}
+    try:
+        diff = own_hunk_stage.read_diff(root, [path]).get(path.replace("\\", "/"))
+        if diff is None:
+            return typed
+        split = run_hunk_claims.own_hunks(
+            root, run_id, path, list(diff.hunks), {owner: False}, head_blob=diff.head_sha
+        )
+        if not split.own:
+            return typed
+        return own_hunk_stage.own_blob(root, path, diff.head_bytes, split.own)
+    except Exception:  # noqa: BLE001 -- unseparable hunks hold: typed, never the whole-tree blob
+        return typed
+
+
 def _record_withheld_prints(root: Path, record_dir_rel: str, withheld: dict, paths: list) -> None:
     """Write ``WITHHELD_PRINTS_FILE`` beside the marker: blob id of each withheld path, so a refire
     credits a path as the predecessor's only while its bytes are unchanged. A path the record parked
     (``evicted.json`` entry whose blob is in ``withheld-blobs/``) is printed as that parked blob, since
-    the tree then holds HEAD's bytes; any other path as the tree's bytes. The file joins ``paths``
-    (in place) so it lands with the record."""
+    the tree then holds HEAD's bytes; a path a co-tenant run also holds as ``_co_tenant_print`` (own-hunk
+    blob, or a typed ``co_tenant`` entry: readers take a str blob and skip a dict); any other path as
+    the tree's bytes. The file joins ``paths`` (in place) so it lands with the record."""
     import json
 
     from coordinator_core.atomic_replace import atomic_write_bytes
@@ -179,10 +208,14 @@ def _record_withheld_prints(root: Path, record_dir_rel: str, withheld: dict, pat
         p: e["blob"] for p, e in halt_tree_evict._load(record_dir).items()
         if (record_dir / halt_tree_evict.BLOBS_DIR / e["blob"]).is_file()
     }
-    prints = {
-        p: f for p in sorted(withheld)
-        if isinstance(p, str) and (f := parked.get(p) or fingerprint(root, p)) is not None
-    }
+    run_id = PurePosixPath(record_dir_rel).name
+    prints: dict = {}
+    for p in sorted(withheld):
+        if not isinstance(p, str):
+            continue
+        f = parked.get(p) or _co_tenant_print(root, run_id, p) or fingerprint(root, p)
+        if f is not None:
+            prints[p] = f
     if not prints:
         return
     rel = f"{record_dir_rel}/{WITHHELD_PRINTS_FILE}"
@@ -206,15 +239,24 @@ def _persist_blobs(root: Path, common_dir: Optional[Path], post: dict) -> set:
     written: set = set()
     if common_dir is None or not common_dir.is_dir():
         return written
-    for rel, want in post.items():
-        try:
-            data = (root / rel).read_bytes()
-            if kept_work.blob_sha(data) != want:
+    # One queued batch, flushed once (a pack past the loose cap): a worker thread per loose object
+    # is the per-path cost. An outer batch keeps ownership of its own flush.
+    own_batch = git_objects.batch_open() is False
+    with git_objects.object_batch():
+        for rel, want in post.items():
+            try:
+                data = (root / rel).read_bytes()
+                if kept_work.blob_sha(data) != want:
+                    continue
+                git_objects.write_object(common_dir, b"blob", data)
+            except OSError:
                 continue
-            git_objects.write_object(common_dir, b"blob", data)
-        except OSError:
-            continue
-        written.add(rel)
+            written.add(rel)
+        if own_batch:
+            try:
+                git_objects.flush_object_batch()
+            except OSError:
+                return set()
     return written
 
 

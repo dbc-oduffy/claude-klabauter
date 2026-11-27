@@ -37,7 +37,9 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
-from coordinator_core.ops.dispatch_emit.halted_run import _is_shell, is_unstarted_mint_halt, write_halt_marker
+from coordinator_core.ops.dispatch_emit.halted_run import (
+    _is_shell, is_unstarted_mint_halt, revive_unstarted_supersede, write_halt_marker,
+)
 from coordinator_core.ops.dispatch_emit.nested_run_contract import RUN_SCRIPT_SUFFIX, staged_twin_rel
 
 OP_NAME = "dispatch.minted_run"
@@ -80,6 +82,18 @@ def reply(run_id: str, action: Optional[str], *, fire_args: Optional[dict] = Non
 def is_minted_only(run_dir: Path) -> bool:
     """True when ``run_dir`` exists and holds no work past ``minted`` (the halted_run shell predicate)."""
     return run_dir.is_dir() and _is_shell(run_dir)
+
+
+def _never_staged(run_dir: Path) -> bool:
+    """True when the run's progress record never left ``minted`` (a ``halted`` stamp with no ``staged_at`` is
+    that same state); an absent record counts. Unreadable reads False."""
+    try:
+        stage = json.loads((run_dir / "run-stage.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return isinstance(stage, dict) and "staged_at" not in stage and stage.get("stage") in (None, "minted", "halted")
 
 
 SCRIPT_WAIT_SECS = 5.0
@@ -306,7 +320,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if action == ACTION_START and _minted_token_exists(root, run_id):
             return _never_created(run_id)
         return reply(run_id, action, refusal=f"{REFUSAL_NOT_FOUND}: no {RECORD_DIR_ROOT}/{run_id}")
-    if not is_minted_only(run_dir) and not (action == ACTION_START and is_unstarted_mint_halt(run_dir)):
+    # A refire close whose successor never launched is voided here, so the prior run is not stranded past minted.
+    revived = action == ACTION_START and _never_staged(run_dir) and revive_unstarted_supersede(root, run_id)
+    if not (revived or is_minted_only(run_dir) or (action == ACTION_START and is_unstarted_mint_halt(run_dir))):
         return reply(run_id, action, refusal=f"{REFUSAL_PAST_MINTED}: {run_id} is past stage minted or halt-marked")
     if action == ACTION_START:
         return _start(root, run_id)

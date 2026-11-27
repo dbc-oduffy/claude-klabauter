@@ -360,6 +360,58 @@ def _ship_cited_sizing(worktree_root: Path, repo_root: Path, plan_path: Optional
     return {"sizing_shipped": sizing_rel} if reply.get("applied") else {}
 
 
+def _reconcile_sizing_rows(worktree_root: Path, plan_path: Optional[str], inline_review: object, sha: str) -> dict:
+    """The terminal-commit leg of the landing reconcile: every open/partial/unwired row of the cited
+    sizing the judge returned ``met`` is stamped at ``sha`` whoever claims it, earlier runs' rows included.
+    Same write as the run-landing path (``run_landing._write_register``); ``{}`` when nothing applies.
+    When the reconcile writes nothing (the earlier write-back already stamped what the judge met) the
+    rows still refusing a ship return as ``register_unreconciled`` all the same, so an open row is
+    named in the reply whether or not this leg changed the file. Never raises: the product commit stands."""
+    if not plan_path:
+        return {}
+    from coordinator_core.ops.dispatch_emit.run_landing import _write_register
+
+    try:
+        out = _write_register(worktree_root, plan_path, inline_review, sha)
+        if out or not isinstance(inline_review, dict) or not isinstance(inline_review.get("criterion"), dict):
+            return out
+        from coordinator_core.ops import requirement_register as rr
+        from coordinator_core.ops.dispatch_emit.register_gate import register_target
+
+        sizing_rel = register_target(worktree_root, plan_path)[0]
+        text = _read_rel(worktree_root, sizing_rel) if sizing_rel else None
+        owed = rr.unreconciled_rows(rr.read_register(text), ()) if text else []
+        return {"register_unreconciled": owed} if owed else {}
+    except Exception as exc:  # noqa: BLE001 -- the product commit stands
+        return {"register_writeback_error": f"register reconcile refused: {exc!r}"}
+
+
+def _land_closure(
+    worktree_root: Path, run_id: str, sizing_rel: Optional[str], ledger_verdict: object,
+) -> tuple:
+    """``(closure, changed_rel)`` after the commit's register write-backs and ship leg: rewrite the run's
+    tracked ``outcome.json`` with the closure read off the register as it now stands, so a landing
+    that left a row open or an item ``not_met`` records ``partial`` where the pre-commit write could
+    only see the register before its write-backs. ``changed_rel`` is the outcome path when its bytes
+    changed (it rides the follow-up commit), else None; ``(None, None)`` when no outcome is written.
+    Never raises: the product commit stands."""
+    from coordinator_core.ops.dispatch_emit import run_artifacts
+
+    try:
+        target = worktree_root / run_artifacts.outcome_rel(run_id)
+        before = target.read_bytes() if target.is_file() else None
+        rel = run_artifacts.write_tracked_outcome(
+            worktree_root, run_id, "landed", ledger_verdict=ledger_verdict, cited_sizing=sizing_rel,
+        )
+        if rel is None:
+            return None, None
+        closure = run_artifacts.read_tracked_outcome(worktree_root, run_id).get("closure")
+        after = target.read_bytes() if target.is_file() else None
+        return (closure if isinstance(closure, dict) else None), (rel if after != before else None)
+    except Exception:  # noqa: BLE001 -- the closure is a record; the product commit stands
+        return None, None
+
+
 def _dropped_part_rows(worktree_root: Path, sizing_rel: str, note_text: str) -> dict:
     """Mint an open ``relayed`` register row on ``sizing_rel`` for each part ``note_text`` records as
     not done, not investigated or out of scope with no ruling; the open row keeps ``sizing.ship``
@@ -795,6 +847,13 @@ def _close_block(ctx: dict, reply: dict) -> dict:
         run_dir=Path(home_dir(str(root), "warp")) / (ctx.get("sibling_run_id") or ctx["run_id"]),
         arm=arm, tshirt=tshirt,
     )
+    closure = ctx.get("closure")
+    if isinstance(closure, dict) and closure.get("verdict") == "partial":
+        owed = [str(r.get("id")) for r in closure.get("open_rows") or []] + [str(i) for i in closure.get("not_met_items") or []]
+        block["closure"] = closure
+        block["open_parts"] = list(dict.fromkeys([*block.get("open_parts", ()), *owed]))
+        if block.get("outcome") != "refused":
+            block["outcome"] = "partial"
     sha = reply.get("sha")
     if ctx["applies"]:
         from coordinator_core.ops.dispatch_emit.run_close import sibling_release

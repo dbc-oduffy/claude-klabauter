@@ -460,8 +460,12 @@ def write_ask(
     mode: str = rc.DEFAULT_SCOUT_MODE,
     allowlist: Mapping[str, bool] | None = None,
     research: Mapping | None = None,
+    intent: str = "",
 ) -> str:
     """Write `<root>/<scratch_rel>/ask.md` and return its repo-relative POSIX path.
+
+    A non-blank `intent` (the slice sizing's own) replaces `ask`, so the file carries the slice's
+    intent and questions, never a parent run's ask.
 
     Given `research` (a sizing's research block), a `## Research` section follows the ask: the depth
     and one `repo target:` line per repo target, ref verbatim, so a repo scope stage that reads only
@@ -474,6 +478,8 @@ def write_ask(
     on the number line, the rest indented). Refuses an empty ask, an unknown mode, or questions
     `normalize_scout_questions` (given `allowlist`)/`scout_slugs` refuse.
     """
+    if isinstance(intent, str) and intent.strip():
+        ask = intent.strip()
     if not isinstance(ask, str) or not ask.strip():
         raise PipelineEmitRefused(["the ask is empty"])
     if mode not in rc.SCOUT_MODES:

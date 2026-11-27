@@ -89,6 +89,27 @@ def test_exited_fire_past_its_deadline_is_not_timed_out(registry, git_calls):
     assert call()["timed_out"] is False
 
 
+def test_record_without_timeout_gets_the_14400_default_deadline(registry, git_calls):
+    started = time.time()
+    put(registry, started_at=started, timeout_s=None)
+    reply = call()
+    assert reply["timeout_s"] == 14400 and reply["deadline_at"] == started + 14400
+
+
+def test_a_recorded_timeout_still_overrides_the_default(registry, git_calls):
+    started = time.time()
+    put(registry, started_at=started, timeout_s=600)
+    assert call()["deadline_at"] == started + 600
+
+
+def test_headless_start_default_is_the_shared_14400():
+    import inspect
+    from coordinator_core.ops.workflow_fire import headless
+
+    assert wait.DEFAULT_TIMEOUT_S == 14400
+    assert inspect.signature(headless.start).parameters["timeout_s"].default == 14400
+
+
 def test_unknown_fire_id_is_found_false_with_the_full_key_set(registry, git_calls):
     reply = call()
     assert reply["found"] is False and reply["timed_out"] is False

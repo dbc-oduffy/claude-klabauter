@@ -4,10 +4,11 @@ Params: ``run_dir`` (string, required: repo-relative, either slash; its parent m
 ``ask_contract.RECORD_DIR_ROOT`` and it must be an existing directory).
 Reply: ``{ok, run_id, terminal, resumable, reason}`` or ``{ok: false, error}``. Writes nothing, spawns nothing; at
 most two file reads (``halted.json``, then ``run-outcome.json`` when no marker exists).
-Classification: a ``halted.json`` status of ``landed`` / ``superseded`` / ``closed`` is terminal; ``halted`` is
-resumable (released or not); ``resumed`` and an unreadable marker are neither. With no marker, a recorded
-``objective_loop.outcome`` in ``land_run._RECORDED_EXIT_OUTCOMES`` is terminal. Anything else, unknown statuses
-included, is neither terminal nor resumable: the caller keeps the dir.
+Classification: a ``halted.json`` status of ``landed`` / ``superseded`` / ``closed`` is terminal and not resumable;
+``halted`` is terminal too (the run returned; its refire starts a new run) and resumable only when the halt is a
+``usage_limit`` one, the only halt a workflow resume can progress; ``resumed`` and an unreadable marker are
+neither. With no marker, a recorded ``objective_loop.outcome`` in ``land_run._RECORDED_EXIT_OUTCOMES`` is
+terminal. Anything else, unknown statuses included, is neither terminal nor resumable: the caller keeps the dir.
 """
 
 from __future__ import annotations
@@ -18,6 +19,9 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 
 OP_NAME = "dispatch.run_terminality"
+
+# halt_refire.HALT_USAGE_LIMIT: the one halt kind whose resume (workflow.resume) can progress.
+_USAGE_LIMIT_HALT = "usage_limit"
 
 
 def _refuse(error: str) -> dict:
@@ -51,9 +55,10 @@ def _classify_marker(run_id: str, marker: dict) -> dict:
     if status in (halted_run.STATUS_LANDED, halted_run.STATUS_SUPERSEDED, halted_run.STATUS_CLOSED):
         return _reply(run_id, True, False, f"halt marker {status}")
     if status == halted_run.STATUS_HALTED:
+        resumable = marker.get("halted") == _USAGE_LIMIT_HALT
         if marker.get(halted_run.HALT_RELEASED_FIELD):
-            return _reply(run_id, False, True, "halt released; still resumable")
-        return _reply(run_id, False, True, "live halt")
+            return _reply(run_id, True, resumable, "halt released; refire starts a new run")
+        return _reply(run_id, True, resumable, "halted run; refire starts a new run")
     if status == halted_run.STATUS_RESUMED:
         if marker.get(halted_run.STALL_CLEARED_FIELD):
             return _reply(run_id, False, False, "staged stall cleared; the run is live")

@@ -205,6 +205,21 @@ def test_deadline_never_dispatches_queued_agents_after_runtime_dies(tmp_path: Pa
     assert time.monotonic() - before < 2
 
 
+def test_record_without_timeout_s_uses_the_shared_default_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = record(tmp_path, "return await agent('one');")
+    settings = json.loads(path.read_text())
+    del settings['timeout_s']
+    path.write_text(json.dumps(settings))
+    monkeypatch.setattr(headless, 'DEFAULT_TIMEOUT_S', 3)
+    seen = []
+    def worker(prompt, options, **kwargs):
+        seen.append(kwargs['timeout_s'])
+        return {'done': prompt}
+    headless.execute(path, agent_runner=worker)
+    assert seen and 0 < seen[0] <= 3
+    assert seen[0] < 10
+
+
 def test_cancelled_run_marker_stops_the_driver_before_the_next_agent(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT

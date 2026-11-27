@@ -383,6 +383,14 @@ def withheld_rows_clause(rows: Optional[List[dict]]) -> str:
     return f"\nWithheld rows: {named}. {WITHHELD_RULE}"
 
 
+COMMENT_FINDINGS_RULE = (
+    "Each comment listed is an automatic major finding: delete it or rewrite it as a tagged "
+    "`trap:`, `invariant:` or `external-constraint:` comment. The reason for a change belongs in "
+    "the plan or commit its `Governed-By` trailer names, never in a comment, and what the code does "
+    "is read from the code, never commented."
+)
+
+
 STRUCK_RULE = (
     "An out-of-scope ruling struck each row above: no clause of the exit criterion that only a "
     "struck row delivers is judged. Grade such a clause `out_of_scope`: omit it from `clauses`, "
@@ -1048,6 +1056,27 @@ _REVERIFY_SCHEMA["properties"]["passed_at_base"] = {"type": "array", "items": {"
 _REVERIFY_SCHEMA["properties"]["sibling_owned"] = {"type": "array", "items": {"type": "string"}}
 _REVERIFY_SCHEMA["properties"]["foreign"] = {"type": "array", "items": {"type": "string"}}
 _REVERIFY_SCHEMA["properties"]["renamed_node"] = {"type": "array", "items": {"type": "string"}}
+_REVERIFY_SCHEMA["properties"]["comment_findings"] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"}, "line": {"type": "integer"}, "text": {"type": "string"},
+            "severity": {"type": "string"}, "scope": {"type": "string"},
+        },
+    },
+}
+_REVERIFY_SCHEMA["properties"]["provenance_findings"] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "commit": {"type": "string"}, "paths": {"type": "array", "items": {"type": "string"}},
+            "shas": {"type": "array", "items": {"type": "string"}}, "reason": {"type": "string"},
+            "severity": {"type": "string"}, "scope": {"type": "string"},
+        },
+    },
+}
 _REVERIFY_SCHEMA["properties"]["foreign_red"] = {
     "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}},
 }
@@ -1078,6 +1107,10 @@ _REVERIFY_NODE_TESTS_CLAUSE = (
 #: Names the meaning of `derived_from` in the review.reverify list reply.
 _REVERIFY_DERIVED_CLAUSE = (
     ' A reply carrying `"derived_from":"run_diff"` lists the run diff in `edited`/`created`, not review changes.'
+    " Return its `comment_findings` rows (union across prefixes) as `comment_findings`, and its"
+    " `provenance_findings` rows as `provenance_findings`. " + COMMENT_FINDINGS_RULE
+    + " Each `provenance_findings` row is an agent commit touching code with no resolvable `Governed-By`"
+    " trailer: an automatic major finding."
 )
 
 #: Maps a re-verify where no test ran to a non-pass status instead of pass.

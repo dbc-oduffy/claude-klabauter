@@ -63,6 +63,14 @@ def test_other_servers_and_keys_preserved(tmp_path: Path) -> None:
     assert got["mcpServers"]["project-rag"] == {"serverUrl": URL}
 
 
+def test_check_mode_over_a_zero_byte_config_is_would_write_not_current(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    cfg.parent.mkdir(parents=True)
+    cfg.write_bytes(b"")
+    assert hia.apply(tmp_path, _env(tmp_path), check=True).mcp == hia.MCP_WOULD_WRITE
+    assert cfg.read_bytes() == b""
+
+
 @pytest.mark.parametrize("content", ["", "  \n"])
 def test_empty_config_is_treated_as_empty_object(tmp_path: Path, content) -> None:
     cfg = _cfg(tmp_path)

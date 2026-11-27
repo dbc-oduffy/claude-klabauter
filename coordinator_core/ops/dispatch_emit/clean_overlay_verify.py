@@ -572,12 +572,17 @@ _MISSING_FILE_RE = re.compile(r"^E?\s*(?:\w+\.)*FileNotFoundError:.*?(['\"])(.+?
 _MISSING_MODULE_RE = re.compile(r"ModuleNotFoundError: No module named ['\"]([\w.]+)['\"]")
 
 
-def mirror_gap(output: str, dest: Path, tracked: Collection[str], root: Optional[Path] = None) -> str:
+def mirror_gap(
+    output: str, dest: Path, tracked: Collection[str], root: Optional[Path] = None, owned: Collection[str] = (),
+) -> str:
     """The repo-relative tracked paths a `FileNotFoundError` in `output` names that `dest` (the mirror worktree)
     does not hold, as a `mirror gap` text; `""` when no missing path is both tracked and absent from the mirror
     (a file the code itself failed to create is not a gap). `tracked` is the index view already in hand.
     With `root` (the live worktree), a `ModuleNotFoundError` naming a module whose file exists in `root` but
-    not in `dest` is a gap too: a collection failure the mirror caused, not a verdict on the run."""
+    not in `dest` is a gap too: a collection failure the mirror caused, not a verdict on the run.
+    With `owned` (the run's own write set), an `ImportError: cannot import name` naming a module in `owned`
+    (the submodule `from pkg import mod` imports, or the module that should define the name) that `root` holds
+    and `dest` lacks or holds without the name is a gap: the run's own delta never reached the mirror."""
     base = dest.resolve().as_posix().rstrip("/").lower() + "/"
     gaps: list = []
     text = output.replace("\r\n", "\n")
@@ -592,7 +597,56 @@ def mirror_gap(output: str, dest: Path, tracked: Collection[str], root: Optional
             for rel in (f"{stem}.py", f"{stem}/__init__.py"):
                 if (root / rel).is_file() and not (dest / rel).exists() and rel not in gaps:
                     gaps.append(rel)
+    if root is not None and owned:
+        for symbol, module in dict.fromkeys(_MISSING_NAME_RE.findall(text)):
+            stem = module.replace(".", "/")
+            defn = _definition_re(symbol)
+            for rel in (f"{stem}/{symbol}.py", f"{stem}/{symbol}/__init__.py", f"{stem}.py", f"{stem}/__init__.py"):
+                if rel not in owned or rel in gaps or not (root / rel).is_file():
+                    continue
+                submodule = rel.rsplit("/", 1)[-1] == f"{symbol}.py" or rel.endswith(f"/{symbol}/__init__.py")
+                try:
+                    mirrored = (dest / rel).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    mirrored = None
+                if mirrored is None or (not submodule and not defn.search(mirrored)):
+                    gaps.append(rel)
     return f"mirror gap: path(s) absent from the mirror: {', '.join(gaps)}" if gaps else ""
+
+
+_MISSING_NAME_RE = re.compile(r"ImportError: cannot import name '([^']+)' from '([\w.]+)'")
+
+
+def _definition_re(symbol: str) -> "re.Pattern[str]":
+    return re.compile(
+        rf"^\s*(?:async\s+def|def|class)\s+{re.escape(symbol)}(?!\w)|^{re.escape(symbol)}\s*[:=]"
+        rf"|^\s*(?:from\s+\S+\s+)?import\s+[^\n]*\b{re.escape(symbol)}\b",
+        re.MULTILINE,
+    )
+
+
+def foreign_import_source(output: str, root: Path, dest: Path, owned: Collection[str]) -> str:
+    """The repo-relative path of the module a collection `ImportError: cannot import name` in `output` names,
+    when the live worktree `root` defines that name there and the mirror `dest` does not: a peer's uncommitted
+    hunk the mirror never carries. `""` when the name is defined in the mirror, defined nowhere, or its module
+    is in `owned` (the run's own recorded write set: its own delta is missing, no peer's)."""
+    for symbol, module in dict.fromkeys(_MISSING_NAME_RE.findall(output.replace("\r\n", "\n"))):
+        stem = module.replace(".", "/")
+        defn = _definition_re(symbol)
+        for rel in (f"{stem}.py", f"{stem}/__init__.py"):
+            if rel in owned:
+                continue
+            try:
+                live = (root / rel).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            try:
+                mirrored = (dest / rel).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                mirrored = ""
+            if defn.search(live) and not defn.search(mirrored):
+                return rel
+    return ""
 
 
 LegHook = Callable[[str], ContextManager]
@@ -1485,8 +1539,17 @@ def _clean_submodule(root: Path, package: str, name: str, changed: Collection[st
 
 def _mirror_env(env: dict, dest: Path) -> dict:
     """`env` with `coordinator_core` resolved from the mirror alone: PYTHONPATH is the mirror root (the caller's
-    repo is not on it), and no bytecode is written, so a same-size same-second edit never runs a stale module."""
-    return {**env, "PYTHONPATH": str(dest), "PYTHONDONTWRITEBYTECODE": "1"}
+    repo is not on it), and no bytecode is written, so a same-size same-second edit never runs a stale module.
+
+    Trap: `COORDINATOR_ENGINE_ROOT` is the mirror too. A `coordinator/bin` script a test imports front-inserts
+    the env-named engine root onto `sys.path`, ahead of PYTHONPATH, so an inherited root (the editable-install
+    checkout) rebinds `coordinator_core` away from the mirror (f68bc7: `_launcher_head` AttributeError)."""
+    from coordinator_core import pyresolve
+
+    return {
+        **env, "PYTHONPATH": str(dest), "PYTHONDONTWRITEBYTECODE": "1",
+        pyresolve.ENGINE_ROOT_ENV: str(dest),
+    }
 
 
 def _pytest_env(tmp: Path, dest: Path, selection: Sequence[str]) -> dict:
@@ -1885,6 +1948,50 @@ def _settle_empty_collection(
     return subprocess.CompletedProcess(proc.args, proc.returncode, proc.stdout + _EMPTY_CAUSE, proc.stderr)
 
 
+def _real_tree_verdict(
+    root: Path, run_id: str, seeds: Sequence[str], marker: Optional[str], source: str, launched: Sequence[str],
+) -> Optional[OverlayVerdict]:
+    """The verdict of `seeds` run in the live worktree `root`, for an overlay that ran zero tests because it
+    could not import `source`, a peer's uncommitted module (never carried into the mirror or the commit). Reds
+    are classified by `retest_targeted.classify_real_tree_reds`: green when none, "red" naming the run's own
+    reds, "pre_existing" (the landing's non-blocking token) when every red is attributed to a peer: a foreign
+    verdict by attribution, not measured at base, and its detail says so. `None` when the real tree ran no
+    test either (a genuine infra failure keeps the overlay's own verdict) or could not be launched."""
+    from coordinator_core.ops.dispatch_emit import retest_targeted
+
+    run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, run_id)
+    try:
+        argv = _pytest_argv(root, root, basetemp, seeds, marker)
+        ran = _run_pytest_retrying(argv, root, _pytest_env(tmp, root, seeds))
+        text = ran.stdout + ran.stderr
+        if not completed_a_test(text):
+            return None
+        log = tmp / "real-tree.log"
+        log.write_text(text, encoding="utf-8", errors="replace", newline="\n")
+        own, foreign = retest_targeted.classify_real_tree_reds(
+            log, root, sorted({*_own_write_set(root, run_id), *_printed_writes(root, run_id)}),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    finally:
+        shutil.rmtree(run_holder, ignore_errors=True)
+    argv_all = (*launched, shlex.join(argv))
+    lead = f"real-tree run: the overlay could not import {source} (a peer's uncommitted hunk)"
+    tail = text.strip()[-_OUTPUT_TAIL:]
+    if ran.returncode == 0 or hygiene_only_exit(ran.returncode, text):
+        return OverlayVerdict("green", f"{lead}; every selected test passed in the real tree: {tail}", tuple(seeds), argv=argv_all)
+    if own or not foreign:
+        return OverlayVerdict(
+            "red", f"{lead}; own red(s): {', '.join(own) or 'pytest exit ' + str(ran.returncode)}; foreign red(s): "
+            f"{', '.join(foreign) or 'none'}: {tail}", tuple(seeds), failing=tuple(own), argv=argv_all,
+        )
+    return OverlayVerdict(
+        "pre_existing", f"{lead}; foreign: every red is attributed to a peer's dirt, none names the run's writes, "
+        f"and none was measured at base: {', '.join(foreign)}: {tail}", tuple(seeds),
+        failing=tuple(foreign), argv=argv_all,
+    )
+
+
 def verify(
     root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str], base_sha: Optional[str] = None,
     leg: LegHook = _no_leg, touched: Sequence[str] = (), marker: Optional[str] = None,
@@ -1913,6 +2020,7 @@ def verify(
     run_dirs: list = []
     launched: list = []
     in_seeds = False
+    foreign_src = ""
     try:
         with _mirror_lock(root, f"clean-overlay {run_id}") as mroot:
             sha = _commit_sha(root, candidate_sha)
@@ -1981,6 +2089,9 @@ def verify(
             kept = kept_collection_traceback("".join(r.stdout + r.stderr for r in bad), tail)
             collected = any(collection_error(r.returncode, r.stdout + r.stderr) for r in bad)
             failed = collected or any(r.returncode == _PYTEST_FAILED for r in bad)
+            owned = frozenset([*_own_write_set(root, run_id), *_printed_writes(root, run_id)]) if bad else frozenset()
+            if bad and not completed_a_test(full):
+                foreign_src = foreign_import_source(full, root, dest, owned)
             if ran.returncode == _PYTEST_NO_TESTS:
                 return OverlayVerdict(
                     ENV_DEFECT,
@@ -2008,8 +2119,8 @@ def verify(
             if failed and not infra:
                 from coordinator_core.ops.dispatch_emit import test_reach
 
-                infra = mirror_gap(full, dest, test_reach._tracked(root), root)
-            if failed and ids and not infra and isinstance(base_sha, str) and base_sha and base_sha != sha:
+                infra = mirror_gap(full, dest, test_reach._tracked(root), root, owned)
+            if failed and ids and not infra and not foreign_src and isinstance(base_sha, str) and base_sha and base_sha != sha:
                 at_base = _base_failing(dest, mroot, root, run_id, base_sha, ids, leg)
     except CoTenantDependency as exc:
         from coordinator_core.ops.dispatch_emit import co_tenant_owner
@@ -2031,6 +2142,10 @@ def verify(
         for run_dir in run_dirs:
             shutil.rmtree(run_dir, ignore_errors=True)
     argv = tuple(launched)
+    if foreign_src:
+        fallback = _real_tree_verdict(root, run_id, seeds, marker, foreign_src, argv)
+        if fallback is not None:
+            return fallback
     if not bad:
         if any(r.returncode for r in runs):
             codes = ", ".join(str(r.returncode) for r in runs if r.returncode)

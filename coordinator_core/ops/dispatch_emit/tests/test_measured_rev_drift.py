@@ -46,6 +46,49 @@ def test_match_edit_and_recreated(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert mr.measured_rev_drift(run_dir, tmp_path) == ["gone.txt"]
 
 
+def _first_read_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(commit, "checkin_blob_sha", lambda root, rel: None)
+    monkeypatch.setattr(mr, "_reread_bounded", lambda root, rel, deadline=None: None)
+
+
+def test_diagnosing_read_that_hashed_supplies_the_measured_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _repo(tmp_path)
+    _record(run_dir, tmp_path)
+    recorded = commit.checkin_blob_sha(tmp_path, "a.txt")
+    _first_read_dropped(monkeypatch)
+
+    monkeypatch.setattr(
+        mr, "_diagnose_bounded", lambda *a, **k: commit.BlobDiagnosis(recorded, "first read stalled")
+    )
+    assert mr.measured_rev_drift(run_dir, tmp_path) == []
+
+    monkeypatch.setattr(
+        mr, "_diagnose_bounded", lambda *a, **k: commit.BlobDiagnosis("0" * 40, "first read stalled")
+    )
+    assert mr.measured_rev_drift(run_dir, tmp_path) == ["a.txt"]
+
+
+def test_read_between_reread_and_remeasure_bounds_remeasures_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    run_dir = _repo(tmp_path)
+    _record(run_dir, tmp_path)
+    real_read = commit._checkin_blob_sha_read
+    monkeypatch.setattr(commit, "checkin_blob_sha", lambda root, rel: None)
+
+    def slow_read(root, rel):
+        time.sleep(0.4)
+        return real_read(root, rel)
+
+    monkeypatch.setattr(commit, "_checkin_blob_sha_read", slow_read)
+    assert 0.3 < 0.4 < mr.REMEASURE_DEADLINE_SECS
+    assert mr.remeasure_reason(run_dir, tmp_path) is None
+
+
 def test_deleted_recorded_path_drifts(tmp_path: Path) -> None:
     run_dir = _repo(tmp_path)
     _record(run_dir, tmp_path)

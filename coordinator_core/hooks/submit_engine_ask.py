@@ -498,6 +498,24 @@ def _cross_repo_refusal(run_root: Path, own: Optional[Path], research_route: boo
     return cross_repo_run_refusal(run_root, own, research_route=research_route, approved=approved)
 
 
+def _main_branch_refusal(run_root: Path, own: Optional[Path]) -> Optional[str]:
+    """Deny text when the run root is another checkout sitting on a published `main`, else None.
+
+    The run's terminal commit would be refused there (`main_commit_policy`), so the submit refuses first. Zero
+    spawns: HEAD and the common-dir config are file reads. A read that raises allows."""
+    if own is None or run_root.resolve() == own.resolve():
+        return None
+    from coordinator_core.git.main_commit_policy import main_commit_refusal
+
+    try:
+        why = main_commit_refusal(run_root, override_reason=None)
+    except Exception:  # noqa: BLE001 - a guard that cannot run allows
+        return None
+    if why is None:
+        return None
+    return f"Submission refused before emit: {why} Run it in {run_root}, then re-submit."
+
+
 def _origin_identity(checkout: Path) -> Optional[str]:
     """`host/owner/name` of the checkout's origin, case-folded, scheme, user, `.git` and `:`/`/` spelling dropped; None if no origin.
 
@@ -1635,7 +1653,17 @@ def _premintable(params: dict, sizing_rel: Optional[str], asks: Optional[list], 
     )
 
 
-def _unfired_holder(root: Path, ask: str) -> Optional[str]:
+def _ask_digest(ask: str, brief: Optional[Mapping[str, Any]] = None) -> str:
+    """The identity key of a raw `ask` with its brief inputs (`op.ask_identity_hash`); a briefless ask never
+    loads the op module."""
+    if brief and (brief.get("ask_brief") or brief.get("ask_brief_file") or brief.get("ask_context")):
+        from coordinator_core.ops.dispatch_emit.op import ask_identity_hash
+
+        return ask_identity_hash(ask, dict(brief))
+    return normalized_ask_hash(ask)
+
+
+def _unfired_holder(root: Path, ask: str, brief: Optional[Mapping[str, Any]] = None) -> Optional[str]:
     """The newest unfired minted run (script written, inside the resend window) holding this raw `ask`."""
     import time
 
@@ -1643,7 +1671,7 @@ def _unfired_holder(root: Path, ask: str) -> Optional[str]:
     from coordinator_core.ops.dispatch_emit import run_token
     from coordinator_core.ops.dispatch_emit.op import _UNFIRED_RESEND_WINDOW_SECS, _script_written
 
-    digest = normalized_ask_hash(ask)
+    digest = _ask_digest(ask, brief)
     held = [r for r in run_token.held_records(root) if isinstance(r.get("run_id"), str) and r.get("ask_sha256") == digest]
     if not held:
         return None
@@ -1660,7 +1688,40 @@ def _unfired_holder(root: Path, ask: str) -> Optional[str]:
     return None
 
 
-def _folds_into(root: Path, ask: str, listed: bool = False) -> Optional[str]:
+def _unlaunched_premint(
+    root: Path, ask: str, session_id: Optional[str], brief: Optional[Mapping[str, Any]] = None
+) -> Optional[str]:
+    """The newest premint marker of this session for this raw `ask` that no emit or launch ever reached (its
+    script path is still unwritten), else None; a failed read is None. Trap: a sibling PreToolUse hook that
+    denies the Workflow call leaves exactly this marker, and `_unfired_holder` skips it for want of a script."""
+    if not session_id:
+        return None
+
+    def _find() -> Optional[str]:
+        from coordinator_core import warp_live
+        from coordinator_core.ops.dispatch_emit import run_token
+        from coordinator_core.ops.dispatch_emit.op import _script_written
+
+        digest = _ask_digest(ask, brief)
+        held = [
+            r for r in run_token.held_records(root)
+            if isinstance(r.get("run_id"), str) and r.get("ask_sha256") == digest
+            and r.get("session_id") == session_id and not _script_written(root, r)
+        ]
+        dirs = warp_live._launch_dirs(None)
+        for record in sorted(held, key=lambda r: float(r.get("minted_at") or 0), reverse=True):
+            if warp_live._unfired(root, record, dirs):
+                return record["run_id"]
+        return None
+
+    try:
+        found = _bounded_call(("unlaunched-premint", str(root), session_id, _ask_digest(ask, brief)), _find)
+    except Exception:  # noqa: BLE001 - reuse is an optimisation: a read fault mints fresh
+        return None
+    return found if isinstance(found, str) else None
+
+
+def _folds_into(root: Path, ask: str, listed: bool = False, brief: Optional[Mapping[str, Any]] = None) -> Optional[str]:
     """The run id `dispatch.emit` folds a raw `ask` into (an unfired minted run or a live one holding the
     same ask), else None; a stalled or failed read is None. Trap: a premint answers with a fresh id the
     deferred emit then discards for this holder, so its `workflow.revise` hint names an unknown run.
@@ -1669,10 +1730,10 @@ def _folds_into(root: Path, ask: str, listed: bool = False) -> Optional[str]:
     from coordinator_core.ops.dispatch_emit.op import _resend_holder
 
     def _find() -> Optional[str]:
-        return _unfired_holder(root, ask) if listed else _resend_holder(root, None, ask)
+        return _unfired_holder(root, ask, brief) if listed else _resend_holder(root, None, ask, None, dict(brief or {}))
 
     try:
-        found = _bounded_call(("folds-into", str(root), normalized_ask_hash(ask), listed), _find)
+        found = _bounded_call(("folds-into", str(root), _ask_digest(ask, brief), listed), _find)
     except Exception:  # noqa: BLE001 - a guard that cannot run allows (the premint then proceeds as before)
         return None
     return found if isinstance(found, str) else None
@@ -1689,14 +1750,14 @@ def _premint_marker(params: dict, root: Path, run_id: Optional[str] = None) -> d
     run_token.mint(
         root, run_id, f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs",
         session_id=params.get("session_id") or None, marker=True,
-        ask_sha256=normalized_ask_hash(raw) if isinstance(raw, str) and raw.strip() else None,
+        ask_sha256=_ask_digest(raw, params) if isinstance(raw, str) and raw.strip() else None,
     )
     if isinstance(raw, str) and raw.strip():
-        _write_ask_holder_pointer(root, raw, run_id)
+        _write_ask_holder_pointer(root, raw, run_id, params)
     return {"run_id": run_id}
 
 
-def _ask_holder_pointer(root: Path, ask: str) -> Path:
+def _ask_holder_pointer(root: Path, ask: str, brief: Optional[Mapping[str, Any]] = None) -> Path:
     """The one-file pointer a premint leaves for its ask, under the managed Temp dir (never the repo volume).
     Its presence is the only thing that sends a later submission of the same ask to the refire-join listing."""
     import hashlib
@@ -1704,14 +1765,14 @@ def _ask_holder_pointer(root: Path, ask: str) -> Path:
     from coordinator_core import warp_live
 
     key = hashlib.sha256(os.path.normcase(os.path.abspath(root)).encode("utf-8")).hexdigest()[:12]
-    return warp_live.managed_tempdir() / "ask-holders" / f"{key}-{normalized_ask_hash(ask)[:32]}"
+    return warp_live.managed_tempdir() / "ask-holders" / f"{key}-{_ask_digest(ask, brief)[:32]}"
 
 
-def _write_ask_holder_pointer(root: Path, ask: str, run_id: str) -> None:
+def _write_ask_holder_pointer(root: Path, ask: str, run_id: str, brief: Optional[Mapping[str, Any]] = None) -> None:
     """Trap: only a premint writes a pointer, so a refire of an ask whose run came by another route skips the join;
     a pointer is unlinked only by a refire that finds no holder, so none is reaped otherwise."""
     try:
-        pointer = _ask_holder_pointer(root, ask)
+        pointer = _ask_holder_pointer(root, ask, brief)
         pointer.parent.mkdir(parents=True, exist_ok=True)
         pointer.write_text(run_id, encoding="utf-8")
     except OSError:
@@ -2112,6 +2173,38 @@ def _spent_after_ensure(root: Path, run_id: str) -> bool:
         return False
 
 
+def _resubmitted_as(root: Path, run_id: str, sizing_rel: Optional[str]) -> Optional[str]:
+    """The newer run minted for `run_id`'s sizing, else None: a resubmission supersedes the older run, so no release is offered for it.
+
+    One directory listing of the record root; a failed read answers None (no resubmission known)."""
+    from pathlib import PurePosixPath
+
+    from coordinator_core.ops.dispatch_emit import halted_run, stopped_runs
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    held_at = stopped_runs._stamp_epoch(run_id)
+    if not (isinstance(sizing_rel, str) and sizing_rel) or held_at is None:
+        return None
+    prefix = f"warp-{PurePosixPath(halted_run._norm(sizing_rel)).stem}-"
+    try:
+        for name in sorted(os.listdir(root / RECORD_DIR_ROOT)):
+            if not name.startswith(prefix) or not halted_run._STAMP.fullmatch(name[len(prefix):]):
+                continue
+            stamp = stopped_runs._stamp_epoch(name)
+            if stamp is not None and stamp > held_at and not halted_run._is_shell(root / RECORD_DIR_ROOT / name):
+                return name
+    except Exception:  # noqa: BLE001 - an unreadable listing offers the release as before
+        return None
+    return None
+
+
+def _release_call(run_id: str) -> str:
+    """The exact `dispatch.release_run_token` call for `run_id` (`ask_stage.release_remedy`)."""
+    from coordinator_core.ops.dispatch_emit.ask_stage import release_remedy
+
+    return release_remedy([run_id])
+
+
 def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
     """Why a slice sizing may not start now: an unlanded `after` predecessor."""
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
@@ -2154,9 +2247,14 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
                 f"Predecessor {pred} has not landed (not started). Fire it first: engine-ask {{sizing: {sizing}}}; "
                 f"{run_id} then starts when it lands."
             )
+        newer = _resubmitted_as(root, run_id, mine.slice_sizing)
+        if newer:
+            return f"Predecessor {pred} has not landed ({state}). Run {run_id}'s sizing was resubmitted as {newer}; {run_id} does not start."
         return (
             f"Predecessor {pred} has not landed ({state}). "
-            f"Resubmit {run_id} once its close lands it; no call releases it sooner."
+            f"If its work landed by hand, record it: dispatch.record_halted_run_landed {{run_id: {pred}, sha}} "
+            f"releases {run_id} with no resubmission. If its run is dead, release its token: {_release_call(pred)}. "
+            f"Else resubmit {run_id} once its close lands it."
         )
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import external_status
 
@@ -3060,7 +3158,7 @@ def _multi_root_asks(
         _note_root(root)
         approved_of[key] = base_ok or _names_registered_sibling(strings[members[0]], root, own)
         if own is not None and root.resolve() != own.resolve():
-            cross = _cross_repo_refusal(root, own, False, approved_of[key])
+            cross = _cross_repo_refusal(root, own, False, approved_of[key]) or _main_branch_refusal(root, own)
             if cross:
                 return _refuse(cross)
 
@@ -3414,6 +3512,23 @@ def _ensure_launcher_run_token(root: Path, run_id: str, sizing_rel: str, session
         raise err
 
 
+def _run_script_holds_reader(root: Path, run_id: str) -> bool:
+    """True when the run's own script on disk calls `workflow()` itself (a stage reader of a non-launcher emit).
+
+    Trap: the launcher child's emit of a live-held run answers the run's existing script (a resend), so a
+    reader-holding script would be started as the launcher's child and nest a second level. Such a run's
+    child emit carries `reserved_run_id`, which skips the resend and composes the reader-free launcher-child
+    script. A stalled or unreadable script reads False: the resend stands."""
+    from coordinator_core.ops.dispatch_emit import minted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+
+    rel = f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs"
+    try:
+        return _bounded_call(("script-reader", str(root), run_id), lambda: minted_run.holds_workflow_reader(root, rel)) is True
+    except OSError:
+        return False
+
+
 def _record_refire(rd: Path, script, kind: str, composed_by: Optional[str]) -> None:
     """Best-effort per-refire launch record in the run dir; a failed write never blocks the refire."""
     import time
@@ -3551,7 +3666,14 @@ def _resume_route(
     from coordinator_core.warm import live_runs
 
     if live_runs.run_is_live(root, halted_id):
-        return _refuse(f"Run {halted_id} is live; a second launcher is not started. Wait for its completion notification."), None
+        release = (
+            ""
+            if _resubmitted_as(root, halted_id, sizing_rel)
+            else f" If its run is dead, release its token: {_release_call(halted_id)}."
+        )
+        return _refuse(
+            f"Run {halted_id} is live; a second launcher is not started. Wait for its completion notification.{release}"
+        ), None
     from coordinator_core.ops.dispatch_emit import resume_gate
 
     try:
@@ -3561,9 +3683,10 @@ def _resume_route(
     except resume_gate.ResumeRefused as exc:
         if not _fresh_flag(payload.get("tool_input") or {}):
             return _refuse(str(exc)), None
-        if exc.reason != resume_gate.REFUSE_FOREIGN_DRIVER:
+        if exc.reason not in (resume_gate.REFUSE_FOREIGN_DRIVER, resume_gate.REFUSE_CANCELLED):
             # Trap: the gate's refusal names `args.fresh` as its remedy; refusing a fresh refire here loops.
-            # A cancelled, closed or superseded run is already terminal, so nothing is retired: the plain emit mints.
+            # A closed or superseded run is already terminal, so nothing is retired: the plain emit mints. A
+            # cancelled run is still `halted`, so it falls through to the supersede below.
             params["fresh"] = True
             return None, None
     params.pop("takeover", None)
@@ -3664,7 +3787,10 @@ def _resume_route(
             spawn = "failed"
     from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
 
-    child = LaunchChild(run_id=halted_id, sizing_rel=sizing_rel, emit_params={**params, "target_root": str(root)})
+    emit_params = {**params, "target_root": str(root)}
+    if _run_script_holds_reader(root, halted_id):
+        emit_params["reserved_run_id"] = halted_id
+    child = LaunchChild(run_id=halted_id, sizing_rel=sizing_rel, emit_params=emit_params)
     parent_id = f"resume-{halted_id}-{uuid.uuid4().hex[:6]}"
     try:
         script = (launch or _default_launch)(root, parent_id, [child], session_id)
@@ -3995,7 +4121,7 @@ def _evaluate(
         or _names_registered_sibling(repo_arg, root, own if own is not None else _repo_root(None, payload))
     )
     if own is not None:
-        cross = _cross_repo_refusal(root, own, False, approved)
+        cross = _cross_repo_refusal(root, own, False, approved) or _main_branch_refusal(root, own)
         if cross:
             return _refuse(cross)
     missing = _missing_context(root, brief.get("ask_context", []))
@@ -4071,7 +4197,7 @@ def _evaluate(
 
     if not sizing_rel and ask and asks is None:
         pointer = (
-            _ask_holder_pointer(root, ask)
+            _ask_holder_pointer(root, ask, brief)
             if emit is None and _premintable({"ask": ask, **brief}, None, None, supersedes)
             else None
         )
@@ -4081,7 +4207,7 @@ def _evaluate(
             ask_listed = True
             with warp_live.listing_scope():
                 held = warp_live.run_for_ask(
-                    root, normalized_ask_hash(ask), session_id=session_id, transcript_path=transcript
+                    root, _ask_digest(ask, brief), session_id=session_id, transcript_path=transcript
                 )
             if held is None and pointer is not None:
                 pointer.unlink(missing_ok=True)
@@ -4119,7 +4245,10 @@ def _evaluate(
             return _refuse(f"The sizing read of {sizing_rel} outran its {_READ_DEADLINE_MS:.0f}ms budget. Next: submit again.")
         sizing_doc, reserved_run_id = {}, hinted
     if sizing_submitted and repo_arg and Path(repo_arg).is_absolute():
-        cross = _cross_repo_refusal(root, _repo_root(None, payload), _has_research_block(sizing_doc), approved)
+        sizing_own = _repo_root(None, payload)
+        cross = _cross_repo_refusal(root, sizing_own, _has_research_block(sizing_doc), approved) or _main_branch_refusal(
+            root, sizing_own
+        )
         if cross:
             return _refuse(cross)
     if sizing_rel and asks is None:
@@ -4245,7 +4374,16 @@ def _evaluate(
         result is None
         and emit is None
         and _premintable(params, sizing_rel, asks, supersedes)
-        and _folds_into(root, params["ask"], ask_listed) is None  # a fold answers inline, naming the run it folded into
+    ):
+        unlaunched = _unlaunched_premint(root, params["ask"], params.get("session_id") or None, params)
+        if unlaunched is not None:  # a resubmit after a sibling deny: the run minted then is the run, nothing new minted
+            _write_ask_holder_pointer(root, params["ask"], unlaunched, params)  # the refire-join dropped it for want of a holder
+            return _premint_deferred_envelope(root, params, unlaunched)
+    if (
+        result is None
+        and emit is None
+        and _premintable(params, sizing_rel, asks, supersedes)
+        and _folds_into(root, params["ask"], ask_listed, params) is None  # a fold answers inline, naming the run it folded into
     ):
         minted = None
         from coordinator_core.ops.dispatch_emit import run_token as _rt
@@ -4276,12 +4414,17 @@ def _evaluate(
             if over.minted:
                 import time
 
+                for minted_id in over.run_ids:
+                    _note_minted(minted_id)
                 return _minted_start_envelope(root, over.run_ids, time.monotonic() + _ENVELOPE_GRACE_S)
             return _refuse(over.message) if over.stalled else _deferred_envelope(root, params, over)
         except Exception as exc:  # the engine's refusal text is the whole message
             why = _unavailable(exc)
             live = _CALL.get()
-            nothing_minted = live is None or _minted_since_start(live) == []
+            minted_ids = _minted_since_start(live) if live is not None else []
+            for minted_id in minted_ids or ():  # a run dir exists: its spooled twin must not fire a second run
+                _note_minted(minted_id)
+            nothing_minted = minted_ids == []
             spooled = _spool_envelope(payload, root, why) if why and nothing_minted else None
             if spooled is not None:
                 return spooled

@@ -55,10 +55,23 @@ def _proceeded_without(root: Path, run_id: str) -> frozenset:
     return frozenset(x for x in held if isinstance(x, str)) if isinstance(held, list) else frozenset()
 
 
+def _withheld_by(root: Path, run_id: str) -> tuple:
+    """The paths `run_id` left uncommitted at its halt: its marker's `run_artifacts.withheld` plus its index
+    entry's paths. () with neither record, which `work_landed_at_head` reads as "withheld nothing known"
+    (every dirty declared path then keeps the run unlanded)."""
+    marker = _halted_marker(root, run_id) or {}
+    withheld = (marker.get("run_artifacts") or {}).get("withheld")
+    held = [p for p in withheld if isinstance(p, str)] if isinstance(withheld, (dict, list)) else []
+    entry = halted_withheld_index.entries(root).get(run_id)
+    return tuple(_norm(p) for p in (*held, *(entry.paths if entry else ())))
+
+
 def work_landed_at_head(root: Path, run_id: str) -> bool:
-    """True when the run's declared write set (`review_declared_paths` plus row `writes` of its manifest) is
-    all clean in the working tree against HEAD and at least one path differs between the run's base and HEAD:
-    its work is committed, nothing of it is left uncommitted. False on an unreadable manifest, no recorded
+    """True when the run's declared write set (`review_declared_paths` plus row `writes` of its manifest) holds
+    at least one path that differs between the run's base and HEAD and is clean in the working tree, and every
+    other declared path is clean too or dirty with a hunk the run did not withhold at its halt (a later run's
+    dirt, never this run's own): its work is committed. Dirt on a path the run did withhold, or any dirt when
+    the run's withheld set is unknown, keeps it unlanded. False on an unreadable manifest, no recorded
     base, an empty write set or any unreadable tree: nothing then proves the work landed. In-process object
     reads only; no spawn."""
     try:
@@ -86,7 +99,8 @@ def work_landed_at_head(root: Path, run_id: str) -> bool:
             return dirs[tree_sha]
 
         clean = _clean_at_head(root, common, _dir, paths, head)
-        if clean != set(paths):
+        held = _withheld_by(root, run_id)
+        if any(p not in clean and (not held or _names(p, held)) for p in paths):
             return False
         return bool(clean - _clean_at_head(root, common, _dir, paths, base))
     except Exception:  # noqa: BLE001 -- an unreadable record proves nothing landed
@@ -143,21 +157,6 @@ def _stranded(root: Path, run_id: str) -> bool:
     return run_token.escrowed(root, run_id) is None and not run_token.is_live(root, run_id)
 
 
-def _halt_predates_dirt(root: Path, run_id: str, entry, path: str) -> bool:
-    """True when `run_id` halted before `path` was last written in the worktree, so its halt cannot have left
-    that dirt; False when either time is unreadable."""
-    halted_ns = entry.at_ns if entry and entry.at_ns else 0
-    if not halted_ns:
-        try:
-            halted_ns = (record_dir(root, run_id) / halted_run.HALTED_FILE).stat().st_mtime_ns
-        except (OSError, ValueError):
-            return False
-    try:
-        return halted_ns < (root / path).stat().st_mtime_ns
-    except OSError:
-        return False
-
-
 def _refire_call(root: Path, run_id: str, entry) -> Optional[str]:
     """The refire call of `run_id`'s halt marker; a stranded run, which has none, gets an engine-ask resume of its sizing."""
     marker = _halted_marker(root, run_id)
@@ -180,9 +179,9 @@ def _names(path: str, held: tuple) -> bool:
 def owner_of(root: Path, path: str, *, exclude_run_id: str, include_waiting: bool = False) -> dict:
     """`{run_id, state}` of the run holding `path` uncommitted: state "live" (a run with a live token whose
     staged footprint names it), else "halted" (a halted record, or a stranded `staged` run with no halt
-    marker and no live launcher, whose withheld or declared paths name it; a run withholding it or keeping
-    it outranks one that only declares it, then the most recently halted; a marked run that only declares
-    it and halted before the path's worktree mtime is never the owner), else `{run_id: None, state: None}`.
+    marker and no live launcher, whose withheld paths or kept paths name it, the most recently halted first;
+    a run that only declares the path, its footprint recording no write of it, is never the owner), else
+    `{run_id: None, state: None}`.
     `exclude_run_id`, its chain kin and a live
     run already parked behind `exclude_run_id` are never the owner, unless `include_waiting`: `resolve` keeps
     that run so the two-run wait cycle is named instead of read as no owner."""
@@ -195,12 +194,12 @@ def owner_of(root: Path, path: str, *, exclude_run_id: str, include_waiting: boo
         if rid != exclude_run_id and rid not in skipped and run_token.is_live(root, rid)
         and (include_waiting or exclude_run_id not in ((stage_wait.read(root, rid) or {}).get("blockers") or ()))
     )
-    halted: dict[str, tuple] = {}
+    halted: dict[str, int] = {}
     for rid, entry in halted_withheld_index.entries(root).items():
         if rid == exclude_run_id or rid in live or rid in skipped or not _names(path, (*entry.paths, *entry.declared)):
             continue
-        covers = _names(path, entry.paths) or _names(path, tuple(co_tenant_kept.kept_paths(root, rid)))
-        halted[rid] = (1 if covers else 0, entry.at_ns)
+        if _names(path, entry.paths) or _names(path, tuple(co_tenant_kept.kept_paths(root, rid))):
+            halted[rid] = entry.at_ns
     kin = run_lineage.chain_kin(root, exclude_run_id, [*candidates, *halted])
     for rid in candidates:
         if rid not in kin:
@@ -216,8 +215,6 @@ def owner_of(root: Path, path: str, *, exclude_run_id: str, include_waiting: boo
                 continue
             sizing_rel = entry.sizing_rel if entry else None
         else:
-            if not halted[rid][0] and _halt_predates_dirt(root, rid, entry, path):
-                continue
             sizing_rel = marker.get("sizing_rel") or (entry.sizing_rel if entry else None)
         if _landed_successor(root, rid, sizing_rel) is None:
             return {"run_id": rid, "state": "halted"}

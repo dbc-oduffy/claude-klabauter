@@ -6,8 +6,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
-from typing import Any, Dict, Sequence
+from typing import Any, Dict, Mapping, Sequence
 
 from coordinator_core.git import commit
 from coordinator_core.git.git_dir import resolve_git_dir
@@ -310,33 +311,84 @@ def _handler(params: dict, repo_root: Path | None = None) -> Dict[str, Any]:
         return {"error": str(exc), "refused": "measured-rev"}
 
 
+UNNAMED_CAUSE = "hash read returned nothing, cause not classified"
+
+
 class MeasureUnavailable(OSError):
     """A recorded path exists but its worktree hash could not be read (a stalled or dropped
-    `checkin_blob_sha`): unknown, not drift. `paths` lists them."""
+    `checkin_blob_sha`): unknown, not drift. `paths` lists them; `causes` names why per path
+    (a path without one renders `UNNAMED_CAUSE`)."""
 
-    def __init__(self, paths: Sequence[str]) -> None:
+    def __init__(self, paths: Sequence[str], causes: Mapping[str, str] | None = None) -> None:
         self.paths = list(paths)
-        super().__init__("worktree hash unavailable: " + ", ".join(self.paths))
+        self.causes = {p: (causes or {}).get(p) or UNNAMED_CAUSE for p in self.paths}
+        super().__init__("worktree hash unavailable: " + self.detail())
+
+    def detail(self) -> str:
+        """`path (cause), ...` for every unavailable path."""
+        return ", ".join(f"{p} ({self.causes[p]})" for p in self.paths)
+
+    def reason(self) -> str:
+        """The refusal reason every rendering site prints."""
+        return "measure_unavailable: " + self.detail()
 
 
 #: Caller-wait ceiling for the one re-read of a dropped hash; a read stalled past it is unavailable.
 REREAD_DEADLINE_SECS = 0.3
 
 
-def _reread_bounded(root: Path, rel: str) -> str | None:
+#: Wider ceiling for the re-measure a test-leg failure triggers before a stale measurement is refused;
+#: the reread and the diagnose of one path share it, so a stalled path waits at most this long.
+REMEASURE_DEADLINE_SECS = 0.45
+
+
+#: Total wait one drift measurement spends on re-reads and diagnoses across all its paths; a path
+#: that finds it spent is unavailable with that cause, so N stalled paths never cost N waits.
+MEASURE_TOTAL_BUDGET_SECS = 1.0
+
+
+def _reread_bounded(root: Path, rel: str, deadline: float | None = None) -> str | None:
     """One more hash of `rel` under its own bounded key (the first read's key is stalled, so reusing it
-    would answer None at once); None when the read stalls past `REREAD_DEADLINE_SECS` or cannot hash."""
+    would answer None at once); None when the read stalls past `deadline` (default
+    `REREAD_DEADLINE_SECS`) or cannot hash."""
     from coordinator_core.bounded_io import run_bounded
 
     return run_bounded(
         f"measured_rev_reread:{Path(root) / rel}",
         lambda: commit._checkin_blob_sha_read(root, rel),
-        deadline=REREAD_DEADLINE_SECS,
+        deadline=REREAD_DEADLINE_SECS if deadline is None else deadline,
         default=None,
     )
 
 
-def measured_rev_drift(run_dir: Path, repo_root: Path) -> list[str]:
+def _diagnose_bounded(
+    root: Path, rel: str, deadline: float | None = None, reread_wait: float | None = None
+) -> commit.BlobDiagnosis:
+    """`commit.diagnose_checkin_blob` under its own bounded key; a stall past the deadline is itself the cause.
+    `reread_wait` is the reread bound the stall cause names when `deadline` is only what that reread left."""
+    from coordinator_core.bounded_io import run_bounded
+
+    wait = REREAD_DEADLINE_SECS if deadline is None else deadline
+    named = wait if reread_wait is None else reread_wait
+    stalled = commit.BlobDiagnosis(
+        None, f"read stalled past the {commit.CHECKIN_READ_DEADLINE_SECS}s and {named}s bounds"
+    )
+    return run_bounded(
+        f"measured_rev_diagnose:{Path(root) / rel}",
+        lambda: commit.diagnose_checkin_blob(root, rel),
+        deadline=wait,
+        default=stalled,
+    )
+
+
+def _other_run_path(rel: str, own_run: str) -> bool:
+    """True when `rel` sits under a predecessor run's `state/warp/<run>/` dir, not this run's: that run's
+    files are evicted or parked, so an unhashable one is absent, not a failed measurement of this run."""
+    parts = rel.replace("\\", "/").split("/")
+    return len(parts) > 3 and parts[0] == "state" and parts[1] == "warp" and parts[2] != own_run
+
+
+def measured_rev_drift(run_dir: Path, repo_root: Path, reread_deadline: float | None = None) -> list[str]:
     """Recorded paths whose worktree blob no longer matches the record, plus each `removed` path
     that exists again. `[]` when `run_dir` holds no record. Hash-only: spawns nothing and reads
     no object. A None bounded read of a path that still exists is re-read once under a second
@@ -353,23 +405,46 @@ def measured_rev_drift(run_dir: Path, repo_root: Path) -> list[str]:
     blobs = data.get("blobs") or {}
     drifted: list[str] = []
     unavailable: list[str] = []
+    causes: dict[str, str] = {}
+    per_wait = REREAD_DEADLINE_SECS if reread_deadline is None else reread_deadline
+    spent = 0.0
     for p, sha in blobs.items():
         got = commit.checkin_blob_sha(root, p)
+        if got is None and _other_run_path(p, Path(run_dir).name):
+            continue
         if got is None and os.path.lexists(root / p):
-            got = _reread_bounded(root, p)
-            if got is None and os.path.lexists(root / p):
+            if spent >= MEASURE_TOTAL_BUDGET_SECS:
                 unavailable.append(p)
+                causes[p] = f"re-read budget of {MEASURE_TOTAL_BUDGET_SECS}s spent on earlier paths"
                 continue
+            wait = min(per_wait, MEASURE_TOTAL_BUDGET_SECS - spent)
+            began = time.monotonic()
+            got = _reread_bounded(root, p, wait)
+            if got is None and os.path.lexists(root / p):
+                diag = _diagnose_bounded(root, p, max(wait - (time.monotonic() - began), 0.0), wait)
+                spent += time.monotonic() - began
+                if diag.alt_shas:
+                    # The index that decides raw vs LF-folded is unreadable: either candidate matching the
+                    # record means the bytes are the measured ones; neither means they changed.
+                    if sha not in diag.alt_shas:
+                        drifted.append(p)
+                    continue
+                if diag.sha is None:
+                    unavailable.append(p)
+                    causes[p] = diag.cause
+                    continue
+                got = diag.sha
         if got != sha:
             drifted.append(p)
     if unavailable:
-        raise MeasureUnavailable(unavailable)
+        raise MeasureUnavailable(unavailable, causes)
     drifted.extend(p for p in data.get("removed") or [] if (root / p).exists())
     return drifted
 
 
 def foreign_drift(
     run_dir: Path, repo_root: Path, *, session_id: str | None = None, own_hashes: Any = None,
+    reread_deadline: float | None = None,
 ) -> list[str]:
     """`measured_rev_drift` minus what the run itself explains: a path whose bytes are the run's own
     last recorded write (`drift_attribution.classify`; `own_hashes` adds `{path: [sha256]}` the caller
@@ -377,7 +452,7 @@ def foreign_drift(
     manifest's declared writes and the in-run widened paths that the run did not write is an
     outside edit, withheld rather than refused. What is left is foreign. With no declared writes on
     record nothing is outside them. Hash-only; same raises as `measured_rev_drift`."""
-    drifted = measured_rev_drift(run_dir, repo_root)
+    drifted = measured_rev_drift(run_dir, repo_root, reread_deadline)
     if not drifted:
         return []
     from coordinator_core.ops.dispatch_emit import drift_attribution, land_run
@@ -390,3 +465,17 @@ def foreign_drift(
     )
     foreign = split[drift_attribution.FOREIGN]
     return foreign if declared else [*foreign, *split[drift_attribution.OUTSIDE_DECLARED]]
+
+
+def remeasure_reason(run_dir: Path, repo_root: Path) -> str | None:
+    """Fresh foreign-drift measurement under the wider `REMEASURE_DEADLINE_SECS` reread bound, for a
+    stale `measure_unavailable` / `measured-rev-drift` reason the test leg's failure would otherwise
+    refuse. None when the paths now measure clean; else the surviving reason (`measure_unavailable: ...`,
+    `measured-rev-drift: ...` or `measured-rev-record-unreadable`). In-process hashing, no spawn."""
+    try:
+        drifted = foreign_drift(run_dir, repo_root, reread_deadline=REMEASURE_DEADLINE_SECS)
+    except MeasureUnavailable as exc:
+        return exc.reason()
+    except (OSError, ValueError):
+        return "measured-rev-record-unreadable"
+    return "measured-rev-drift: " + ", ".join(drifted) if drifted else None

@@ -185,6 +185,7 @@ def compose_message(
     deleted_paths: Sequence[str] = (),
     kept_entries: Sequence[str] = (),
     trailers: str = "",
+    governed_by: Sequence[str] = (),
 ) -> str:
     """Compose the Step-2.67 commit message, byte-reproducing the bash original.
 
@@ -206,6 +207,8 @@ def compose_message(
                            does not re-split path from reason).
         trailers       -- pre-derived git-trailer text (from `commit.anchors`),
                            newline-joined "Key: value" lines, or "" to omit.
+        governed_by    -- pre-built `Governed-By:` lines (`governed_by.trailer_lines`),
+                           appended to the same terminal trailer paragraph.
 
     Returns the composed message as a single string, each content line
     terminated by "\\n" (matching the bash original's `msg+="...\\n"`
@@ -213,6 +216,8 @@ def compose_message(
     conditional rules produce.
     """
     has_blocks = _has_blocks(deleted_paths, kept_entries)
+    if governed_by:
+        trailers = "\n".join([*([trailers] if trailers else []), *governed_by])
 
     if has_blocks:
         prose_body, prose_trailer_tail = _split_trailer_tail(prose)
@@ -261,6 +266,18 @@ def compose_message(
             msg += "\n" + combined_trailers + "\n"
 
     return msg
+
+
+def append_trailer_lines(message: str, lines: Sequence[str]) -> str:
+    """`message` with `lines` joined to its terminal trailer paragraph (a new paragraph when it has none);
+    unchanged when `lines` is empty or every line is already present."""
+    present = set(message.split("\n"))
+    fresh = [ln for ln in lines if ln not in present]
+    if not fresh:
+        return message
+    base = message.rstrip("\n") + "\n"
+    sep = "" if _ends_with_trailer_block(base) else "\n"
+    return base + sep + "\n".join(fresh) + "\n"
 
 
 def format_kept_entry(path: str, reason: str) -> str:

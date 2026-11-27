@@ -18,7 +18,7 @@ from pathlib import Path
 import psutil
 import pytest
 
-from coordinator_core.warm import server
+from coordinator_core.warm import pool_retire, server
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -107,6 +107,70 @@ def test_retire_leaves_no_live_worker_and_no_management_thread(path, tmp_path, m
             except psutil.Error:
                 pass
         _release_self_deadlocked_manager(pool, mgmt)
+
+
+def _park(claim: str, park_secs: float) -> int:
+    """Worker task: record the pid and block as an IO-held worker does, holding no shared lock."""
+    Path(claim).write_text(str(os.getpid()), encoding="ascii")
+    time.sleep(park_secs)
+    return os.getpid()
+
+
+def _two_worker_pool_with_a_held_worker(tmp_path: Path):
+    pool = concurrent.futures.ProcessPoolExecutor(max_workers=2, mp_context=multiprocessing.get_context())
+    claim = tmp_path / "claim"
+    holder = pool.submit(_park, str(claim), 600.0)
+    deadline = time.monotonic() + 30
+    while not claim.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert claim.exists(), "holder never started"
+    time.sleep(0.2)
+    return pool, int(claim.read_text(encoding="ascii")), holder
+
+
+def test_one_held_worker_is_retired_alone_and_the_pool_keeps_serving(tmp_path):
+    baseline = {c.pid for c in psutil.Process().children(recursive=True)}
+    pool, held_pid, holder = _two_worker_pool_with_a_held_worker(tmp_path)
+    try:
+        peer_pid = pool.submit(_noop).result(60)
+        assert peer_pid != held_pid and len(pool._processes) == 2
+        gone, ledger = threading.Event(), []
+        assert pool_retire.retire_worker(pool, held_pid, future=holder, on_done=gone.set, ledger=ledger)
+        assert gone.wait(30), "the retired worker never finished retiring"
+        assert held_pid not in pool._processes and not ledger[0].is_alive()
+        assert holder.done() and isinstance(holder.exception(), pool_retire.WorkerRetired)
+        assert not psutil.pid_exists(held_pid) or not psutil.Process(held_pid).is_running()
+        # Not broken: submit finds a free slot and serves, and the peer is the same live worker.
+        first, second = pool.submit(_park, str(tmp_path / "c1"), 3.0), pool.submit(_noop)
+        assert held_pid not in pool._processes and len(pool._processes) == 2
+        assert second.result(60) != held_pid
+        assert peer_pid in pool._processes and psutil.Process(peer_pid).is_running()
+        assert first.result(60) != held_pid
+    finally:
+        for pid in {c.pid for c in psutil.Process().children(recursive=True)} - baseline:
+            try:
+                psutil.Process(pid).kill()
+            except psutil.Error:
+                pass
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def test_retire_worker_refuses_a_pid_that_is_not_in_the_pool_and_a_pool_that_cannot_respawn(tmp_path):
+    baseline = {c.pid for c in psutil.Process().children(recursive=True)}
+    pool, held_pid, holder = _two_worker_pool_with_a_held_worker(tmp_path)
+    try:
+        before = dict(pool._processes)
+        assert pool_retire.retire_worker(pool, held_pid + 100_000, future=holder) is False
+        pool._safe_to_dynamically_spawn_children = False
+        assert pool_retire.retire_worker(pool, held_pid, future=holder) is False
+        assert dict(pool._processes) == before and not holder.done()
+    finally:
+        for pid in {c.pid for c in psutil.Process().children(recursive=True)} - baseline:
+            try:
+                psutil.Process(pid).kill()
+            except psutil.Error:
+                pass
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _release_self_deadlocked_manager(pool, mgmt) -> None:

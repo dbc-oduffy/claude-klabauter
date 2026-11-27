@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import terminal_commit, terminal_commit_ledger
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -97,7 +97,7 @@ def test_tracked_file_claimed_after_the_pathspec_was_fixed_fails_the_run_loud(re
     request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),))
     landed = {"yes": False}
     real_dispatch = terminal_commit.reentrant_dispatch
-    real_claims = terminal_commit._own_prefix_files
+    real_claims = terminal_commit_ledger._own_prefix_files
 
     def dispatch(op, params, **kw):
         reply = real_dispatch(op, params, **kw)
@@ -110,7 +110,7 @@ def test_tracked_file_claimed_after_the_pathspec_was_fixed_fails_the_run_loud(re
         return [*(base or []), "tracked.py"] if landed["yes"] else base
 
     monkeypatch.setattr(terminal_commit, "reentrant_dispatch", dispatch)
-    monkeypatch.setattr(terminal_commit, "_own_prefix_files", claims)
+    monkeypatch.setattr(terminal_commit_ledger, "_own_prefix_files", claims)
     out = _run(repo, request)
     assert out["committed"] is True
     assert out["ok"] is False
@@ -132,6 +132,52 @@ def test_held_chunk_residue_is_explained_not_an_error(repo):
     assert out["committed"] is True
     assert "ok" not in out and "error" not in out
     assert out["residue"] == {"b.py": "C2"}
+
+
+def _pkg_with_tracked_callee(repo: Path) -> None:
+    pkg = repo / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "callee.py").write_text("def old():\n    return 1\n", encoding="utf-8")
+    (pkg / "caller.py").write_text("x = 1\n", encoding="utf-8")
+    (pkg / "keeper.py").write_text("from pkg.callee import old\n", encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "seed pkg"], repo)
+
+
+def test_no_snapshot_landing_importing_a_name_only_the_worktree_defines_is_refused(repo, monkeypatch):
+    """The no-snapshot arm is fail-closed: terminal_commit at default arguments refuses lost-definition."""
+    _pkg_with_tracked_callee(repo)
+    (repo / "pkg" / "callee.py").write_text(
+        "def old():\n    return 1\n\n\ndef new_fn():\n    return 2\n", encoding="utf-8",
+    )
+    (repo / "pkg" / "caller.py").write_text("from pkg.callee import new_fn\n", encoding="utf-8")
+    monkeypatch.setattr(terminal_commit, "_worktree_snapshot", lambda *_a, **_k: None)
+    head = _git(["rev-parse", "HEAD"], repo).strip()
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("pkg/caller.py",)),))
+
+    out = _run(repo, request)
+
+    assert out["committed"] is False, out
+    assert out["refused"] == "lost-definition", out
+    assert out["integrity"][0]["path"] == "pkg/caller.py"
+    assert _git(["rev-parse", "HEAD"], repo).strip() == head
+
+
+def test_no_snapshot_deletion_a_clean_head_importer_still_reads_is_refused(repo, monkeypatch):
+    _pkg_with_tracked_callee(repo)
+    (repo / "pkg" / "callee.py").unlink()
+    monkeypatch.setattr(terminal_commit, "_worktree_snapshot", lambda *_a, **_k: None)
+    head = _git(["rev-parse", "HEAD"], repo).strip()
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("pkg/callee.py",)),))
+
+    out = _run(repo, request)
+
+    assert out["committed"] is False, out
+    assert out["refused"] == "lost-definition", out
+    assert out["integrity"][0]["path"] == "pkg/keeper.py"
+    assert out["residue_import_check"] == "head-importers"
+    assert _git(["rev-parse", "HEAD"], repo).strip() == head
 
 
 def test_clean_commit_has_no_residue(repo):

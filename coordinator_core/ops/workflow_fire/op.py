@@ -67,7 +67,7 @@ Wire params -- workflow.fire:
                                       notice on completion without polling.
     timeout_s (int, optional)     -- total native execution budget, including
                                       admission, agents and terminal action;
-                                      defaults to 7200, bounded to 1..86400.
+                                      defaults to 14400, bounded to 1..86400.
 
 Reply fields -- workflow.fire:
     the fire registry record (see ``fire.fire_workflow`` docstring): {
@@ -144,6 +144,7 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.workflow_fire import fire
 from coordinator_core.ops.workflow_fire.backends import check as check_backend
+from coordinator_core.ops.workflow_fire.wait import DEFAULT_TIMEOUT_S
 
 
 @register_op("workflow.fire")
@@ -214,7 +215,7 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
             script_path, cwd=str(repo_root) if repo_root is not None else None,
             notify_to=notify_to, backend=params.get("backend", "codex"),
             concurrency_cap=params.get("concurrency_cap", fire.DEFAULT_CONCURRENCY_CAP),
-            timeout_s=params.get("timeout_s", 7200),
+            timeout_s=params.get("timeout_s", DEFAULT_TIMEOUT_S),
             args=params.get("args"), run_id=params.get("run_id"),
             caller_session_id=fire_record_caller_session_id(principal),
             expected=expected, refire=params.get("refire") is True,

@@ -159,6 +159,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),
     ("coordinator_core.ops.ceremony.commit_v2", 'registers "ceremony.commit_v2"'),
     ("coordinator_core.ops.ceremony.hand_land", 'registers "ceremony.hand_land"'),
+    ("coordinator_core.ops.ceremony.governed_by", 'registers "governed_by.ledger"'),
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
     ("coordinator_core.ops.canvas_harvest", 'registers "canvas.harvest"'),
     ("coordinator_core.ops.daily_log", 'registers "changelog.daily_log"'),
@@ -715,6 +716,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.baton_carry_forward", 'registers "baton.carry_forward", "baton.carry_forward_read"'),
     ("coordinator_core.ops.baton_close_report", 'registers "baton.close_report"'),
     ("coordinator_core.ops.baton_close_commit", 'registers "baton.close_commit"'),
+    ("coordinator_core.ops.baton_bulk_set", 'registers "baton.bulk_set"'),
     ("coordinator_core.ops.poll_scratch_dir", 'registers "fanout.poll_scratch_dir"'),
     (
         "coordinator_core.ops.fanout.ops",
@@ -726,6 +728,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.run_hold_op", 'registers "run.hold"'),
     ("coordinator_core.ops.external_workspace_rehydrate", 'registers "external_workspace.rehydrate"'),
     ("coordinator_core.ops.scratch_record", 'registers "scratch.record_run_path", "scratch.keep"'),
+    ("coordinator_core.ops.sidecar_write", 'registers "sidecar.write"'),
     ("coordinator_core.ops.run_paths_trash", 'registers "run.paths_trash"'),
     ("coordinator_core.ops.worker_cleanup", 'registers "scratch.remove", "proc.stop_own_child"'),
     ("coordinator_core.ops.memo_fate_partition", 'registers "memo.fate_partition"'),

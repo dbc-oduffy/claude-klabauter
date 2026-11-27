@@ -44,6 +44,119 @@ def retire_pool(
         pass
 
 
+class WorkerRetired(RuntimeError):
+    """The exception a retired worker's in-flight future is resolved with; never a `BrokenProcessPool`."""
+
+
+_MANAGER_SETTLE_SECS = 1.0
+_MANAGER_POLL_SECS = 0.01
+_MANAGER_REBUILD_SECS = 0.05
+
+
+def retire_worker(
+    pool: Any,
+    pid: int,
+    *,
+    future: Optional[Any] = None,
+    on_done: Optional[Callable[[], None]] = None,
+    ledger: Optional[list] = None,
+) -> bool:
+    """Retire the one worker `pid` of `pool`; its peers keep serving and the pool is not broken.
+
+    True when `pid` was taken out of the pool (its executor slot is free, so the next submit that
+    finds no idle worker spawns a fresh one); False, nothing touched, when `pid` is not a worker of
+    this pool or the pool cannot respawn dynamically (a fork context). Returns at once; the worker
+    is terminated on a helper thread, after the executor manager has stopped watching its sentinel
+    (a watched worker dying marks the whole executor broken and fails every neighbour). `future`,
+    the op that worker held, is dropped from the executor's pending items and resolved with
+    `WorkerRetired`. Safe only for a worker mid-op: an idle worker may own the shared call-queue
+    lock, which a terminated holder would leave locked. `on_done` runs once the worker is gone.
+    Raises nothing.
+    """
+    try:
+        procs = getattr(pool, "_processes", None)
+        if not isinstance(procs, dict) or pid not in procs:
+            return False
+        if not getattr(pool, "_safe_to_dynamically_spawn_children", False):
+            return False
+        proc = procs.pop(pid, None)
+        if proc is None:
+            return False
+        if ledger is not None:
+            ledger.append(proc)
+        _resolve_retired_future(pool, future)
+        threading.Thread(
+            target=_finish_worker,
+            args=(
+                proc,
+                getattr(pool, "_executor_manager_thread_wakeup", None),
+                getattr(pool, "_executor_manager_thread", None),
+                on_done,
+            ),
+            daemon=True,
+            name="worker-retire",
+        ).start()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _resolve_retired_future(pool: Any, future: Optional[Any]) -> None:
+    """Drop a running `future` from the executor's pending items, then fail it with `WorkerRetired`."""
+    if future is None:
+        return
+    try:
+        if future.running():
+            items = getattr(pool, "_pending_work_items", None)
+            if isinstance(items, dict):
+                for work_id, item in list(items.items()):
+                    if getattr(item, "future", None) is future:
+                        items.pop(work_id, None)
+        if not future.done():
+            future.set_exception(WorkerRetired("worker retired while holding this op"))
+    except Exception:  # noqa: BLE001 -- the future resolved on its own in the meantime
+        pass
+
+
+def _finish_worker(proc: Any, wakeup: Any, mgmt: Any, on_done: Optional[Callable[[], None]]) -> None:
+    try:
+        _let_manager_forget(wakeup, mgmt)
+        if _alive(proc):
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+        _join(proc, time.monotonic() + _THREAD_JOIN_SECS)
+        if _alive(proc) and getattr(proc, "pid", None) is not None:
+            pool_orphans.reap_orphans(frozenset({proc.pid}), frozenset())
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        if on_done is not None:
+            try:
+                on_done()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _let_manager_forget(wakeup: Any, mgmt: Any) -> None:
+    """Wake the executor manager and wait, bounded, until it has consumed the wake-up: its next wait
+    is built from `_processes`, which no longer lists the retiring worker."""
+    if wakeup is None or mgmt is None or not mgmt.is_alive():
+        return
+    wakeup.wakeup()
+    reader = getattr(wakeup, "_reader", None)
+    deadline = time.monotonic() + _MANAGER_SETTLE_SECS
+    while reader is not None and time.monotonic() < deadline:
+        try:
+            if not reader.poll():
+                break
+        except Exception:  # noqa: BLE001
+            break
+        time.sleep(_MANAGER_POLL_SECS)
+    time.sleep(_MANAGER_REBUILD_SECS)
+
+
 def _finish(
     mgmt: Any, queues: list, procs: list, grace_secs: float, on_done: Optional[Callable[[], None]]
 ) -> None:

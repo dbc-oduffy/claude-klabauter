@@ -8,6 +8,8 @@ respawn-on-next-op path restarts the server; this module only decides, logs one 
 Every decision appends one line to `<svc>/hang-restarts.log`:
 `<UTC> pid=<server pid> action=restart|suppressed|io-stall [reason=...] count=.. window_s=.. backoff_s=.. dumps=..`
 (`io-stall`: the window's stalled legs are blocked reads, so restarting would not clear the disk; report only.)
+(`suppressed reason=io-saturated-by-peer`: a non-engine process tops the box's read sample, bounded by `IO_SATURATED_MAX_DEFER_SECS`;
+`suppressed reason=worker-replaced`: a held pool worker was retired alone while peers served, before any whole-engine restart.)
 (`backoff_s` is the wait owed the previous restart at decision time, 0 for a first restart).
 """
 
@@ -16,6 +18,7 @@ from __future__ import annotations
 import calendar
 import json
 import os
+import re
 import signal
 import threading
 import time
@@ -49,14 +52,40 @@ _LINE_STAMP_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _decision_lock = threading.Lock()
 
 
+def _kill_quietly(proc) -> None:
+    try:
+        proc.kill()
+    except Exception:  # noqa: BLE001 -- gone, or not ours to kill
+        pass
+
+
 def exit_server(server_pid: int) -> None:
-    """End the warm server: `os._exit` when it is this process, else a hard signal to the
-    server pid (a pool worker passes its parent). No cleanup runs; the breadcrumb is
+    """End the warm server and its whole process tree. Never raises.
+
+    The descendants are snapshotted first and killed (this process excepted), then the server
+    (a pool worker passes its parent); `os._exit` runs last and only when the caller is the
+    server or one of its descendants, so a worker's parent is signalled before the worker dies.
+    A failed snapshot falls back to the server pid alone. No cleanup runs; the breadcrumb is
     reclaimed by the next spawn."""
-    if server_pid == os.getpid():
+    me = os.getpid()
+    children: list = []
+    try:
+        import psutil
+
+        children = psutil.Process(server_pid).children(recursive=True)
+    except Exception:  # noqa: BLE001 -- NoSuchProcess / AccessDenied: pid-only kill below
+        children = []
+    in_tree = server_pid == me or any(child.pid == me for child in children)
+    for child in children:
+        if child.pid != me:
+            _kill_quietly(child)
+    if server_pid != me:
+        try:
+            os.kill(server_pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        except OSError:
+            pass
+    if in_tree:
         os._exit(0)
-        return
-    os.kill(server_pid, getattr(signal, "SIGKILL", signal.SIGTERM))
 
 
 def _stamp_epoch(name: str) -> Optional[int]:
@@ -66,14 +95,66 @@ def _stamp_epoch(name: str) -> Optional[int]:
         return None
 
 
+_IMPORT_SCAN_BYTES = 65536
+_THREAD_HEADER_SUFFIX = "(most recent call first):"
+_FRAME_RE = re.compile(r'^\s*File "([^"]*)", line \d+ in (\S+)')
+_IMPORT_WAIT_FUNCS = frozenset({"_path_stat", "find_spec"})
+
+
+def _is_import_wait_top(frame_line: str) -> bool:
+    """True when a stack's top frame sits in an importlib path stat / spec lookup or zipimport."""
+    match = _FRAME_RE.match(frame_line)
+    if match is None:
+        return False
+    filename, func = match.groups()
+    if "zipimport" in filename:
+        return True
+    if func == "_path_stat":
+        return True
+    return func == "find_spec" and "importlib" in filename
+
+
+def _has_import_wait_top(text: str) -> bool:
+    expect_top = False
+    for line in text.splitlines():
+        if expect_top:
+            expect_top = False
+            if _is_import_wait_top(line):
+                return True
+        elif line.rstrip().endswith(_THREAD_HEADER_SUFFIX):
+            expect_top = True
+    return False
+
+
 def _is_io_wait_record(path: Path) -> bool:
-    """True when the record's header carries `stall-class: io-wait`; unreadable reads as hung."""
+    """True when the record is held on the filesystem: its header carries `stall-class: io-wait`, or
+    a thread's top frame is an import wait (importlib `_path_stat` / `find_spec`, zipimport).
+    Unreadable reads as hung."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             head = [fh.readline() for _ in range(_HEADER_LINES)]
+            if any(line.strip() == IO_WAIT_HEADER for line in head):
+                return True
+            rest = fh.read(_IMPORT_SCAN_BYTES)
     except OSError:
         return False
-    return any(line.strip() == IO_WAIT_HEADER for line in head)
+    return _has_import_wait_top("".join(head) + rest)
+
+
+def _window_io_held(stall_dir: Path, since: float) -> bool:
+    """True when held (io-wait / import-wait) records outnumber hung ones stamped at or after `since`."""
+    held = hung = 0
+    for path in stall_dir.glob("*.txt"):
+        if path.name.endswith("-recycle.txt"):
+            continue
+        epoch = _stamp_epoch(path.name)
+        if epoch is None or epoch < since:
+            continue
+        if _is_io_wait_record(path):
+            held += 1
+        else:
+            hung += 1
+    return held > hung
 
 
 def _recent_dumps(stall_dir: Path, since: float, io_wait: bool = False) -> list:
@@ -162,13 +243,164 @@ def _backoff_secs(lines: list, now: float, base: float) -> float:
     return min(base * 2 ** min(n - 1, 30), max(RESTART_BACKOFF_CAP_SECS, base))
 
 
-def _gate(svc: Path, lines: list, now: float, base: float) -> tuple:
-    """`(reason, backoff_s)`: why a restart is suppressed (None when allowed) and the wait owed."""
+STALLED_SUCCESSOR_REASON = "stalled-successor"
+IO_SATURATED_REASON = "io-saturated-by-peer"
+WORKER_REPLACED_REASON = "worker-replaced"
+# A top reader below this rate is noise, not saturation.
+IO_SATURATION_MIN_MBPS = 4.0
+# Suppression for a saturated box is bounded: a chain of io-saturated suppressions this old stops
+# shielding, so a genuinely hung engine still reaches the whole-engine restart.
+IO_SATURATED_MAX_DEFER_SECS = 600.0
+_BOX_IO_KEY = "box-io-read-top"
+_BOX_IO_SCAN_BYTES = 16384
+_BOX_IO_RECORDS_SCANNED = 8
+_THREADS_MARKER = "--- threads ---"
+
+_replacer_lock = threading.Lock()
+_worker_replacer: Optional[Callable[[], bool]] = None
+
+
+def set_worker_replacer(fn: Optional[Callable[[], bool]]) -> None:
+    """Register the server's in-place replacement: `fn()` retires every held pool worker alone and
+    returns True when it retired at least one. None unregisters."""
+    global _worker_replacer
+    with _replacer_lock:
+        _worker_replacer = fn
+
+
+def _try_replace_held_worker() -> bool:
+    with _replacer_lock:
+        fn = _worker_replacer
+    if fn is None:
+        return False
+    try:
+        return bool(fn())
+    except Exception:  # noqa: BLE001 -- a failed replacement falls through to the restart
+        return False
+
+
+def _engine_pids(server_pid: int) -> frozenset:
+    pids = {server_pid, os.getpid()}
+    try:
+        import psutil
+
+        pids.update(child.pid for child in psutil.Process(server_pid).children(recursive=True))
+    except Exception:  # noqa: BLE001 -- pid-only set below
+        pass
+    return frozenset(pids)
+
+
+def _top_box_reader(path: Path) -> Optional[tuple]:
+    """`(pid, MB/s)` of the first entry of a record's `box-io-read-top<N>` header line, None when
+    the record carries none or it is unparseable."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.read(_BOX_IO_SCAN_BYTES)
+    except OSError:
+        return None
+    for line in head.split(_THREADS_MARKER, 1)[0].splitlines():
+        if not line.startswith(_BOX_IO_KEY):
+            continue
+        entry = line.partition(":")[2].split("|", 1)[0].strip()
+        _name, _sep, rest = entry.rpartition(" pid=")
+        parts = rest.split()
+        if len(parts) != 2 or not parts[1].endswith("MB/s"):
+            return None
+        try:
+            return int(parts[0]), float(parts[1][: -len("MB/s")])
+        except ValueError:
+            return None
+    return None
+
+
+def _box_io_saturated(stall_dir: Path, since: float, server_pid: int) -> bool:
+    """True when the newest window record carrying a box-side sample names a non-engine process as its
+    top reader at or above `IO_SATURATION_MIN_MBPS`: the disk is being drained by a peer, which a
+    restart cannot clear. Reads at most a few records' headers."""
+    records = []
+    for path in stall_dir.glob("*.txt"):
+        if path.name.endswith("-recycle.txt"):
+            continue
+        epoch = _stamp_epoch(path.name)
+        if epoch is not None and epoch >= since:
+            records.append((epoch, path))
+    records.sort(reverse=True)
+    for _epoch, path in records[:_BOX_IO_RECORDS_SCANNED]:
+        top = _top_box_reader(path)
+        if top is not None:
+            pid, mbps = top
+            return mbps >= IO_SATURATION_MIN_MBPS and pid not in _engine_pids(server_pid)
+    return False
+
+
+def _saturation_defer_spent(lines: list, now: float) -> bool:
+    """True when the unbroken chain of io-saturated suppressions (no restart between) began
+    `IO_SATURATED_MAX_DEFER_SECS` or more before `now`."""
+    first = None
+    for line in reversed(lines):
+        if " action=restart " in line + " ":
+            break
+        if f" reason={IO_SATURATED_REASON} " in line + " ":
+            epoch = _line_epoch(line)
+            if epoch is not None:
+                first = epoch
+    return first is not None and now - first >= IO_SATURATED_MAX_DEFER_SECS
+
+
+def _line_pid(line: str) -> Optional[int]:
+    for token in line.split():
+        if token.startswith("pid="):
+            try:
+                return int(token[4:])
+            except ValueError:
+                return None
+    return None
+
+
+def _never_progressed() -> bool:
+    """True when this process has not completed an op since boot."""
+    with _progress_lock:
+        return _progress_last is None
+
+
+def _gate(
+    svc: Path,
+    lines: list,
+    now: float,
+    base: float,
+    pid: Optional[int] = None,
+    io_held: bool = False,
+    successor_check: bool = True,
+    io_saturated: bool = False,
+) -> tuple:
+    """`(reason, backoff_s)`: why a restart is suppressed (None when allowed) and the wait owed.
+
+    `io_saturated` (a non-engine process is draining the disk) suppresses as `io-saturated-by-peer`
+    until the chain of such suppressions is `IO_SATURATED_MAX_DEFER_SECS` old.
+
+    A backoff never shields a successor (pid differs from the last restart line's) that has not
+    completed an op since boot is stalled re-importing, and its restart is `stalled-successor`
+    (`pid` must be this process: the progress stamp is per process).
+    Not when `io_held`: the window's stalls are filesystem / import waits a restart re-creates,
+    nor when `successor_check` is False (the abandoned-thread recycle, which a backoff always shields).
+    Holds still apply."""
     backoff = _backoff_secs(lines, now, base)
     reason = _hold_reason(svc, now)
+    if reason is None and io_saturated and not _saturation_defer_spent(lines, now):
+        reason = IO_SATURATED_REASON
     if reason is None and backoff > 0.0:
-        last_restart, _ = _last_line(lines, restart=True)
+        last_restart, last_line = _last_line(lines, restart=True)
         if last_restart is not None and now - last_restart < backoff:
+            last_pid = _line_pid(last_line)
+            if (
+                not io_held
+                and successor_check
+                and pid == os.getpid()
+                and last_pid is not None
+                and pid != last_pid
+                and _never_progressed()
+            ):
+                return STALLED_SUCCESSOR_REASON, backoff
             reason = "backoff"
     return reason, backoff
 
@@ -208,12 +440,26 @@ def _record_decision(
     source: Optional[str],
     lines: list,
     progress: bool = False,
+    io_held: bool = False,
+    successor_check: bool = True,
+    io_saturated: bool = False,
+    replace_held: bool = False,
 ) -> str:
-    """Apply the progress / hold / backoff gate to `lines` and append the one line it earns; caller holds the lock."""
+    """Apply the progress / hold / backoff gate to `lines` and append the one line it earns; caller holds the lock.
+
+    `replace_held`: a restart the gate would allow, while a peer worker is still completing ops,
+    first tries the registered in-place replacement (`set_worker_replacer`) and, when it retired a
+    worker, is suppressed as `worker-replaced`."""
     log = svc / HANG_RESTART_LOG_FILENAME
-    reason, backoff = _gate(svc, lines, now, base)
+    reason, backoff = _gate(svc, lines, now, base, pid, io_held, successor_check, io_saturated)
     if progress:
         reason = "progress"
+    if reason is None and replace_held and progressed_within(window or HANG_WINDOW_SECS):
+        if _try_replace_held_worker():
+            reason = WORKER_REPLACED_REASON
+    if reason == STALLED_SUCCESSOR_REASON:
+        _append(log, now, pid, f"restart reason={reason}", count, window, dumps, backoff, source)
+        return "restart"
     if reason is not None:
         last_sup, line = _last_line(lines, restart=False)
         if last_sup is None or now - last_sup >= window or f"reason={reason}" not in line:
@@ -237,6 +483,7 @@ def decide(svc_dir, *, server_pid: int, source: str, now: Optional[float] = None
 
 _DECISION_DEADLINE_SECS = 1.0
 _stall_marks: dict = {}
+_first_suppress: dict = {}
 _stall_marks_lock = threading.Lock()
 
 
@@ -290,7 +537,12 @@ def _disk_decision(
     svc = stall_dir.parent
     with _decision_lock:
         lines = _tail_lines(svc / HANG_RESTART_LOG_FILENAME)
-        return _record_decision(svc, pid, now, count, window, min_interval, [], None, lines, progress)
+        io_held = _window_io_held(stall_dir, now - window)
+        io_saturated = _box_io_saturated(stall_dir, now - window, pid)
+        return _record_decision(
+            svc, pid, now, count, window, min_interval, [], None, lines, progress, io_held,
+            io_saturated=io_saturated, replace_held=True,
+        )
 
 
 def note_stall(
@@ -308,8 +560,11 @@ def note_stall(
     `maybe_restart` counts stall records on disk, so it cannot see a stall of the very
     filesystem it reads. At `threshold` marks inside `window` (per `stall_dir`), the
     hold / backoff / log leg runs on a helper thread bounded by `deadline`; a hold
-    or backoff suppresses, an unfinished leg (stalled disk) restarts anyway.
-    Returns `"restart"`, `"suppressed"` or None. Never raises.
+    or backoff suppresses. An unfinished leg (a disk too stalled to read the hold file) suppresses
+    only while this `stall_dir`'s first finished suppression, held in memory, is younger than
+    `IO_SATURATED_MAX_DEFER_SECS`; with none, or past it, it restarts, so a disk that never
+    answers cannot wedge the engine forever.
+    Returns `"suppressed"`, `"restart"` (a finished leg that allowed it) or None. Never raises.
     """
     try:
         stall_dir = Path(stall_dir)
@@ -337,8 +592,20 @@ def note_stall(
         helper = threading.Thread(target=_leg, name="hang-restart-decision", daemon=True)
         helper.start()
         helper.join(deadline)
-        if progress or (verdict and verdict[0] == "suppressed"):
+        key = str(stall_dir)
+        if progress:
             return "suppressed"
+        if verdict and verdict[0] == "suppressed":
+            with _stall_marks_lock:
+                _first_suppress.setdefault(key, time.monotonic())
+            return "suppressed"
+        if not verdict:
+            with _stall_marks_lock:
+                first = _first_suppress.get(key)
+            if first is not None and time.monotonic() - first < IO_SATURATED_MAX_DEFER_SECS:
+                return "suppressed"
+        with _stall_marks_lock:
+            _first_suppress.pop(key, None)
         (exit_fn or exit_server)(pid)
         return "restart"
     except Exception:  # noqa: BLE001 -- the dump path never raises
@@ -385,7 +652,8 @@ def maybe_restart_on_abandoned(
                     lines = _tail_lines(svc / HANG_RESTART_LOG_FILENAME)
                     verdict.append(
                         _record_decision(
-                            svc, pid, time.time(), count, 0.0, min_interval, [], ABANDONED_SOURCE, lines
+                            svc, pid, time.time(), count, 0.0, min_interval, [], ABANDONED_SOURCE, lines,
+                            successor_check=False,
                         )
                     )
             except Exception:  # noqa: BLE001 -- an unreadable hold reads as no hold
@@ -399,6 +667,74 @@ def maybe_restart_on_abandoned(
         (exit_fn or exit_server)(pid)
         return "restart"
     except Exception:  # noqa: BLE001 -- the abandon path never raises
+        return None
+
+
+# A claim race answers one op undispatched while a sibling worker holds the claim, so busy_workers
+# is above 0 or the next op is served. Consecutive undispatched answers with no worker busy cannot
+# be a race: the pool is wedged. Eight in a row is a pool answering nothing else.
+UNDISPATCHED_WEDGE_THRESHOLD = 8
+UNDISPATCHED_SOURCE = "undispatched-wedge"
+UNDISPATCHED_OUTCOME = "undispatched"
+_undispatched_streaks: dict = {}
+_undispatched_lock = threading.Lock()
+
+
+def note_undispatched(
+    svc_dir,
+    *,
+    server_pid: Optional[int] = None,
+    busy_workers: int,
+    outcome: Optional[str],
+    exit_fn: Optional[Callable[[int], None]] = None,
+    threshold: int = UNDISPATCHED_WEDGE_THRESHOLD,
+    min_interval: float = RESTART_MIN_INTERVAL_SECS,
+    deadline: float = _DECISION_DEADLINE_SECS,
+) -> Optional[str]:
+    """Count a served op answered undispatched with no busy worker; at `threshold` in a row, decide a restart.
+
+    O(1) and in memory below threshold (no filesystem). Any other outcome, or `busy_workers > 0`,
+    resets the streak. Never resets on `progressed_within`: the pool settles an undispatched
+    answer through `note_progress`, so progress is the wedge's own signature. At threshold the
+    hold / backoff / log leg (`_gate` backoff, source `undispatched-wedge`) runs on a helper thread
+    bounded by `deadline`; a hold or backoff suppresses, an unfinished leg restarts anyway.
+    Returns `"restart"`, `"suppressed"` or None (below threshold). Never raises.
+    """
+    try:
+        key = str(svc_dir)
+        with _undispatched_lock:
+            if outcome != UNDISPATCHED_OUTCOME or busy_workers > 0:
+                _undispatched_streaks.pop(key, None)
+                return None
+            count = _undispatched_streaks.get(key, 0) + 1
+            if count < threshold:
+                _undispatched_streaks[key] = count
+                return None
+            _undispatched_streaks.pop(key, None)
+        pid = os.getpid() if server_pid is None else server_pid
+        svc = Path(svc_dir)
+        verdict: list = []
+
+        def _leg() -> None:
+            try:
+                with _decision_lock:
+                    lines = _tail_lines(svc / HANG_RESTART_LOG_FILENAME)
+                    verdict.append(
+                        _record_decision(
+                            svc, pid, time.time(), count, 0.0, min_interval, [], UNDISPATCHED_SOURCE, lines
+                        )
+                    )
+            except Exception:  # noqa: BLE001 -- an unreadable hold reads as no hold
+                verdict.append("restart")
+
+        helper = threading.Thread(target=_leg, name="hang-restart-undispatched", daemon=True)
+        helper.start()
+        helper.join(deadline)
+        if verdict and verdict[0] == "suppressed":
+            return "suppressed"
+        (exit_fn or exit_server)(pid)
+        return "restart"
+    except Exception:  # noqa: BLE001 -- the served-row path never raises
         return None
 
 
@@ -456,7 +792,11 @@ def maybe_restart(
             if progress:
                 with _stall_marks_lock:
                     progress = _progress_excuses(str(stall_dir), time.monotonic(), window, PROGRESS_GRACE_SECS)
-            verdict = _record_decision(svc, pid, current, len(dumps), window, min_interval, dumps, None, lines, progress)
+            io_saturated = _box_io_saturated(stall_dir, since, pid)
+            verdict = _record_decision(
+                svc, pid, current, len(dumps), window, min_interval, dumps, None, lines, progress,
+                io_saturated=io_saturated, replace_held=True,
+            )
         if verdict == "suppressed":
             return "suppressed"
         (exit_fn or exit_server)(pid)

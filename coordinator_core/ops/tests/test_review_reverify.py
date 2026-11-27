@@ -417,6 +417,7 @@ def _commit_tracked(root, monkeypatch, rels):
     ).stdout.strip()
     _set_base(root, base)
     monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("spawn")))
+    monkeypatch.setattr(rr, "_land_findings", lambda *_a, **_k: ([], []))
     return base
 
 
@@ -634,6 +635,7 @@ def _base_tree(monkeypatch, root, base_bytes):
     monkeypatch.setattr(rr.git_state, "read_commit", lambda _r, s: type("C", (), {"tree": "t" * 40})() if s == sha else None)
     monkeypatch.setattr(rr, "_leaves", lambda _r, _t, rels: {p: (0o100644, by_path[p]) for p in rels if p in by_path})
     monkeypatch.setattr(rr, "_blob", lambda _r, entry: blobs[entry[1]])
+    monkeypatch.setattr(rr, "_land_findings", lambda *_a, **_k: ([], []))
     return sha
 
 

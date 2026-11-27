@@ -54,7 +54,7 @@ from collections import OrderedDict
 from collections.abc import Sequence
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Callable, NamedTuple, Optional
+from typing import Any, Callable, NamedTuple, Optional
 
 from coordinator_core.bounded_io import run_bounded
 from coordinator_core.git import call_io_scope, object_store_lock, pack_deletion_pause
@@ -158,6 +158,11 @@ def object_batch():
         yield
     finally:
         _BATCH.state = None
+
+
+def batch_open() -> bool:
+    """True while an `object_batch` is open on this thread."""
+    return getattr(_BATCH, "state", None) is not None
 
 
 def flush_object_batch() -> None:
@@ -361,11 +366,24 @@ def _flush_pack(gitdir: Path, pending: dict) -> None:
     home) makes this flush a plain pack of `pending` that deletes nothing."""
     try:
         with _fold_permit() as may_fold:
+            if not may_fold and _pack_count_past_force(gitdir):
+                for kind, payload in pending.values():
+                    write_object(gitdir, kind, payload)
+                return
             with object_store_lock.hold(Path(gitdir), wait_s=object_store_lock.HOT_WAIT_S, holder_label="git_objects._flush_pack"):
                 _flush_pack_locked(gitdir, pending, may_fold)
     except object_store_lock.ObjectStoreBusy:
         for kind, payload in pending.values():
             write_object(gitdir, kind, payload)
+
+
+def _pack_count_past_force(gitdir: Path) -> bool:
+    """True when the cached pack listing holds more than `store_hygiene.PACK_COUNT_FORCE` packs.
+    A flush that may not fold then writes loose rather than mint another pack; nothing is deleted.
+    Trap: the loose count is `len(pending)`, not capped by `_LOOSE_BATCH_MAX`."""
+    from coordinator_core.git import store_hygiene
+
+    return len(_pack_listing(Path(gitdir), revalidate=False)) > store_hygiene.PACK_COUNT_FORCE
 
 
 @contextmanager
@@ -574,10 +592,15 @@ class PackReadStalled(PackReadDeadline):
     """`retry_past_stall` spent its one retry and the read still hit the wall: a persisting storage stall."""
 
 
-# One cumulative wall per outermost object read; it must stay below the warm server's
-# STALL_DUMP_SECS (10s), and git must not import coordinator_core.warm, so a test pins it.
+# Base wall per attempt of an outermost object read; the base must stay below the warm server's
+# STALL_DUMP_SECS (10s), and git must not import coordinator_core.warm, so a test pins it. The
+# sized wall (`_sized_wall`) and the one inner retry exceed that at several hundred packs.
 PACK_READ_DEADLINE_SECS = 4.0
+# Added to the base wall once per `.idx` in the cached pack listing: one cold read probes every
+# index, and observed probes run 0.02-0.118s each, so the wall must cover the sum.
+PACK_READ_PER_IDX_SECS = 0.01
 _pack_clock = time.monotonic
+_NO_INNER_RETRY: "contextvars.ContextVar[bool]" = contextvars.ContextVar("pack_no_inner_retry", default=False)
 _PACK_DEADLINE = threading.local()
 _PACK_WORKER = threading.local()
 _PACK_STALLED = object()
@@ -1467,7 +1490,8 @@ def _read_pack_object_deadlined(
     try:
         for attempt in (0, 1):
             now = _pack_clock()
-            _PACK_DEADLINE.at = now + PACK_READ_DEADLINE_SECS if budget is None else min(budget, now + PACK_READ_DEADLINE_SECS)
+            wall = _sized_wall(common_dir)
+            _PACK_DEADLINE.at = now + wall if budget is None else min(budget, now + wall)
             try:
                 return _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
             except PackReadDeadline:
@@ -1480,7 +1504,7 @@ def _read_pack_object_deadlined(
         _PACK_DEADLINE.at = None
 
 
-def _under_read_wall(kind: str, common_dir: Path, sha: str, fn):
+def _under_read_wall(kind: str, common_dir: Path, sha: str, fn) -> Any:
     """Run `fn()` under the one hard wall: a kernel-blocked open, listing or page fault cannot
     reach the cooperative `_PACK_DEADLINE` check, so the caller leaves a stalled drive's worker
     behind and gets `PackReadDeadline`. The outermost caller owns the wall; any read nested in
@@ -1493,71 +1517,115 @@ def _under_read_wall(kind: str, common_dir: Path, sha: str, fn):
             f"{PACK_READ_STALLED_ADVISORY}: pack reads under {common_dir} are failing fast after a stall"
         )
     budget = _READ_BUDGET.get()
-    wall = PACK_READ_DEADLINE_SECS
+    full = _sized_wall(common_dir)
+    wall = full
     if budget is not None:
         remaining = budget - _pack_clock()
         if remaining <= 0:
             raise PackReadDeadline(f"read budget spent before {kind} of {sha}")
         wall = min(remaining, wall)
-    probes: list = []
-    probe_token = _PACK_PROBES.set(probes)
-    try:
-        ctx = contextvars.copy_context()
-    finally:
-        _PACK_PROBES.reset(probe_token)
-
-    def _work():
-        _PACK_WORKER.inside = True
-        try:
-            return ctx.run(fn)
-        finally:
-            _PACK_WORKER.inside = False
-
+    attempts = 1 if _NO_INNER_RETRY.get() else 2
+    all_probes: list = []
+    out = _PACK_STALLED
     # Keyed per sha: run_bounded serialises callers sharing a key, and pool workers read one
     # repo's packs concurrently. The per-repo cooldown above is what stops a stalled drive
-    # costing every distinct sha its own full wait.
+    # costing every distinct sha its own full wait. The retry takes a fresh key: the first
+    # attempt's overrun worker still holds its own.
+    base_key = f"{kind}:{ckey}:{sha}"
+    for attempt in range(attempts):
+        if attempt:
+            wall = full
+            if budget is not None:
+                remaining = budget - _pack_clock()
+                if remaining <= 0:
+                    raise PackReadDeadline(f"read budget exhausted during {kind} of {sha}")
+                wall = min(remaining, wall)
+        probes: list = []
+        all_probes.append(probes)
+        probe_token = _PACK_PROBES.set(probes)
+        try:
+            ctx = contextvars.copy_context()
+        finally:
+            _PACK_PROBES.reset(probe_token)
+
+        def _work(ctx=ctx) -> Any:
+            _PACK_WORKER.inside = True
+            try:
+                return ctx.run(fn)
+            finally:
+                _PACK_WORKER.inside = False
+
+        try:
+            out = run_bounded(
+                base_key if not attempt else base_key + ":retry", _work, deadline=wall, default=_PACK_STALLED
+            )
+        except PackReadDeadline as exc:
+            if not probes:
+                raise
+            report = _probe_report(probes)
+            _log.warning("pack read deadline under %s: %s", common_dir, report)
+            raise PackReadDeadline(f"{exc}; {report}") from exc
+        if out is not _PACK_STALLED:
+            return out
+        if budget is not None and wall < full:
+            raise PackReadDeadline(f"read budget exhausted during {kind} of {sha} after {wall:.3f}s")
+    _PACK_STALL_UNTIL[ckey] = _pack_clock() + PACK_STALL_COOLDOWN_SECS
+    merged = [row for part in all_probes for row in part]
+    detail = f"; {_probe_report(merged)}" if merged else ""
+    shown = round(full, 3)
+    _log.warning("pack read stalled under %s after %ss x%d%s", common_dir, shown, attempts, detail)
+    raise PackReadDeadline(
+        f"{PACK_READ_STALLED_ADVISORY}: pack read under {common_dir} exceeded "
+        f"{shown}s (storage stalled){_stall_pack_facts(common_dir)}{detail}"
+    )
+
+
+def _stall_pack_facts(common_dir: Path) -> str:
+    """`; packs=N` from the cached listing plus, when `multi-pack-index.lock` exists, its age: a stale
+    lock (no git holder) wedges every geometric repack, so packs pile up until reads stall.
+    One `os.stat`, called only on the raise path."""
+    cached = _PACK_LISTING_CACHE.get(str(common_dir))
+    out = f"; packs={len(cached[1])}" if cached is not None else ""
     try:
-        out = run_bounded(f"{kind}:{ckey}:{sha}", _work, deadline=wall, default=_PACK_STALLED)
-    except PackReadDeadline as exc:
-        if not probes:
-            raise
-        report = _probe_report(probes)
-        _log.warning("pack read deadline under %s: %s", common_dir, report)
-        raise PackReadDeadline(f"{exc}; {report}") from exc
-    if out is _PACK_STALLED and budget is not None and wall < PACK_READ_DEADLINE_SECS:
-        raise PackReadDeadline(f"read budget exhausted during {kind} of {sha} after {wall:.3f}s")
-    if out is _PACK_STALLED:
-        _PACK_STALL_UNTIL[ckey] = _pack_clock() + PACK_STALL_COOLDOWN_SECS
-        detail = f"; {_probe_report(probes)}" if probes else ""
-        _log.warning(
-            "pack read stalled under %s after %ss%s", common_dir, PACK_READ_DEADLINE_SECS, detail
-        )
-        raise PackReadDeadline(
-            f"{PACK_READ_STALLED_ADVISORY}: pack read under {common_dir} exceeded "
-            f"{PACK_READ_DEADLINE_SECS}s (storage stalled){detail}"
-        )
-    return out
+        age = time.time() - (common_dir / "objects" / "pack" / "multi-pack-index.lock").stat().st_mtime
+    except OSError:
+        return out
+    return f"{out}; multi-pack-index.lock age={max(age, 0.0):.0f}s (stale lock blocks repack: remove if no git runs)"
 
 
-def retry_past_stall(common_dir: Path, fn):
+def _sized_wall(common_dir: Path) -> float:
+    """`PACK_READ_DEADLINE_SECS` plus `PACK_READ_PER_IDX_SECS` per `.idx` in the cached pack listing;
+    a dict lookup, no listdir, 0 for a repo not yet listed."""
+    cached = _PACK_LISTING_CACHE.get(str(common_dir))
+    return PACK_READ_DEADLINE_SECS + (len(cached[1]) if cached is not None else 0) * PACK_READ_PER_IDX_SECS
+
+
+def retry_past_stall(common_dir: Path, fn) -> Any:
     """Run read-only `fn()`; on `PackReadDeadline` run it once more with the stall latch bypassed for
     `common_dir` (one fresh wall, no sleep). A second deadline raises `PackReadStalled`. The latch is
-    never cleared, so other callers keep failing fast. Never wrap a mutating call."""
+    never cleared, so other callers keep failing fast. Never wrap a mutating call.
+
+    Trap: `_under_read_wall` retries a stalled wall once on its own; inside this function that retry
+    is off (`_NO_INNER_RETRY`), so a read here spends at most two walls, never four."""
+    no_inner = _NO_INNER_RETRY.set(True)
     try:
-        return fn()
-    except PackReadStalled:
-        raise
-    except PackReadDeadline:
-        pass
-    token = _PACK_LATCH_BYPASS.set(_PACK_LATCH_BYPASS.get() | {str(common_dir)})
-    try:
-        return fn()
-    except PackReadStalled:
-        raise
-    except PackReadDeadline as exc:
-        raise PackReadStalled(str(exc)) from exc
+        try:
+            return fn()
+        except PackReadStalled:
+            raise
+        except PackReadDeadline:
+            pass
+        token = _PACK_LATCH_BYPASS.set(_PACK_LATCH_BYPASS.get() | {str(common_dir)})
+        try:
+            return fn()
+        except PackReadStalled:
+            raise
+        except PackReadDeadline as exc:
+            raise PackReadStalled(str(exc)) from exc
+        finally:
+            _PACK_LATCH_BYPASS.reset(token)
     finally:
-        _PACK_LATCH_BYPASS.reset(token)
+        _NO_INNER_RETRY.reset(no_inner)
 
 
 def _search_packs_for_sha(

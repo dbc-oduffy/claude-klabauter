@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Optional
 
-from coordinator_core.git import git_state
+from coordinator_core.git import call_io_scope, git_state
 from coordinator_core.ops.dispatch_emit import landing_integrity
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
@@ -104,22 +104,30 @@ def is_stale(worktree_root, run_id: Optional[str], manifest: Optional[Mapping]) 
     return _stale_reason(landing_integrity.test_leg_record(root, run_id), root, manifest)
 
 
-def halt_stamp(record_dir, manifest: Optional[Mapping] = None) -> dict:
+_UNREAD = object()
+
+
+def halt_stamp(record_dir, manifest: Optional[Mapping] = None, *, record=_UNREAD) -> dict:
     """`{measured_at, head_sha, current_head, stale}` for the leg in `record_dir` (`<root>/<RECORD_DIR_ROOT>/<run_id>`).
 
-    One leg read; a missing leg gives null stamps and `stale: True`. A record dir outside that layout reads as no leg.
+    One leg read, or none when the caller passes the `record` it already read (a dict, or None for no leg);
+    a missing leg gives null stamps and `stale: True`. A record dir outside that layout reads as no leg.
     A `manifest` of None is read from the record dir's `manifest.json` (unreadable reads as no manifest), so the
     own-diff mtime check applies to a halt payload built without one.
     """
     record_dir = Path(record_dir)
     if manifest is None:
         try:
-            manifest = json.loads((record_dir / "manifest.json").read_text(encoding="utf-8"))
+            raw = call_io_scope.read_bytes(record_dir / "manifest.json")
+            manifest = json.loads(raw.decode("utf-8")) if raw is not None else None
         except (OSError, ValueError):
             manifest = None
     depth = len(Path(RECORD_DIR_ROOT).parts)
     root = record_dir.parents[depth] if len(record_dir.parents) > depth else None
-    record = landing_integrity.test_leg_record(root, record_dir.name) if root is not None else None
+    if root is None:
+        record = None
+    elif record is _UNREAD:
+        record = landing_integrity.test_leg_record(root, record_dir.name)
     stamped = leg_stamp(record)
     current = git_state.head_sha(root) if root is not None else None
     reason = _stale_reason(record, root, manifest) if root is not None else "no test-leg.json for the run"

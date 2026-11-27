@@ -417,6 +417,18 @@ def _overmatched(anchor: dict, result: Any) -> bool:
     return all(got >= want for want, got in pairs) and any(got > want for want, got in pairs)
 
 
+def _elision_note(anchor: dict) -> Optional[str]:
+    """The malformed-check note when the anchor's command holds an elided `...` pattern, else None.
+    A broke check on such a pattern says the check is mis-written, not that the claim is false."""
+    pattern = _anchor_check.elided_pattern(str((anchor.get("check") or {}).get("command") or ""))
+    if not pattern:
+        return None
+    return (
+        f"malformed check: pattern {pattern} elides with '...' (grep reads three characters); "
+        "rewrite as grep -c -F or .*"
+    )
+
+
 def _spine_writes(spine_rows: Any) -> set[str]:
     """Normalised paths any spine row declares in ``writes``."""
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as index
@@ -461,11 +473,16 @@ def anchor_verdicts(
     ``baseline_ref``: precedence is a git-grep stage's own ref > claim ``baseline_ref`` > ``base_ref``
     > working tree. All refs are read in one git spawn; an unreadable ``base_ref`` leaves source
     "none" with ``observed`` naming it. Under ``base_ref`` the tree-drift remedy ``_reanchor`` is
-    skipped. No ``base_ref`` and no git-grep stage: tree read, zero spawns.
+    skipped, so a caller that always passes a ref never re-anchors an unclaimed anchor. No
+    ``base_ref`` and no git-grep stage: tree read, zero spawns.
     source: "row" | "carry" | "engine-check" | "none"; verdict is None only when source is "none".
     Precedence: passed row > live carry row > engine check (MATCH -> RESOLVES,
     MISMATCH -> CONTRADICTED) > none. A row or carry verdict other than RESOLVES yields to a
-    met engine check (the declared check holds, so the premise is confirmed). NOT_EVALUABLE leaves source "none". A MISMATCH on a file the
+    met engine check (the declared check holds, so the premise is confirmed). A base-governed
+    engine check that MISMATCHes at ``base_ref`` while the same anchor MATCHes in the working tree
+    is UNRESOLVED, source "engine-check", ``observed`` opening ``UNCOMMITTED_NOT_LANDED`` (dirt is
+    never landed); a row or carry RESOLVES takes the same downgrade, so under ``base_ref`` its
+    engine check runs too, from the same blob batch. NOT_EVALUABLE leaves source "none". A MISMATCH on a file the
     plan's own run wrote that held at the plan's baseline_ref is RESOLVES with ``observed``
     opening ``REANCHORED`` (source stays "engine-check": the reply schema enumerates sources). A row or
     carry CONTRADICTED on such a file takes the same regrade and keeps its source."""
@@ -480,13 +497,30 @@ def anchor_verdicts(
             cache.append(_blobs_for(anchors, fm, repo_root, base_ref))
         return _evaluate(anchor, fm, repo_root, base_ref, cache[0])
 
+    def tree_only(anchor, result) -> Optional[str]:
+        """The uncommitted note when ``result`` (a base-governed engine check) broke at ``base_ref``
+        yet the same anchor holds in the working tree; else None. No spawn."""
+        if not (base_ref and result.outcome == "broke") or claimed_ref(anchor.get("claim"), fm):
+            return None
+        if anchor_lane.evaluate(anchor, repo_root).outcome != "held":
+            return None
+        from coordinator_core.ops.dispatch_emit.ask_contract import UNCOMMITTED_NOT_LANDED
+
+        return f"{UNCOMMITTED_NOT_LANDED}: holds in the working tree, not at {base_ref}"
+
     for anchor in anchors:
         verdict, source = _verdict_for(anchor["id"], rows or [], carry_rows or [], live, known)
         observed = ""
-        if verdict not in (None, "RESOLVES") and repo_root is not None:
+        if verdict == "RESOLVES" and base_ref and repo_root is not None and not claimed_ref(anchor.get("claim"), fm):
+            note = tree_only(anchor, evaluate(anchor))
+            if note:
+                verdict, source, observed = "UNRESOLVED", "engine-check", note
+        elif verdict not in (None, "RESOLVES") and repo_root is not None:
             result = evaluate(anchor)
             if result.outcome == "held":
                 verdict, source, observed = "RESOLVES", "engine-check", result.observed or ""
+            elif verdict == "CONTRADICTED" and _elision_note(anchor):
+                verdict, source, observed = None, "none", _elision_note(anchor)
             elif verdict == "CONTRADICTED" and not (base_ref and not claimed_ref(anchor.get("claim"), fm)):  # same gate as the engine branch below
                 moved = _reanchor(anchor, plan_text, repo_root)
                 if moved is not None:
@@ -495,7 +529,13 @@ def anchor_verdicts(
             result = evaluate(anchor)
             observed = result.observed or ""
             engine = _ENGINE_VERDICT.get(result.outcome)
-            if engine == "CONTRADICTED" and _overmatched(anchor, result):
+            note = tree_only(anchor, result)
+            elided = _elision_note(anchor) if engine == "CONTRADICTED" else None
+            if note:
+                verdict, source, observed, engine = "UNRESOLVED", "engine-check", note, None
+            elif elided:
+                engine, observed = None, elided
+            elif engine == "CONTRADICTED" and _overmatched(anchor, result):
                 engine = None
                 observed = (
                     f"check over-matched (observed {' then '.join(observed.split())}, expected "

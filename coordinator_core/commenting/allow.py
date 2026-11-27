@@ -13,8 +13,8 @@ _TRIPWIRE_RE = re.compile(r"^(?:tripwire:\s*)?[A-Z0-9]+(?:-[A-Z0-9]+){2,}[.:]?$"
 _ENGINE_GAP_RE = re.compile(r"^engine-gap:")
 _DR_RE = re.compile(r"\bDR-\d+\b")
 _GENERATED_RE = re.compile(
-    r"@generated|auto-?generated|do not edit|code generated|generated (?:by|from|file)",
-    re.IGNORECASE,
+    r"^[ \t]*(?:#+|/{2,}|/\*+|\*+)[ \t]*.*?(?:@generated|auto-?generated|do not edit|code generated)",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 

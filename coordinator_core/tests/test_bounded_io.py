@@ -82,6 +82,19 @@ def test_stalled_key_drops_without_running_fn_then_recovers():
     assert bounded_io.run_bounded("k-rec", lambda: 5, deadline=2.0, default=-1) == 5
 
 
+def test_is_stalled_true_while_the_overrun_worker_lives_then_false():
+    release = threading.Event()
+    assert bounded_io.is_stalled("k-acc") is False
+    bounded_io.run_bounded("k-acc", lambda: release.wait(10), deadline=0.05, default=None)
+    try:
+        assert bounded_io.is_stalled("k-acc") is True
+    finally:
+        release.set()
+        for t in [t for t in threading.enumerate() if t.name == "bounded-io:k-acc"]:
+            t.join(2.0)
+    assert bounded_io.is_stalled("k-acc") is False
+
+
 @pytest.fixture()
 def _clean_open_paths():
     bounded_io._open_paths.clear()

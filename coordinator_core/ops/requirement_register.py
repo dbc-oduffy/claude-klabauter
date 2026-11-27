@@ -668,6 +668,24 @@ def ship_text(sizing_text: str) -> tuple[Optional[str], Optional[str]]:
     return replace_fm_field(sizing_text, "status", _SHIPPED), None
 
 
+def open_register_rows(repo_root: Path, sizing_rel: str) -> list[dict[str, Any]]:
+    """`{id, status, reason}` for every register row of the sizing that `ship_refusal` would
+    refuse on (`_row_block`); empty when the sizing has no register or every row is settled.
+    Reads the effective sizing; raises `SizingFireRefused` when the sizing does not resolve."""
+    from coordinator_core.ops.dispatch_emit.sizing_fire import load_sizing_effective
+
+    doc = load_sizing_effective(Path(repo_root), sizing_rel)
+    register = _parse_register(doc.get(REGISTER_KEY))
+    if register is None:
+        return []
+    owed: list[dict[str, Any]] = []
+    for row in register.rows:
+        reason = _row_block(row)
+        if reason:
+            owed.append({"id": row.get(ROW_ID), "status": row.get(ROW_STATUS), "reason": reason})
+    return owed
+
+
 def _iso_utc(moment: datetime) -> str:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
@@ -749,6 +767,54 @@ def apply_verdicts(
     return write_register_text(
         sizing_text, {**register.raw, ROWS_KEY: register.rows}, now
     )
+
+
+def unreconciled_rows(
+    register: Optional[Register], ledger_met_ids: Sequence[Any] = ()
+) -> list[dict[str, Any]]:
+    """`{id, status, reason, claimed_by, ledger_met}` for every row `ship_refusal` would refuse on,
+    claimed or not; `ledger_met` is True when the ledger judged the row met yet it still blocks
+    (unwired, or hand-built evidence). Empty when `register` is None or every row is settled."""
+    if register is None:
+        return []
+    met = {str(i) for i in ledger_met_ids}
+    owed: list[dict[str, Any]] = []
+    for row in register.rows:
+        reason = _row_block(row)
+        if reason:
+            owed.append({
+                ROW_ID: row.get(ROW_ID), ROW_STATUS: row.get(ROW_STATUS), "reason": reason,
+                ROW_CLAIMED_BY: claimants(row), "ledger_met": str(row.get(ROW_ID)) in met,
+            })
+    return owed
+
+
+def reconcile_open_rows(
+    sizing_text: str,
+    judge_rows: Sequence[Mapping[str, Any]],
+    plan_path: str,
+    sha: str,
+    now: datetime,
+    claim_ids: Sequence[Any] = (),
+) -> tuple[str, list[dict[str, Any]]]:
+    """`(new_text, unreconciled)`: `apply_verdicts` widened to every open/partial/unwired row of the
+    sizing the ledger judged `met`, whoever claims it (`claimed_by` [], or an earlier run's), so a
+    delivered row is stamped met, wired and `<plan>@<sha>` instead of staying open. `unreconciled`
+    is `unreconciled_rows` of the result: the rows still refusing a ship, named for a closure
+    verdict rather than skipped. A sizing with no register returns `(sizing_text, [])`."""
+    register = read_register(sizing_text)
+    if register is None:
+        return sizing_text, []
+    met_ids = [
+        str(j.get(ROW_ID)) for j in judge_rows
+        if isinstance(j, Mapping) and j.get(ROW_STATUS) == STATUS_MET
+    ]
+    reach = [
+        str(row.get(ROW_ID)) for row in register.rows
+        if str(row.get(ROW_ID)) in met_ids and _row_block(row)
+    ]
+    new = apply_verdicts(sizing_text, judge_rows, plan_path, sha, now, [*claim_ids, *reach])
+    return new, unreconciled_rows(read_register(new), met_ids)
 
 
 def write_register_text(sizing_text: str, block: Mapping[str, Any], now: datetime) -> str:
@@ -957,12 +1023,100 @@ def uncovered_turns(
         return []
 
 
-def unrelated_turn_errors(doc: Mapping[str, Any], register: Mapping[str, Any]) -> list[str]:
-    """Defects in `register`'s `unrelated_turns` against the turns `doc` embeds."""
+# Shortest quoted span that proves a reason read the turn; a shorter one is a stray word.
+UNRELATED_QUOTE_MIN_CHARS = 12
+_AGENT_MESSAGE_BLOCK_RE = re.compile(r"<agent-message\b.*?</agent-message>", re.DOTALL)
+_QUOTED_SPAN_RE = re.compile(r'"([^"]*)"')
+_RULING_TOKEN_RE = re.compile(r"\bruling:([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
+_RULE_OUT_TOKEN_RE = re.compile(r"\brule-out:T(\d+)\b")
+
+
+def _pm_worded(text: str) -> bool:
+    """True when `text` holds words outside `<agent-message>` blocks."""
+    return bool(_norm(_AGENT_MESSAGE_BLOCK_RE.sub("", text)))
+
+
+def _unrelated_entries(register: Any) -> list[Any]:
+    entries = register.get(UNRELATED_TURNS_KEY) if isinstance(register, Mapping) else register
+    return entries if isinstance(entries, list) else []
+
+
+def unrelated_turn_backing(
+    doc: Mapping[str, Any], entry: Mapping[str, Any], rulings: Optional[Mapping[str, str]]
+) -> Optional[str]:
+    """The defect in an `unrelated_turns` `entry` for a PM-worded embedded turn, else None.
+
+    The `reason` must quote at least `UNRELATED_QUOTE_MIN_CHARS` characters found in the turn's
+    text and carry exactly one backing token: `ruling:<id>` (an id `rulings` maps to `accepted`;
+    `rulings` None means no register was readable) or `rule-out:T<n>` (a different embedded
+    PM-worded turn). A turn with no PM-worded segment is exempt.
+    """
+    turn = entry.get("turn")
+    embedded = embedded_turns(doc)
+    text = embedded.get(turn) if isinstance(turn, int) else None
+    if text is None:
+        return f"unrelated_turns names turn {turn}, which is not embedded"
+    if not _pm_worded(text):
+        return None
+    reason = str(entry.get("reason") or "")
+    spans = [_norm(s) for s in _QUOTED_SPAN_RE.findall(reason)]
+    if not any(len(s) >= UNRELATED_QUOTE_MIN_CHARS and s in text for s in spans):
+        return (
+            f"unrelated_turns turn {turn} is a PM turn: its reason must quote at least "
+            f"{UNRELATED_QUOTE_MIN_CHARS} characters of the turn's own text"
+        )
+    tokens = _QUOTED_SPAN_RE.sub("", reason)
+    ruling_ids = _RULING_TOKEN_RE.findall(tokens)
+    rule_outs = _RULE_OUT_TOKEN_RE.findall(tokens)
+    if len(ruling_ids) + len(rule_outs) != 1:
+        return (
+            f"unrelated_turns turn {turn} needs exactly one backing token in its reason: "
+            "`ruling:<id>` or `rule-out:T<n>`"
+        )
+    if ruling_ids:
+        if rulings is None:
+            return f"unrelated_turns turn {turn} cites ruling:{ruling_ids[0]} but no root was given to read the ruling register"
+        status = rulings.get(ruling_ids[0])
+        if status is None:
+            return f"unrelated_turns turn {turn} cites ruling:{ruling_ids[0]}, which is not in the ruling register"
+        if status != "accepted":
+            return f"unrelated_turns turn {turn} cites ruling:{ruling_ids[0]}, which is {status}, not accepted"
+        return None
+    out = int(rule_outs[0])
+    if out == turn:
+        return f"unrelated_turns turn {turn} names itself as its rule-out turn"
+    if out not in embedded or not _pm_worded(embedded[out]):
+        return f"unrelated_turns turn {turn} names rule-out:T{out}, which is not an embedded PM turn"
+    return None
+
+
+def unrelated_turn_errors(
+    doc: Mapping[str, Any],
+    register: Mapping[str, Any],
+    *,
+    root: Optional[Path | str] = None,
+    prior: Any = None,
+) -> list[str]:
+    """Defects in `register`'s `unrelated_turns` against the turns `doc` embeds.
+
+    `root` is the worktree root whose `state/pm-rulings/` backs a `ruling:<id>` token. An entry
+    identical (`turn`, `reason`) to one in `prior` (the register on disk, or its entry list) is
+    grandfathered: only a new or changed entry owes backing.
+    """
     entries = register.get(UNRELATED_TURNS_KEY)
     if not isinstance(entries, list):
         return []
     embedded = embedded_turns(doc)
+    held = {
+        (e.get("turn"), e.get("reason")) for e in _unrelated_entries(prior) if isinstance(e, Mapping)
+    }
+    rulings: Optional[dict[str, str]] = None
+    if root is not None and any(
+        isinstance(e, Mapping) and _RULING_TOKEN_RE.search(str(e.get("reason") or "")) for e in entries
+    ):
+        from coordinator_core.rulings import store
+
+        rulings = {r.id: r.status for r in store.load(root)}
     errors: list[str] = []
     for e in entries:
         turn = e.get("turn") if isinstance(e, Mapping) else None
@@ -970,6 +1124,10 @@ def unrelated_turn_errors(doc: Mapping[str, Any], register: Mapping[str, Any]) -
             errors.append(f"unrelated_turns names turn {turn}, which is not embedded")
         elif not str(e.get("reason") or "").strip():
             errors.append(f"unrelated_turns turn {turn} has an empty reason")
+        elif (turn, e.get("reason")) in held:
+            continue
+        elif (defect := unrelated_turn_backing(doc, e, rulings)) is not None:
+            errors.append(defect)
     return errors
 
 

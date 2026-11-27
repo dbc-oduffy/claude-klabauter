@@ -53,7 +53,7 @@ class NoEvidenceReason(str, Enum):
     # Cited targets were read and none is done: nothing contradicts, nothing proves.
     TARGETS_NOT_DONE = "targets_not_done"
     # A cited plan has every dispatchable row coded with a commit but a non-terminal status.
-    ACS_ALL_TICKED = "acs_all_ticked"
+    ACS_TICKED = "acs_ticked"
 
 
 class Verdict(str, Enum):
@@ -115,14 +115,21 @@ class ResidueItem(TypedDict):
     conflict: ConflictNote | None
 
 
-class NoEvidenceItem(TypedDict):
-    """Residue-item shape for a baton the report could not decide; `reason` is a NoEvidenceReason value."""
-
+class _NoEvidenceItemRequired(TypedDict):
     handoff_path: str
     reason: str
     evidence: list[Evidence]
     conflict: ConflictNote | None
     detail: str | None
+
+
+# trap: NotRequired[...] under `from __future__ import annotations` is a string annotation that
+# TypedDict on 3.12 does not unwrap, leaving __optional_keys__ empty; total=False is the working form.
+class NoEvidenceItem(_NoEvidenceItemRequired, total=False):
+    """Residue-item shape for a baton the report could not decide; `reason` is a NoEvidenceReason value."""
+
+    route: str
+    evidence_sha: str
 
 
 class CloseReport(TypedDict):

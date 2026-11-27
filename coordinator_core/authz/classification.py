@@ -2410,6 +2410,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "ceremony.commit_v2": OpClass.MUTATING,
     # ceremony.hand_land — MUTATING: lands named paths on HEAD through commit_paths (CAS ref move, worktree sync) (ops/ceremony/hand_land.py).
     "ceremony.hand_land": OpClass.MUTATING,
+    # governed_by.ledger — COMPUTE_ONLY: one `git log` over a path, listing its Governed-By trailers; writes nothing (ops/ceremony/governed_by.py).
+    "governed_by.ledger": OpClass.COMPUTE_ONLY,
     # dispatch.terminal_commit — MUTATING: lands the run's terminal commit via
     # ONE in-process `ceremony.commit_v2` call (ops/dispatch_emit/terminal_commit.py).
     # DR-208 five-question affirmation (citing dispatch.terminal_commit handler):
@@ -4615,6 +4617,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # scratch/.kept-index.json (ops/scratch_record.py); neither deletes a path.
     "scratch.record_run_path": OpClass.MUTATING,
     "scratch.keep": OpClass.MUTATING,
+    # sidecar.write — MUTATING: one atomic file write under .coordinator-local/workflow-sidecars/ (ops/sidecar_write.py).
+    "sidecar.write": OpClass.MUTATING,
     # run.paths_trash — MUTATING: renames a chunk's declared repo paths into scratch/.deleted/ (ops/run_paths_trash.py).
     "run.paths_trash": OpClass.MUTATING,
     # scratch.remove, proc.stop_own_child — MUTATING: rename a worker-owned scratch path; stop one descendant pid (ops/worker_cleanup.py).
@@ -5590,6 +5594,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # baton.close_commit — MUTATING: ops/baton_close_commit.py flips batons terminal through
     # the cascade's `_flip_handoff` under its lock; no commit, no spawn.
     "baton.close_commit": OpClass.MUTATING,
+    # baton.bulk_set — MUTATING: ops/baton_bulk_set.py stamps owner_session/eta (and close flips) as
+    # line-level frontmatter edits under `held_lock`, and lands them with one `commit_paths`.
+    "baton.bulk_set": OpClass.MUTATING,
 
     # baton.pm_turn_append — MUTATING: ops/baton_pm_turns.py `append_turn`
     # appends one line to `.coordinator-local/coordinator-sessions/<sid>/pm_turns.jsonl`

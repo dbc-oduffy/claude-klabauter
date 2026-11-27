@@ -15,6 +15,13 @@ from coordinator_core.warm import breadcrumb, hang_restart, server
 NOW = 1_800_000_000.0
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_progress_or_replacer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hang_restart, "_progress_last", None)
+    monkeypatch.setattr(hang_restart, "_worker_replacer", None)
+    monkeypatch.setattr(hang_restart, "_first_suppress", {})
+
+
 def _stamp(epoch: float) -> str:
     return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(epoch))
 
@@ -331,6 +338,40 @@ def test_note_stall_exits_at_threshold_even_when_the_disk_leg_never_returns(tmp_
     assert time.monotonic() - t0 < 5
 
 
+@pytest.mark.deliberate_wall_clock(reason="hang bound: the unfinished-leg verdict is read after a real helper-thread deadline")
+@pytest.mark.parametrize(
+    ("age_secs", "expected", "expected_exits"),
+    [(1.0, "suppressed", []), (hang_restart.IO_SATURATED_MAX_DEFER_SECS + 1, "restart", [7])],
+)
+def test_an_unfinished_leg_suppresses_inside_the_defer_bound_and_restarts_past_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, age_secs: float, expected: str, expected_exits: list
+) -> None:
+    _fresh_marks(monkeypatch)
+    release = threading.Event()
+    monkeypatch.setattr(hang_restart, "_disk_decision", lambda *a: release.wait(30))
+    stall = tmp_path / "stall-dumps"
+    monkeypatch.setattr(hang_restart, "_first_suppress", {str(stall): time.monotonic() - age_secs})
+    exits = []
+    out = None
+    for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
+        out = hang_restart.note_stall(stall, server_pid=7, exit_fn=exits.append, deadline=0.2)
+    release.set()
+    assert out == expected and exits == expected_exits
+
+
+def test_a_finished_suppression_stamps_the_first_suppress_mark_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fresh_marks(monkeypatch)
+    monkeypatch.setattr(hang_restart, "_disk_decision", lambda *a: "suppressed")
+    stall = tmp_path / "stall-dumps"
+    exits = []
+    for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
+        hang_restart.note_stall(stall, server_pid=7, exit_fn=exits.append)
+    first = hang_restart._first_suppress[str(stall)]
+    for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
+        hang_restart.note_stall(stall, server_pid=7, exit_fn=exits.append)
+    assert exits == [] and hang_restart._first_suppress[str(stall)] == first
+
+
 def test_note_stall_honours_a_publish_hold_and_logs_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fresh_marks(monkeypatch)
     (tmp_path / breadcrumb.PUBLISH_MARKER_FILENAME).write_text("not json")
@@ -379,6 +420,101 @@ def test_a_replacement_survives_its_own_cold_start_import_stalls(tmp_path: Path)
     exits = []
     out = hang_restart.maybe_restart(tmp_path / "stall-dumps", server_pid=55, now=later, exit_fn=exits.append)
     assert out == "suppressed" and exits == []
+
+
+PEER_PID = 4_000_001
+
+
+def _sampled_dumps(stall_dir, n, *, top_pid: int, mbps: float = 55.0, end=NOW) -> None:
+    stall_dir.mkdir(parents=True, exist_ok=True)
+    body = (
+        "stall-class: hung\nbox-sample: ok window-s=2.000\n"
+        f"box-io-read-top5: robocopy.exe pid={top_pid} {mbps:.2f}MB/s | other pid=1 0.10MB/s\n"
+        "box-msmpeng-cpu-pct: absent\n--- threads ---\nbody\n"
+    )
+    for i in range(n):
+        (stall_dir / f"{_stamp(end - i)}-111-s{i}.txt").write_text(body)
+
+
+def test_a_peer_saturating_the_box_io_suppresses_the_restart_and_logs_why(tmp_path: Path) -> None:
+    _sampled_dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD, top_pid=PEER_PID)
+    out, exits, log = _run(tmp_path)
+    assert out == "suppressed" and exits == []
+    (line,) = _lines(log)
+    assert "action=suppressed reason=io-saturated-by-peer" in line
+
+
+def test_the_engines_own_reader_or_a_quiet_box_still_restarts(tmp_path: Path) -> None:
+    stall = tmp_path / "stall-dumps"
+    _sampled_dumps(stall, hang_restart.HANG_DUMP_THRESHOLD, top_pid=777)
+    out, exits, _ = _run(tmp_path)
+    assert out == "restart" and exits == [777]
+    quiet = tmp_path / "quiet"
+    _sampled_dumps(quiet / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD, top_pid=PEER_PID, mbps=0.5)
+    out, exits, _ = _run(quiet)
+    assert out == "restart" and exits == [777]
+
+
+def test_a_saturated_box_defers_the_restart_only_up_to_the_bound(tmp_path: Path) -> None:
+    _sampled_dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD, top_pid=PEER_PID)
+    began = NOW - hang_restart.IO_SATURATED_MAX_DEFER_SECS - 5
+    stamp = time.strftime(hang_restart._LINE_STAMP_FMT, time.gmtime(began))
+    log = tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME
+    log.write_text(
+        f"{stamp} pid=777 action=suppressed reason=io-saturated-by-peer count=8 window_s=60 backoff_s=0 dumps=\n"
+    )
+    out, exits, _ = _run(tmp_path)
+    assert out == "restart" and exits == [777]
+
+
+def test_note_stall_is_suppressed_while_a_peer_saturates_the_box_io(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fresh_marks(monkeypatch)
+    _sampled_dumps(tmp_path / "stall-dumps", 1, top_pid=PEER_PID, end=time.time())
+    exits = []
+    out = None
+    for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
+        out = hang_restart.note_stall(tmp_path / "stall-dumps", server_pid=7, exit_fn=exits.append)
+    assert out == "suppressed" and exits == []
+    assert "reason=io-saturated-by-peer" in _lines(tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME)[0]
+
+
+def _peers_serving(monkeypatch: pytest.MonkeyPatch, replacer) -> None:
+    monkeypatch.setattr(hang_restart, "_progress_last", time.monotonic())
+    monkeypatch.setattr(hang_restart, "_progress_excuses", lambda *a, **k: False)
+    monkeypatch.setattr(hang_restart, "_worker_replacer", replacer)
+
+
+def test_a_held_worker_is_replaced_in_place_before_any_whole_engine_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = []
+    _peers_serving(monkeypatch, lambda: calls.append(1) or True)
+    _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD, end=time.time())
+    exits = []
+    out = hang_restart.maybe_restart(tmp_path / "stall-dumps", server_pid=777, exit_fn=exits.append)
+    assert out == "suppressed" and exits == [] and calls == [1]
+    assert "reason=worker-replaced" in _lines(tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME)[0]
+
+
+def test_a_replacement_that_retires_nothing_falls_through_to_the_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _peers_serving(monkeypatch, lambda: False)
+    _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD, end=time.time())
+    exits = []
+    out = hang_restart.maybe_restart(tmp_path / "stall-dumps", server_pid=777, exit_fn=exits.append)
+    assert out == "restart" and exits == [777]
+
+
+def test_no_peer_serving_means_no_replacement_attempt_and_the_restart_stands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(hang_restart, "_progress_last", None)
+    monkeypatch.setattr(hang_restart, "_worker_replacer", lambda: pytest.fail("replaced with no peer serving"))
+    _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD, end=time.time())
+    exits = []
+    out = hang_restart.maybe_restart(tmp_path / "stall-dumps", server_pid=777, exit_fn=exits.append)
+    assert out == "restart" and exits == [777]
 
 
 def test_stall_watchers_hold_no_lazy_hang_restart_import() -> None:

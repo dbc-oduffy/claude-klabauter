@@ -17,6 +17,7 @@ from typing import Optional
 from coordinator_core import dag
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
+from coordinator_core.ops.baton_bulk_set_contract import OP_KEY as BULK_SET_OP_KEY
 from coordinator_core.ops.baton_close_report_contract import (
     OP_KEY,
     SCHEMA_VERSION,
@@ -81,7 +82,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     Optional param `handoff` (repo-relative path) narrows the report to that one baton.
     Returns {exit_code, schema_version, op, batons_scanned, no_evidence, no_evidence_batons,
     closable, residue, scan_incomplete}; `no_evidence_batons` names each no-evidence baton with
-    a reason (nothing_cited, targets_not_done or acs_all_ticked) and `no_evidence` is its length;
+    a reason (nothing_cited, targets_not_done or acs_ticked) and `no_evidence` is its length;
     `scan_incomplete` is true when the handoffs directory is missing.
     """
     return await asyncio.to_thread(_run, params, repo_root)
@@ -145,19 +146,22 @@ def _run(params: dict, repo_root: Optional[Path]) -> dict:
             )
         else:
             reason, detail = verdict[1], None
+            extra: dict = {}
             if reason == NoEvidenceReason.TARGETS_NOT_DONE.value:
                 if plans is None:
                     plans = PlanDeliveryCache(worktree_root)
                 coded = _coded_plan(plans, evidence.get(rel, []))
                 if coded is not None:
-                    reason = NoEvidenceReason.ACS_ALL_TICKED.value
+                    reason = NoEvidenceReason.ACS_TICKED.value
                     detail = (
                         f"every dispatchable row of {coded[0]} is coded (last commit {coded[1]}) "
-                        f"but its status is not terminal; closing needs the plan implemented"
+                        f"but its status is not terminal; close it with a {BULK_SET_OP_KEY} close "
+                        f"item (verdict shipped, evidence {coded[1]})"
                     )
+                    extra = {"route": BULK_SET_OP_KEY, "evidence_sha": coded[1]}
             no_evidence_batons.append(
                 {"handoff_path": rel, "reason": reason, "evidence": evidence.get(rel, []),
-                 "conflict": None, "detail": detail}
+                 "conflict": None, "detail": detail, **extra}
             )
 
     residue.sort(key=lambda item: item["handoff_path"])

@@ -1069,3 +1069,22 @@ def test_the_red_still_refuses_unless_the_peer_free_verdict_covers_it(tmp_path, 
     findings, check = li._landing_test_gate(tmp_path, {}, "r1")
     assert check == "failed" and [f.reason for f in findings] == ["targeted-tests-failed"]
     assert "peer-run" in findings[0].detail and not getattr(findings, "peer_advisory", ())
+
+
+def test_split_peer_state_names_the_unsplit_paths_and_whether_any_is_split():
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+    assert ltt.split_peer_state(None) == (False, frozenset())
+    assert ltt.split_peer_state({"peer_hunks": {"a.py": {"split": True}}}) == (True, frozenset())
+    assert ltt.split_peer_state({"peer_hunks": {"a.py": {"split": True}, "b.py": {"split": False}, "c.py": {}}}) == (
+        True, frozenset({"b.py", "c.py"}),
+    )
+    assert ltt.split_peer_state({"peer_hunks": {"b.py": {}}}) == (False, frozenset({"b.py"}))
+
+
+def test_named_foreign_takes_only_ids_the_baseline_names_foreign():
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+    base = {"foreign": [{"id": "t.py::a", "evidence": "x"}, "t.py::b"], "pre_existing": ["t.py::c"]}
+    assert ltt.named_foreign(base, ["t.py::a", "t.py::b", "t.py::c", "t.py::d"]) == {"t.py::a", "t.py::b"}
+    assert ltt.named_foreign({}, ["t.py::a"]) == set()
