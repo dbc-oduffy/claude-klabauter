@@ -154,3 +154,54 @@ def test_a_live_recorded_holder_with_unreadable_argv_keeps_the_face_live() -> No
 
 def test_a_live_recorded_app_server_holder_defers_to_a_cli_lock_holder() -> None:
     assert _holder_live(["codex", "app-server"], True, True) is True
+
+
+_PIDLESS_ROW = {"name": NAME, "vendor": "codex", "target": THREAD}
+
+
+def _pidless_live(lock_held, lock_cli, row=_PIDLESS_ROW):
+    return _proc().codex_holder_live(
+        row, presence_held_fn=lambda target, presence_dir=None: lock_held,
+        lock_pids_fn=lambda path: [4242], cli_fn=lambda pid: lock_cli)
+
+
+def test_a_pidless_row_with_no_cli_lock_holder_is_not_live() -> None:
+    assert _pidless_live(False, False) is False
+    assert _pidless_live(True, False) is False
+
+
+def test_a_pidless_row_whose_lock_a_codex_cli_holds_is_live() -> None:
+    assert _pidless_live(True, True) is True
+
+
+def test_a_pidless_row_with_no_target_or_vendor_stays_unknown() -> None:
+    assert _pidless_live(True, True, {"name": NAME, "vendor": "codex"}) is None
+    assert _pidless_live(True, True, {"name": NAME, "target": THREAD}) is None
+
+
+def _pidless_face(started=None):
+    face = {"sessionId": f"peer-{NAME}-9", "name": NAME, "vendor": "codex", "target": THREAD}
+    if started is not None:
+        face["startedAt"] = started
+    return face
+
+
+def test_a_pidless_legacy_face_without_a_cli_lock_holder_is_unbacked_past_grace_or_without_started_at(
+        box) -> None:
+    (box["tmp"] / "home" / "unimatrix" / "peers.json").write_text(json.dumps([_PIDLESS_ROW]), encoding="utf-8")
+    box["classify"](False)
+    lv = box["roster"]._liveness()
+    old = int((time.time() - 2 * lv.CODEX_FACE_GRACE_SECONDS) * 1000)
+    for face in (_pidless_face(), _pidless_face(old)):
+        assert lv.codex_face_holder(face) == "lockless"
+        assert lv.codex_face_unbacked(face) is True
+    assert lv.codex_face_unbacked(_pidless_face(int(time.time() * 1000))) is False
+
+
+def test_a_pidless_legacy_face_whose_lock_a_codex_cli_holds_stays_live_and_backed(box) -> None:
+    (box["tmp"] / "home" / "unimatrix" / "peers.json").write_text(json.dumps([_PIDLESS_ROW]), encoding="utf-8")
+    box["classify"](True)
+    lv = box["roster"]._liveness()
+    face = _pidless_face()
+    assert lv.codex_face_holder(face) == "live"
+    assert lv.codex_face_unbacked(face) is False

@@ -613,11 +613,13 @@ def codex_holder_live(row, pid_alive_fn=None, proc_start_fn=None, presence_held_
     """Liveness of the Codex process a peer row recorded as `codexPid`/`codexProcStart`.
 
     A recorded holder that is dead, or alive but an app-server, keeps the row live only while a codex CLI/TUI
-    holds the thread's writer lock."""
+    holds the thread's writer lock. A pid-less codex row with a thread target is judged by that lock alone;
+    None only when the row records no holder and names no codex thread."""
     pid = row.get("codexPid") if isinstance(row, dict) else None
     if not isinstance(pid, int) or isinstance(pid, bool):
-        return None
-    if not holder_proven_dead({"pid": pid, "procStart": row.get("codexProcStart")}, pid_alive_fn, proc_start_fn):
+        if not (isinstance(row, dict) and row.get("vendor") == "codex" and isinstance(row.get("target"), str)):
+            return None
+    elif not holder_proven_dead({"pid": pid, "procStart": row.get("codexProcStart")}, pid_alive_fn, proc_start_fn):
         argv = (argv_fn or _process_argv)(pid)
         if not (argv and "app-server" in argv[1:]):
             return True
@@ -648,8 +650,14 @@ def _codex_peer_row(d, rows) -> "dict | None":
                 None)
 
 
+def _has_recorded_pid(row) -> bool:
+    pid = row.get("codexPid") if isinstance(row, dict) else None
+    return isinstance(pid, int) and not isinstance(pid, bool)
+
+
 def codex_face_holder(d, home=None, peers=False) -> "str | None":
-    """'live' | 'dead' | 'unknown' for a local Codex peer face's recorded holder; None when `d` is not
+    """'live' | 'dead' | 'unknown' | 'lockless' for a local Codex peer face's recorded holder ('lockless': a
+    pid-less row whose thread no codex CLI/TUI holds); None when `d` is not
     a local Codex peer face or its `peers.json` row cannot be found or read (nothing provable).
     Trap: reads and parses `peers.json` on every call unless `peers` (a `_codex_peer_rows` result) is given."""
     sid = d.get("sessionId") if isinstance(d, dict) else None
@@ -660,6 +668,8 @@ def codex_face_holder(d, home=None, peers=False) -> "str | None":
     if row is None:
         return None
     verdict = codex_holder_live(row)
+    if verdict is False and not _has_recorded_pid(row):
+        return "lockless"
     return "unknown" if verdict is None else ("live" if verdict else "dead")
 
 
@@ -715,11 +725,13 @@ def codex_superseded_faces(rows, home=None, now=None) -> dict:
                             and not codex_holder_unbacked(codex_face_holder(e, home, peers), e, now)], peers)
 
 
-def codex_holder_unbacked(state, d, now=None):
+def codex_holder_unbacked(state, d, now=None) -> bool:
     if state == "dead":
         return True
     started = d.get("startedAt") if isinstance(d, dict) else None
-    return (state == "unknown" and isinstance(started, int) and not isinstance(started, bool)
+    if state == "lockless" and not (isinstance(started, int) and not isinstance(started, bool)):
+        return True
+    return (state in ("unknown", "lockless") and isinstance(started, int) and not isinstance(started, bool)
             and not stamp_fresh(d, "startedAt", CODEX_FACE_GRACE_SECONDS, now))
 
 

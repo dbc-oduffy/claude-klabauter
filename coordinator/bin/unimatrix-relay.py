@@ -2341,7 +2341,7 @@ def main() -> None:
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
         sys.exit("usage: roster | capabilities | specs | send <pid> | send-batch <pid> | send-to <pid> <digest> | send-named <pid> <digest> <name-digest> | send-session <pid> <digest> <name-digest> <session-id> | receipts <session-id|name|ref|pid> <since> | inbox <name> | inbox-mux | reply-inbox <name> | source | "
-                 "grant <grantee> <note> <ttl> <repo> | revoke <grantee> | keypin <box_id> | freshness | membership get | membership put")
+                 "grant <grantee> <note> <ttl> <repo> | revoke <grantee> | keypin <box_id> | freshness | reap-scratch | membership get | membership put; the verb comes from SSH_ORIGINAL_COMMAND")
     mode, arg = parsed
     _PEER["box"] = peer_arg(sys.argv[1:])
     if mode == "membership":
