@@ -49,6 +49,34 @@ def test_scope_out_passes_detect(tmp_path, line):
     assert detect(line, [R], tmp_path)["verdict"] == "pass"
 
 
+APPLIED = [
+    f"Applying {RID}: never as a source comment, and no gate message calls these bars rule 4.",
+    f"Per {RID}, the slice is not optional and no RunPod work starts first.",
+    f"Per an APM ruling ({RID}) the MetaHuman bar is not a source comment.",
+    f"Under APM ruling {RID}: never skip the narrow slice.",
+]
+NEGATED_APPLICATION = [
+    f"We are not applying {RID} here.",
+    f"We do not follow {RID}.",
+    f"Per {RID} we would stop, but we override it.",
+    f"No longer per {RID}.",
+]
+
+
+@pytest.mark.parametrize("line", APPLIED)
+def test_applied_citation_with_negation_in_content_passes(root, tmp_path, line):
+    assert detect(line, [R], tmp_path)["verdict"] == "pass"
+    assert _prep(f"# Plan\n\n{line}\n", root)["status"] == "PASS"
+
+
+@pytest.mark.parametrize("line", NEGATED_APPLICATION)
+def test_negated_application_still_flags(root, tmp_path, line):
+    out = detect(line, [R], tmp_path)
+    assert out["verdict"] == "refuse"
+    assert "cited_with_negation" in out["reasons"][RID]
+    assert _prep(f"# Plan\n\n{line}\n", root)["status"] != "PASS"
+
+
 @pytest.mark.parametrize(
     "text, key, reason",
     [

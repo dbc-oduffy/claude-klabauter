@@ -20,6 +20,9 @@ A tripwire, not a judge. Limits, stated so a caller never over-reads a pass:
   - silent_override_negation: a scope-hit paragraph's sentence that does not cite the ruling id,
     holds >=70% of a ruling sentence's content words, and has the opposite negation polarity.
     Both silent-override checks are lexical overlap: a paraphrase sharing no content word passes.
+  - Applied citation: a line citing a ruling id after "applying", "applies", "applied", "per",
+    "under" or "APM ruling", with no negation ahead of that phrase and no override/reject word,
+    applies the ruling; negation in the applied content is not cited_with_negation.
   - Scope-out: a line citing a ruling id that scopes it out of the run ("out of scope", "not in
     scope", "excluded", "do not touch") with no other negation is neither a contradiction nor a
     deferral of that ruling; a line that also overrides or rejects it is not a scope-out.
@@ -108,6 +111,29 @@ def _prose_negation(line: str) -> bool:
 
 def _cites_id(line: str, rid: str) -> bool:
     return re.search(rf"(?<![A-Za-z0-9._-]){re.escape(rid)}(?![A-Za-z0-9_-])", line) is not None
+
+
+_STRONG_NEGATION_RE = re.compile(
+    r"\b(?:withdraw\w*|overrid\w+|supersed\w+|revok\w+|rescind\w*|reject\w*|ignor\w+|waiv\w+"
+    r"|drop(?:s|ped)?|revers\w+|contrary\s+to|instead\s+of|despite)\b",
+    re.IGNORECASE,
+)
+_APPLY_LEAD = r"(?:\b(?:applying|applies|applied|per|under)\s+|\bAPM\s+ruling\s*[:,]?\s*)(?:(?:the|an?)\s+)?(?:APM\s+)?(?:ruling\s*[:,]?\s*)?[(\[]?"
+_APPLY_LEAD_WINDOW = 24
+
+
+def _applied_citation(line: str, rid: str) -> bool:
+    """`line` cites `rid` as the rule being applied ("applying <id>", "per <id>", "APM ruling
+    <id>") with no negation ahead of that phrase, and carries no override/reject word: negation in
+    the applied rule's own content is then the rule's text, not a negation of it."""
+    ident = _IDENT_RE.sub(lambda m: " " * len(m.group(0)), line)
+    if _STRONG_NEGATION_RE.search(ident):
+        return False
+    for m in re.finditer(rf"{_APPLY_LEAD}(?<![A-Za-z0-9._-]){re.escape(rid)}(?![A-Za-z0-9_-])", line, re.IGNORECASE):
+        lead = ident[max(0, m.start() - _APPLY_LEAD_WINDOW) : m.start()]
+        if not NEGATION_RE.search(lead):
+            return True
+    return False
 
 
 _SCOPE_OUT_RE = re.compile(
@@ -340,7 +366,7 @@ def detect(text: str, rulings: Iterable[Ruling], root: Path) -> dict:
                 continue
             if explicit and explicit.group(1).strip().rstrip(".,;") == r.id:
                 _flag(r.id, "explicit_contradicts")
-            elif _prose_negation(line) and not _scope_out(line) and (
+            elif _prose_negation(line) and not _scope_out(line) and not _applied_citation(line, r.id) and (
                 _cites_id(line, r.id) or (_norm(r.text) and _norm(r.text) in nline)
             ):
                 _flag(r.id, "cited_with_negation")
