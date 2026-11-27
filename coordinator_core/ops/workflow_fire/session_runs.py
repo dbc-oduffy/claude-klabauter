@@ -34,6 +34,10 @@ def open_runs_for_session(repo_root: Path, session_id: str) -> list[dict]:
             stage_name = value if isinstance(value, str) else None
             if stage_name in _TERMINAL_STAGES:
                 continue
+            # The size worker can die before the run leaves minted. The fire is
+            # already exited failed; fire_wait cannot finish it.
+            if stage_name == "minted" and fire_state == "exited" and record.get("outcome") == "failed":
+                continue
         elif fire_state == "exited":
             continue
         open_runs.append({"fire_id": record.get("fire_id"), "run_id": run_id,
