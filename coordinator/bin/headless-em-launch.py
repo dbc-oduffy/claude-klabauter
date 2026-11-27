@@ -142,7 +142,8 @@ def _grok_launch_args(extra, environ, platform) -> list[str]:
 GROK_XS_CARD = (
     "Headless Grok EM. The EM token is already set; do not probe it. "
     "A confident XS edit is at most 2 files and 30 lines, then coordinator-safe-commit. "
-    "Do not open the stop-rule file, the sizing skill, or the EM wiki, and do not leave the workspace, before that edit.\n\n"
+    "Do not open the stop-rule file, the sizing skill, or the EM wiki, and do not leave the workspace, before that edit. "
+    "A workspace edit that names three files is landed in those files. Do not call engine_ask.submit for it.\n\n"
 )
 
 

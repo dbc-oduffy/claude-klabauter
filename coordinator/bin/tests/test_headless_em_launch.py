@@ -657,7 +657,9 @@ def test_grok_launch_defaults_auto_with_absolute_path_allow_per_engine_op(platfo
     assert argv[len(head) + 1] == "--prompt-file" and len(argv) == len(head) + 3
     prompt = Path(argv[-1])
     try:
-        assert prompt.read_text(encoding="utf-8") == hel.GROK_XS_CARD + "hi"
+        body = prompt.read_text(encoding="utf-8")
+        assert body == hel.GROK_XS_CARD + "hi"
+        assert "Do not call engine_ask.submit for it." in body
     finally:
         prompt.unlink(missing_ok=True)
     assert "-p" not in argv
