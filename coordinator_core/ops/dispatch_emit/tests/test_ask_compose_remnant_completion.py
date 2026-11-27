@@ -171,6 +171,29 @@ def test_a_rulable_or_owed_row_runs_no_remnant_leg(monkeypatch, extra):
     assert REMNANT_REVERIFY_LABEL not in _labels(out)
 
 
+@pytest.mark.parametrize(
+    "extra, item",
+    [
+        ({"owed": [{"id": "C4", "reason": "em-performed", "detail": "d"}]}, _unmet(["C4 install still to run"])),
+        ({"slot_withheld": [{"id": "C4", "title": "t", "register_rows": ["R1"]}]}, _ORPHAN),
+    ],
+    ids=["em_run-owed-row-named", "needs_slot-row-claims-item"],
+)
+def test_an_item_owned_by_an_em_run_or_needs_slot_row_runs_no_remnant_leg(monkeypatch, extra, item):
+    out = _run(_script(monkeypatch), items=[item], manifest={**_DISK, **extra})
+    assert REMNANT_LABEL not in _labels(out)
+    assert REMNANT_REVERIFY_LABEL not in _labels(out)
+
+
+def test_an_item_no_held_row_owns_still_runs_the_remnant_leg(monkeypatch):
+    manifest = {**_DISK, "owed": [{"id": "C4", "reason": "em-performed", "detail": "d"}]}
+    out = _run(
+        _script(monkeypatch), items=[_ORPHAN], manifest=manifest,
+        replies={REMNANT_LABEL: _DONE, REMNANT_REVERIFY_LABEL: {"items": [_MET]}},
+    )
+    assert _labels(out).count(REMNANT_LABEL) == 1
+
+
 def _run_judged(script: str, *, judge: dict, replies: dict) -> dict:
     node = shutil.which("node")
     if node is None:

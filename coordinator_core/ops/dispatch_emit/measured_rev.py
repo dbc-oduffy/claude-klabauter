@@ -467,6 +467,47 @@ def foreign_drift(
     return foreign if declared else [*foreign, *split[drift_attribution.OUTSIDE_DECLARED]]
 
 
+LIVE_OVERLAP_MARKER = "; live-run overlap: "
+_OVERLAP_ENTRY_SEP = "; "
+_OVERLAP_WRITTEN_BY = " written by live run "
+
+
+def live_overlap(run_dir: Path, repo_root: Path, paths: Sequence[str]) -> Dict[str, list[str]]:
+    """`{path: [peer run ids]}` of live peer runs (not `run_dir`'s) whose footprint overlaps `paths`; `{}` on none or a failed read."""
+    try:
+        from coordinator_core.ops.dispatch_emit import live_run_writes
+
+        footprints = live_run_writes.live_footprints(repo_root, exclude_run_id=Path(run_dir).name)
+        found: Dict[str, list[str]] = {}
+        for path in paths:
+            runs = sorted(live_run_writes.overlaps([path], footprints))
+            if runs:
+                found[path] = runs
+        return found
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def with_live_overlap(reason: str, overlap: Mapping[str, Sequence[str]]) -> str:
+    """`reason` plus a `LIVE_OVERLAP_MARKER` clause naming each path and its peer runs; unchanged when `overlap` is empty."""
+    if not overlap:
+        return reason
+    return reason + LIVE_OVERLAP_MARKER + _OVERLAP_ENTRY_SEP.join(
+        f"{p}{_OVERLAP_WRITTEN_BY}{', '.join(runs)}" for p, runs in overlap.items()
+    )
+
+
+def parse_live_overlap(reason: str) -> Dict[str, list[str]]:
+    """The `{path: [peer run ids]}` a `with_live_overlap` clause in `reason` names; `{}` when it has none."""
+    _, marker, tail = reason.partition(LIVE_OVERLAP_MARKER)
+    found: Dict[str, list[str]] = {}
+    for entry in tail.split(_OVERLAP_ENTRY_SEP) if marker else ():
+        path, sep, runs = entry.partition(_OVERLAP_WRITTEN_BY)
+        if sep and path and runs:
+            found[path] = runs.split(", ")
+    return found
+
+
 def remeasure_reason(run_dir: Path, repo_root: Path) -> str | None:
     """Fresh foreign-drift measurement under the wider `REMEASURE_DEADLINE_SECS` reread bound, for a
     stale `measure_unavailable` / `measured-rev-drift` reason the test leg's failure would otherwise
@@ -475,7 +516,7 @@ def remeasure_reason(run_dir: Path, repo_root: Path) -> str | None:
     try:
         drifted = foreign_drift(run_dir, repo_root, reread_deadline=REMEASURE_DEADLINE_SECS)
     except MeasureUnavailable as exc:
-        return exc.reason()
+        return with_live_overlap(exc.reason(), live_overlap(run_dir, repo_root, exc.paths))
     except (OSError, ValueError):
         return "measured-rev-record-unreadable"
     return "measured-rev-drift: " + ", ".join(drifted) if drifted else None

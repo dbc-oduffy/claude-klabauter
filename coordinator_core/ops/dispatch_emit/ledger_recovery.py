@@ -220,18 +220,30 @@ def _remnant_obj(v: Any) -> dict | None:
     return {"gap": str(r.get("gap") or ""), "paths": [_posix(p) for p in _text_list(r.get("paths"))], "checks": _text_list(r.get("checks"))}
 
 
-def remnant_items(items, unattributed, capped, criterion, delivery) -> list[dict]:
+def _owned_by_held_row(item: Mapping[str, Any], held_rows: Any) -> bool:
+    ids: set[str] = set()
+    regs: set[str] = set()
+    for r in held_rows or ():
+        if isinstance(r, Mapping):
+            ids.add(str(r.get("id")))
+            regs.update(str(x) for x in r.get("register_rows") or ())
+    return str(item.get("id")) in regs or any(t in ids for t in _id_tokens(_item_text(item)))
+
+
+def remnant_items(items, unattributed, capped, criterion, delivery, held_rows=None) -> list[dict]:
     """The not_met work left after the ledger-fix loop, as `{kind, id, gap, paths, checks}` items.
 
     `ledger` items: blocking rows (as `reopen_plan` reads them; withheld, owed and non-essential rows
-    never count) whose id is in `unattributed` or `capped`. A `criterion` item when the falsifier
+    never count) whose id is in `unattributed` or `capped`, and which no `held_rows` entry owns (an
+    em_run or needs_slot plan row `{id, register_rows}`: its id is named in the item's text, or the
+    item id is among its `register_rows`). A `criterion` item when the falsifier
     verdict is `not_met`, built from its `remnant` object `{gap, paths, checks}` when present, else
     from its `reason`. A `delivery` item when the verdict is `FAIL`. `[]` when all three are clear.
     """
     open_ids = {str(x) for x in unattributed or ()} | {str(x) for x in capped or ()}
     out: list[dict] = []
     for item in items or ():
-        if _blocking(item) and str(item.get("id")) in open_ids:
+        if _blocking(item) and str(item.get("id")) in open_ids and not _owned_by_held_row(item, held_rows):
             out.append({"kind": "ledger", "id": str(item.get("id")), "gap": " ".join(_text_list(item.get("remaining"))) or str(item.get("evidence") or ""),
                         "paths": [], "checks": []})
     if isinstance(criterion, Mapping) and criterion.get("status") == "not_met":
@@ -259,6 +271,8 @@ def remnant_prompt(items_var: str, footprint_var: str) -> str:
         "Reproduce first with each item's checks. "
         "Complete the work within the footprint and return DONE with every path written. "
         "Return BLOCKED with the reason when it needs a path outside the footprint. "
+        "Never run the work of an em_run or needs_slot row (install, build, UBT, editor, commandlet, example-game-repo phase): "
+        "return BLOCKED naming the row instead. "
         "Commit nothing. Never edit a test to delete its assertion. "
         "Save captures under `scratch/remnant-complete/<run-id>/`."
     )
@@ -553,16 +567,21 @@ REOPEN_PLAN_JS = r"""function _reopenPlan(items, manifestRows, failedTests, held
   return { reopen, held, unattributed };
 }"""
 
-REMNANT_ITEMS_JS = r"""function _remnantItems(items, unattributed, capped, criterion, delivery) {
+REMNANT_ITEMS_JS = r"""function _remnantItems(items, unattributed, capped, criterion, delivery, heldRows) {
   const posix = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
   const list = (v) => (Array.isArray(v) ? v : (v == null ? [] : [v])).map(String).filter((x) => x.trim());
   const truthy = (v) => (Array.isArray(v) ? v.length > 0 : !!v);
   const openIds = new Set([...(unattributed ?? []), ...(capped ?? [])].map(String));
   const fromRemnant = (v) => (v && typeof v.remnant === 'object' && v.remnant) ? { gap: String(v.remnant.gap ?? ''), paths: list(v.remnant.paths).map(posix), checks: list(v.remnant.checks) } : { gap: '', paths: [], checks: [] };
+  const heldList = (heldRows ?? []).filter((r) => r && typeof r === 'object');
+  const heldIds = new Set(heldList.map((r) => String(r.id)));
+  const heldRegs = new Set(heldList.flatMap((r) => list(r.register_rows)));
+  const heldText = (item) => (Array.isArray(item.remaining) ? item.remaining.join(' ') : String(item.remaining ?? '')) + ' ' + String(item.evidence ?? '');
+  const ownedByHeld = (item) => heldRegs.has(String(item.id)) || (String(heldText(item)).match(/[A-Za-z0-9_.\-]+/g) ?? []).map((x) => x.replace(/^[.\-]+|[.\-]+$/g, '')).some((t) => t && heldIds.has(t));
   const out = [];
   for (const item of (items ?? [])) {
     if (!item || item.status !== 'not_met' || item.essential === false || truthy(item.withheld_by) || truthy(item.owed_by)) continue;
-    if (!openIds.has(String(item.id))) continue;
+    if (!openIds.has(String(item.id)) || ownedByHeld(item)) continue;
     out.push({ kind: 'ledger', id: String(item.id), gap: list(item.remaining).join(' ') || String(item.evidence ?? ''), paths: [], checks: [] });
   }
   if (criterion && criterion.status === 'not_met') {

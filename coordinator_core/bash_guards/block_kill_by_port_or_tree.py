@@ -19,7 +19,8 @@ Allowed: `kill $!`, `Stop-Process -Id $proc.Id` from Start-Process,
 
 A statement that runs a .sh/.ps1/.py file written within `_SCRIPT_WINDOW_S` has
 that one file read and held to the same patterns. Heredoc bodies are scanned
-only when fed to a shell, interpreter or script file.
+only when fed to a shell, interpreter or script file. A script run with `--help`, or a .py run
+with `--step X` whose function and callees hold no kill, is not denied for a kill it cannot reach.
 
 In-process, no spawn: `_PREFILTER` returns at once on text naming no kill verb
 and no script, before any file read.
@@ -27,6 +28,7 @@ and no script, before any file read.
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import time
@@ -169,27 +171,28 @@ def _classify(name: str, args: list[str]) -> str | None:
     return None
 
 
-def _script_arg(name: str, raw: str, args: list[str]) -> str | None:
+def _script_arg(name: str, raw: str, args: list[str]) -> tuple[str, list[str]] | None:
+    """(script path, the script's own argv) for a statement that runs a script file."""
     exts = (".sh", ".bash", ".ps1", ".py")
     if name not in _SCRIPT_EXT:
-        return raw if raw.lower().endswith(exts) and not raw.startswith("-") else None
+        return (raw, args) if raw.lower().endswith(exts) and not raw.startswith("-") else None
     if name in ("python", "python3", "py") and any(a in ("-m", "-c") for a in args):
         return None
     if name in ("pwsh", "powershell"):
-        for a in args:
+        for i, a in enumerate(args):
             if not a.startswith("-") and a.lower().endswith(_SCRIPT_EXT[name]):
-                return a
+                return a, args[i + 1:]
         return None
     # Trap: past the first positional every word is the script's own argv (a JSON note naming
     # dispatch.py is data, not a script run).
     skip = False
-    for a in args:
+    for i, a in enumerate(args):
         if skip:
             skip = False
         elif a in _INTERP_VALUE_FLAGS:
             skip = True
         elif not a.startswith("-"):
-            return a if a.lower().endswith(_SCRIPT_EXT[name]) else None
+            return (a, args[i + 1:]) if a.lower().endswith(_SCRIPT_EXT[name]) else None
     return None
 
 
@@ -233,8 +236,8 @@ def _tainted_vars(text: str) -> set[str]:
     return tainted
 
 
-def _scan_shell(text: str) -> tuple[str | None, list[str]]:
-    """(deny label, script paths the statements run) for shell or PowerShell text.
+def _scan_shell(text: str) -> tuple[str | None, list[tuple[str, list[str]]]]:
+    """(deny label, scripts the statements run) for shell or PowerShell text.
 
     A plain kill (`kill`, `taskkill /PID`, `Stop-Process -Id`) is denied only when a lookup feeds
     it: a port or name lookup on the kill's own line, or a pid variable derived from one. A lookup
@@ -245,7 +248,7 @@ def _scan_shell(text: str) -> tuple[str | None, list[str]]:
     text = _COMMENT_LINE.sub("", _PS_BLOCK_COMMENT.sub("", _strip_heredocs(text)))
     text = _mask_quoted_separators(_EXEC_BODY.sub(" ; ", text))
     tainted: set[str] | None = None
-    scripts: list[str] = []
+    scripts: list[tuple[str, list[str]]] = []
     for line in text.split("\n"):
         for stmt in _SPLIT.split(line):
             tokens = [t.strip("\"'") for t in stmt.split()]
@@ -319,16 +322,72 @@ def _read_recent(path: str, cwd: str) -> str | None:
         return None
 
 
+_HELP_ARGS = {"-h", "--help", "-?", "/?"}
+_STEP_FLAG = re.compile(r"^--?(?:step|command|cmd|action|stage)(?:=(.+))?$", re.I)
+
+
+def _step_name(argv: list[str]) -> str | None:
+    for i, a in enumerate(argv):
+        m = _STEP_FLAG.match(a)
+        if m:
+            if m.group(1):
+                return m.group(1)
+            return argv[i + 1] if i + 1 < len(argv) else None
+    return None
+
+
+def _step_scope(body: str, step: str) -> str | None:
+    """Source a `--step` run reaches (module level, step function, callees); None scans the whole file."""
+    try:
+        tree = ast.parse(body)
+    except (SyntaxError, ValueError):
+        return None
+    funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    want = re.sub(r"\W+", "_", step).strip("_").lower()
+    roots = [n for n in funcs if want and want in n.lower() and n.lower() != "main"]
+    if not roots:
+        return None
+    reached: set[str] = set()
+    todo = list(roots)
+    while todo:
+        fn = todo.pop()
+        if fn in reached:
+            continue
+        reached.add(fn)
+        for node in ast.walk(funcs[fn]):
+            if isinstance(node, ast.Name) and node.id in funcs:
+                todo.append(node.id)
+            elif isinstance(node, ast.Attribute) and node.attr in funcs:
+                todo.append(node.attr)
+    parts = [ast.get_source_segment(body, funcs[n]) or "" for n in sorted(reached)]
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        parts.append(ast.get_source_segment(body, node) or "")
+    return "\n".join(parts)
+
+
+def _scan_script(path: str, body: str, argv: list[str]) -> str | None:
+    """Deny label for a script run, judged on the argv that reaches its kill path."""
+    if any(a in _HELP_ARGS for a in argv):
+        return None
+    if not path.lower().endswith(".py"):
+        return _scan_shell(body)[0]
+    step = _step_name(argv)
+    scoped = _step_scope(body, step) if step else None
+    return _scan_python(body if scoped is None else scoped)
+
+
 def _decide(command: str, cwd: str) -> tuple[str, str] | None:
     """(label, where) for a denied command, or None. `where` names the script when the hit is in one."""
     label, scripts = _scan_shell(command)
     if label:
         return label, ""
-    for path in scripts[:4]:
+    for path, argv in scripts[:4]:
         body = _read_recent(path, cwd)
         if body is None:
             continue
-        hit = _scan_python(body) if path.lower().endswith(".py") else _scan_shell(body)[0]
+        hit = _scan_script(path, body, argv)
         if hit:
             return hit, re.split(r"[\\/]", path)[-1]
     return None

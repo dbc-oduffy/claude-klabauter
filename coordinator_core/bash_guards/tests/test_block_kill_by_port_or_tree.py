@@ -200,6 +200,62 @@ def test_a_quoted_assignment_value_is_not_a_script_run(tmp_path):
     assert denied("F=1 python reap.py", tmp_path)
 
 
+_RECOVER = '''import argparse, subprocess
+
+def free_port(port):
+    out = subprocess.check_output(["netstat", "-ano"], text=True)
+    pid = out.split()[-1]
+    subprocess.run(["taskkill", "/PID", pid, "/F"])
+
+def rebuild_plugin():
+    subprocess.run(["Build.bat"])
+
+def recover_editor():
+    free_port(8080)
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--step")
+    ap.parse_args()
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+@pytest.mark.parametrize("command", [
+    "python3 recover.py --help",
+    "python3 recover.py -h",
+    "python3 recover.py --step rebuild-plugin",
+    "python3 recover.py --step=rebuild-plugin",
+])
+def test_a_script_run_that_cannot_reach_its_kill_path_is_allowed(tmp_path, command):
+    _write(tmp_path, "recover.py", _RECOVER)
+    assert denied(command, tmp_path) is None
+
+
+@pytest.mark.parametrize("command", [
+    "python3 recover.py",
+    "python3 recover.py --step free-port",
+    "python3 recover.py --step recover-editor",
+    "python3 recover.py --step unknown-step",
+])
+def test_a_script_run_that_reaches_its_kill_path_still_denies(tmp_path, command):
+    _write(tmp_path, "recover.py", _RECOVER)
+    reason = denied(command, tmp_path)
+    assert reason and "in script recover.py" in reason
+
+
+def test_a_kill_under_the_main_guard_denies_even_with_a_step(tmp_path):
+    _write(tmp_path, "inline.py", _RECOVER + '\nif __name__ == "__main__":\n    pid = subprocess.check_output(["netstat", "-ano"], text=True).split()[-1]\n    subprocess.run(["taskkill", "/PID", pid, "/F"])\n')
+    assert denied("python3 inline.py --step rebuild-plugin", tmp_path)
+
+
+def test_help_does_not_lift_a_direct_kill_on_the_command_line(tmp_path):
+    _write(tmp_path, "recover.py", _RECOVER)
+    assert denied("python3 recover.py --help; kill -9 $(lsof -ti :3000)", tmp_path)
+
+
 def test_script_not_run_or_not_recent_is_not_read(tmp_path):
     _write(tmp_path, "reap.sh", "pkill -f derive\n")
     _write(tmp_path, "old.sh", "pkill -f derive\n", age_s=3 * 24 * 3600)
@@ -292,7 +348,7 @@ def test_gem_save_box_prefix_does_not_exempt_a_non_gem_kill(tmp_path, monkeypatc
 
 
 _GEM_SAVE_BOX_COMMANDS = [
-    "python tools/gem-save-box/gem_save_box.py survey --help",
+    "python tools/gem-save-box/gem_save_box.py survey --json",
     "python tools/gem-save-box/gem_save_box.py kill --pid 4242 --reason runaway",
 ]
 

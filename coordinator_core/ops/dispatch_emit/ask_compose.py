@@ -2681,6 +2681,9 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "&& typeof _rvt.sidecar_path === 'string' && _rvt.sidecar_path.trim() "
         "&& !(Array.isArray(_rvt.failing_ids) && _rvt.failing_ids.some((x) => typeof x === 'string' && x.trim()))) "
         "{ _halted = { ..._halted, halted: " + json.dumps(TEST_LEG_OVER_BUDGET_HALT) + " }; } "
+        "if (_rvt.tests_run === 0 && _halted.halted === " + json.dumps(TEST_INFRA_CAUSE)
+        + " && typeof _rvt.guard_refusal === 'string' && _rvt.guard_refusal.trim() && _rvCause !== " + json.dumps(GUARD_REFUSED_CAUSE) + ") { "
+        "_halted = { ..._halted, detail: _halted.detail + '; guard refusal: ' + _rvt.guard_refusal.trim().slice(0, 1500) }; } "
         "if (_rvCause === " + json.dumps(TEST_INFRA_CAUSE) + " && _rvt.tests_run === 0 && _halted.halted === "
         + json.dumps(TEST_INFRA_CAUSE) + ") { "
         "const _rvIs = (_rvt.infra_session && typeof _rvt.infra_session === 'object') ? _rvt.infra_session : {}; "
@@ -3810,7 +3813,7 @@ _REMNANT_COMPLETE_JS = r"""
       const capped = (_ledger?.items ?? []).filter((i) => i && i.status === 'not_met' && typeof i.withheld_by === 'string' && _recoveryWithheld.includes(i.withheld_by) && !heldIds.includes(i.withheld_by));
       const origWithheld = Object.fromEntries(capped.map((i) => [i.id, i.withheld_by]));
       const view = [...open, ...capped].map((i) => (i.id in origWithheld ? { ...i, withheld_by: undefined } : i));
-      const rmItems = _remnantItems(view, open.map((i) => i.id), capped.map((i) => i.id), __FV__, _deliveryVerdict);
+      const rmItems = _remnantItems(view, open.map((i) => i.id), capped.map((i) => i.id), __FV__, _deliveryVerdict, [...(_manifest.owed ?? []), ...(_manifest.slot_withheld ?? [])]);
       if (!rmItems.length) return;
       const _fpP = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
       const footprint = [...new Set([

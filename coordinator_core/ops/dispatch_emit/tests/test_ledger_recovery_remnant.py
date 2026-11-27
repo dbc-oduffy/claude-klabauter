@@ -40,6 +40,23 @@ def test_withheld_owed_and_nonessential_rows_are_excluded() -> None:
     assert [i["id"] for i in out] == ["R4"]
 
 
+_HELD = [{"id": "C4", "register_rows": ["R9"]}]
+
+
+def test_items_owned_by_an_em_run_or_needs_slot_row_are_excluded_capped_or_not() -> None:
+    items = [_row("R1", remaining=["C4 install still to run"]), _row("R9"), _row("R2", evidence="see C40"), _row("R3")]
+    ids = ["R1", "R9", "R2", "R3"]
+    assert [i["id"] for i in lr.remnant_items(items, ids, [], None, None, _HELD)] == ["R2", "R3"]
+    assert [i["id"] for i in lr.remnant_items(items, [], ids, None, None, _HELD)] == ["R2", "R3"]
+    assert [i["id"] for i in lr.remnant_items(items, ids, [], None, None)] == ids
+    assert lr.remnant_items([_row("R1", remaining=["C4 install"])], ["R1"], [], None, None, _HELD) == []
+
+
+def test_prompt_forbids_em_run_and_slot_work_and_returns_blocked() -> None:
+    p = lr.remnant_prompt("_items", "_fp")
+    assert "em_run" in p and "needs_slot" in p and "UBT" in p and "BLOCKED" in p
+
+
 def test_criterion_prefers_remnant_object_and_falls_back_to_reason() -> None:
     crit = {"status": "not_met", "reason": "text", "remnant": {"gap": "g", "paths": ["./a/b.py"], "checks": ["pytest a"]}}
     out = lr.remnant_items([], [], [], crit, None)
@@ -73,7 +90,8 @@ def test_js_mirror_matches_python() -> None:
     items = [_row("R1"), _row("R2", withheld_by=["C2"]), _row("R3", owed_by=[]), _row("R4", owed_by=["em"])]
     crit = {"status": "not_met", "reason": "t", "remnant": {"gap": "g", "paths": ["./x.py"], "checks": ["c"]}}
     deliv = {"verdict": "FAIL", "summary": "s"}
-    args = (items, ["R1", "R2", "R3", "R4"], ["R1"], crit, deliv)
+    items += [_row("R5", remaining=["C4 install"]), _row("R6"), _row("R9"), _row("R7", evidence="see C40")]
+    args = (items, ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R9"], ["R1", "R9"], crit, deliv, _HELD)
     program = lr.REMNANT_ITEMS_JS + "\nprocess.stdout.write(JSON.stringify(_remnantItems(%s)));" % ", ".join(json.dumps(a) for a in args)
     out = subprocess.run([node, "-e", program], capture_output=True, text=True, timeout=30, **no_console_creationflags())
     assert out.returncode == 0, out.stderr

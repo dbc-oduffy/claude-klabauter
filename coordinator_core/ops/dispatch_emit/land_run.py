@@ -215,6 +215,16 @@ def test_infra_refusal(reason: str, inline_review: object) -> Optional[dict]:
     leg_failure = test_leg_failure(inline_review)
     if not leg_failure or not reason.startswith(_STALE_MEASURE_PREFIXES):
         return None
+    from coordinator_core.ops.dispatch_emit import measured_rev
+
+    overlap = measured_rev.parse_live_overlap(reason)
+    if overlap:
+        return _error(
+            f"test-leg-error: {leg_failure}; {reason}; a live peer run also writes the path, so the file is "
+            "mid-write, not a stale measurement. Re-arm once that run ends or its rows land",
+            refused="test-infra",
+            test_infra={"leg": leg_failure, "reason": reason, "rearm": TEST_LEG_AGENT_TYPE, "live_overlap": overlap},
+        )
     return _error(
         f"test-leg-error: {leg_failure}; {reason}; the measurement is stale, not the requirement. "
         f"Re-arm {TEST_LEG_AGENT_TYPE} and re-run the ledger check",
