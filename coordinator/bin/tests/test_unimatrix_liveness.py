@@ -402,9 +402,82 @@ def test_codex_holder_live_checks_current_writer_after_original_holder_exits(
         lv, "agy_presence_held",
         lambda target, *, presence_dir: target == "resumed-thread" and presence_dir == lock_dir,
     )
+    monkeypatch.setattr(lv, "lock_holder_pids", lambda path: [777] if path == lock_dir / "resumed-thread.lock" else [])
+    monkeypatch.setattr(lv, "codex_cli_process", lambda pid: pid == 777)
     row = {"vendor": "codex", "codexPid": 4242, "codexProcStart": "x"}
     assert lv.codex_holder_live({**row, "target": "resumed-thread"}) is True
     assert lv.codex_holder_live({**row, "target": "closed-thread"}) is False
+
+
+def _locked_dead_holder_row(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, holders) -> dict:
+    monkeypatch.setattr(lv, "pid_alive", lambda _pid: False)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(lv, "agy_presence_held", lambda target, *, presence_dir: True)
+    monkeypatch.setattr(lv, "lock_holder_pids", lambda path: holders)
+    return {"vendor": "codex", "codexPid": 4242, "codexProcStart": "x", "target": "t-1"}
+
+
+def test_codex_holder_live_app_server_lock_holder_is_not_live(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    row = _locked_dead_holder_row(monkeypatch, tmp_path, [2846, 19008])
+    monkeypatch.setattr(lv, "codex_cli_process", lambda pid: False)
+    assert lv.codex_holder_live(row) is False
+
+
+def test_codex_holder_live_one_cli_among_lock_holders_is_live(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    row = _locked_dead_holder_row(monkeypatch, tmp_path, [2846, 31000])
+    monkeypatch.setattr(lv, "codex_cli_process", lambda pid: pid == 31000)
+    assert lv.codex_holder_live(row) is True
+
+
+@pytest.mark.parametrize("holders", [None, []])
+def test_codex_holder_live_unidentifiable_lock_holder_is_not_live(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, holders,
+) -> None:
+    row = _locked_dead_holder_row(monkeypatch, tmp_path, holders)
+    monkeypatch.setattr(lv, "codex_cli_process", lambda pid: True)
+    assert lv.codex_holder_live(row) is False
+
+
+def test_codex_holder_live_dead_pid_branch_spawns_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def no_spawn(*_a, **_k):
+        raise AssertionError("spawned a process")
+    monkeypatch.setattr(subprocess, "Popen", no_spawn)
+    monkeypatch.setattr(subprocess, "run", no_spawn)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(lv, "pid_alive", lambda _pid: False)
+    row = {"vendor": "codex", "codexPid": 4242, "codexProcStart": "x", "target": "t-1"}
+    assert lv.codex_holder_live(row) is False
+    (tmp_path / "thread-writer-locks").mkdir()
+    (tmp_path / "thread-writer-locks" / "t-1.lock").write_bytes(b"")
+    assert lv.codex_holder_live(row) is False
+
+
+@pytest.mark.parametrize("argv,expected", [
+    (["codex"], True),
+    (["C:\\bin\\codex.exe", "resume", "t-1"], True),
+    (["/usr/bin/node", "/lib/node_modules/@openai/codex/bin/codex.js"], True),
+    (["codex", "app-server", "--listen", "stdio://"], False),
+    (["node", "/lib/@openai/codex/bin/codex.js", "app-server"], False),
+    (["node", "server.js"], False),
+    (["python", "codex"], False),
+    ([], False),
+    (None, False),
+])
+def test_argv_is_codex_cli_admits_only_cli_images(argv, expected) -> None:
+    assert lv._proc()._argv_is_codex_cli(argv) is expected
+
+
+def test_codex_cli_process_unreadable_argv_is_not_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(lv._proc(), "_process_argv", lambda pid: None)
+    assert lv._proc().codex_cli_process(1) is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Restart Manager lists any process; /proc and libproc scans filter to codex/node")
+def test_lock_holder_pids_sees_this_process_holding_the_file(tmp_path: Path) -> None:
+    lock = tmp_path / "held.lock"
+    with open(lock, "wb"):
+        assert os.getpid() in lv._proc().lock_holder_pids(lock)
+    assert os.getpid() not in lv._proc().lock_holder_pids(lock)
 
 
 def test_codex_holder_live_differing_start_is_false() -> None:

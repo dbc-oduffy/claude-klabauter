@@ -17,7 +17,10 @@ Invariants:
   holding its create_time; a create_time mismatch is a reused pid and is refused). A child reparented
   under the shared serve is reachable only through a record. The worker root is the nearest agent
   session (`codex` or `claude`) ancestor of `caller_pid` (stamped by coordinator-invoke, never trusted
-  from the user), or `root_pid` when that is itself an ancestor of the caller. A descendant is admitted
+  from the user), or `root_pid` when that is an ancestor of the caller or a descendant of it with no
+  agent session between (a detached guard's own child; the root itself is then stoppable). A caller with
+  no agent-session ancestor and no `root_pid` is its own root. A refusal reply also carries
+  `exit_code: 1` and `error`, so `coordinator-invoke` writes a FAILED line to stderr. A descendant is admitted
   only when no agent session (the target included) sits between it and the root, so a peer or nested
   session's tree and the session process itself are refused. A cmdline run tag is never admission.
 - When neither admits, a pid in `settings_home()/spawn-ledger/<caller_session_id>/` (written at launch by
@@ -175,16 +178,20 @@ def _recorded_refusal(target: Any, root: Any, repo_root: Any) -> str:
 
 
 def _worker_root(ps: Any, chain: list, root_pid: Any) -> tuple[Any, str]:
-    """(root process, refusal); the root is `root_pid` or the nearest agent-session ancestor of the caller."""
+    """(root process, refusal): `root_pid` when it is an ancestor of the caller or a descendant of it
+    (a detached guard's own child), else the nearest agent-session ancestor, else the caller itself."""
     if root_pid is not None:
         for p in chain:
             if p.pid == root_pid:
                 return p, ""
-        return None, "root_pid is not an ancestor of the caller"
+        if not isinstance(root_pid, int) or isinstance(root_pid, bool) or root_pid <= 1:
+            return None, "root_pid must be an integer above 1"
+        under, why = _descends_from(ps, root_pid, chain[0])
+        if under:
+            return ps.Process(root_pid), ""
+        return None, why or "root_pid is neither an ancestor nor a descendant of the caller"
     named = [p for p in chain if os.path.splitext(p.name().lower())[0] in _ROOT_NAMES]
-    if not named:
-        return None, "no agent-session (codex or claude) ancestor of the caller; pass root_pid (your shell's own pid)"
-    return named[0], ""
+    return (named[0] if named else chain[0]), ""
 
 
 def _is_session(proc: Any) -> bool:
@@ -297,7 +304,8 @@ def stop_own_child(
         if root_proc is None:
             reason = why
         else:
-            under, reason = _descends_from(ps, pid, root_proc)
+            guarded_root = pid == root_proc.pid and root_proc.pid not in {p.pid for p in chain}
+            under, reason = (True, "") if guarded_root else _descends_from(ps, pid, root_proc)
             other_session = bool(reason)
             if not under and not reason:
                 reason = _recorded_refusal(target, root_proc, repo_root)
@@ -346,7 +354,10 @@ def _stop_handler(params: dict, repo_root=None) -> dict:
     launch instead of stopping it. A pid the root and record paths refuse is stopped when the
     caller's session ledgered it (same create_time), else when its inherited environment names that
     session (survives an exited shell or launcher hop)."""
-    return stop_own_child(
+    out = stop_own_child(
         params.get("pid"), params.get("caller_pid"), params.get("root_pid"),
         record=params.get("record") is True, repo_root=repo_root,
         caller_session_id=params.get("caller_session_id"))
+    if "refused" in out:
+        out = {**out, "exit_code": 1, "error": f"proc.stop_own_child REFUSED: {out['refused']}"}
+    return out

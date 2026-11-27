@@ -56,18 +56,11 @@ def entry_live(d) -> bool:
     return not holder_proven_dead(d)
 
 
-def codex_holder_live(row):
-    """Liveness of the Codex process a peer row recorded as `codexPid`/`codexProcStart`."""
-    pid = row.get("codexPid") if isinstance(row, dict) else None
-    if not isinstance(pid, int) or isinstance(pid, bool):
-        return None
-    if entry_live({"pid": pid, "procStart": row.get("codexProcStart")}):
-        return True
-    target = row.get("target")
-    if row.get("vendor") != "codex" or not isinstance(target, str):
-        return False
-    code_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-    return _get(_proc, "agy_presence_held")(target, presence_dir=code_home / "thread-writer-locks")
+def codex_holder_live(row) -> "bool | None":
+    """Liveness of the Codex process a peer row recorded as `codexPid`/`codexProcStart` (`_unimatrix.proc`)."""
+    return _proc().codex_holder_live(
+        row, *(_get(_proc, name) for name in ("pid_alive", "proc_start", "agy_presence_held",
+                                              "lock_holder_pids", "codex_cli_process")))
 
 
 def supervisor_live(rec) -> bool:

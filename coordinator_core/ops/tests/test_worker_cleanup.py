@@ -54,8 +54,8 @@ def test_stop_own_child_refuses_non_descendant_and_ancestor():
         # Caller is `child` (its own root); `sibling` is a live process outside that root.
         assert "not a descendant" in wc.stop_own_child(sibling.pid, child.pid, root_pid=child.pid)["refused"]
         assert sibling.poll() is None
-        # root_pid must be an ancestor of the caller; the child is not.
-        assert "not an ancestor" in wc.stop_own_child(parent, os.getpid(), root_pid=child.pid)["refused"]
+        # root_pid naming the caller's own child is admitted as root; an ancestor stays refused.
+        assert "ancestors" in wc.stop_own_child(parent, os.getpid(), root_pid=child.pid)["refused"]
         assert "ancestors" in wc.stop_own_child(os.getpid(), os.getpid(), root_pid=os.getpid())["refused"]
         assert child.poll() is None
     finally:
@@ -216,7 +216,8 @@ def test_invoke_stamps_caller_pid_over_a_spoofed_one():
         params = json.dumps({"pid": grand, "caller_pid": root.pid, "root_pid": root.pid})
         out = subprocess.run([sys.executable, "-m", "coordinator_core.invoke", "proc.stop_own_child", params],
                              capture_output=True, text=True, timeout=60)
-        assert "not an ancestor" in out.stdout + out.stderr
+        assert "neither an ancestor nor a descendant" in out.stdout + out.stderr
+        assert "REFUSED" in out.stderr
         assert psutil.pid_exists(grand)
     finally:
         for pid in (grand, root.pid):
@@ -392,13 +393,63 @@ def test_session_root_is_the_nearest_so_a_nested_session_is_scoped(tmp_path):
     assert "another agent session" in out["refused"] and not ps.procs[35].stopped
 
 
-def test_no_agent_session_ancestor_refuses_without_a_root_pid(tmp_path):
+def _detached_world():
+    """bash(20) > guard(30) > run(34) > worker(35); guard also has an unrelated sibling shell(21) > job(36);
+    peer claude(40) > job(42)."""
     ps = _FakePs()
     ps.add(20, 1, "bash.exe", 101.0)
     ps.add(30, 20, "python.exe", 102.0)
     ps.add(34, 30, "python.exe", 103.0)
-    out = wc.stop_own_child(34, caller_pid=30, ps=ps, repo_root=tmp_path)
-    assert "no agent-session" in out["refused"] and not ps.procs[34].stopped
+    ps.add(35, 34, "python.exe", 104.0)
+    ps.add(21, 1, "bash.exe", 101.0)
+    ps.add(36, 21, "python.exe", 105.0)
+    ps.add(40, 1, "claude.exe", 100.0)
+    ps.add(42, 40, "python.exe", 102.0)
+    return ps
+
+
+def test_detached_caller_stops_its_own_descendant_with_only_pid(tmp_path):
+    ps = _detached_world()
+    assert wc.stop_own_child(35, caller_pid=30, ps=ps, repo_root=tmp_path) == {"stopped": 35}
+    assert ps.procs[35].stopped
+
+
+def test_detached_caller_refuses_foreign_ancestor_and_session_pids(tmp_path):
+    ps = _detached_world()
+    ask = dict(caller_pid=30, ps=ps, repo_root=tmp_path)
+    for pid in (36, 42, 21):
+        assert "not a descendant" in wc.stop_own_child(pid, **ask)["refused"]
+    assert "ancestors" in wc.stop_own_child(20, **ask)["refused"]
+    assert "ancestors" in wc.stop_own_child(30, **ask)["refused"]
+    assert not any(ps.procs[p].stopped for p in (20, 21, 30, 36, 40, 42))
+
+
+def test_root_pid_naming_the_callers_child_admits_it_and_its_tree_only(tmp_path):
+    ps = _detached_world()
+    ps.add(37, 30, "python.exe", 106.0)
+    ask = dict(caller_pid=30, root_pid=34, ps=ps, repo_root=tmp_path)
+    assert wc.stop_own_child(35, **ask) == {"stopped": 35}
+    assert wc.stop_own_child(34, **ask) == {"stopped": 34}
+    assert "not a descendant" in wc.stop_own_child(37, **ask)["refused"]
+    assert not ps.procs[37].stopped
+
+
+def test_root_pid_outside_the_callers_lineage_or_under_a_session_is_refused(tmp_path):
+    ps = _detached_world()
+    ps.add(38, 30, "claude.exe", 107.0)
+    ps.add(39, 38, "python.exe", 108.0)
+    for root in (36, 42, 39, 4040):
+        out = wc.stop_own_child(35, caller_pid=30, root_pid=root, ps=ps, repo_root=tmp_path)
+        assert "refused" in out
+    assert not any(p.stopped for p in ps.procs.values())
+
+
+def test_handler_refusal_is_a_loud_non_success_reply(monkeypatch):
+    monkeypatch.setattr(wc, "stop_own_child", lambda *a, **k: {"refused": "pid is not a descendant"})
+    out = wc._stop_handler({"pid": 5, "caller_pid": 30})
+    assert out["exit_code"] == 1 and "REFUSED" in out["error"] and "pid is not a descendant" in out["error"]
+    monkeypatch.setattr(wc, "stop_own_child", lambda *a, **k: {"stopped": 5})
+    assert wc._stop_handler({"pid": 5, "caller_pid": 30}) == {"stopped": 5}
 
 
 def _env_ask(ps, pid=60, session="sessA"):

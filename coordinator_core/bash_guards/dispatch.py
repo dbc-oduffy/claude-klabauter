@@ -2313,7 +2313,9 @@ def _check_stale_temp_index_base(cmd: str, payload: Optional[Dict[str, Any]]) ->
     """Deny a `GIT_INDEX_FILE=<tmp> git commit` whose index undoes a commit landed on HEAD.
 
     Spawns nothing unless a commit segment carries a leading GIT_INDEX_FILE
-    assignment. Fails open on any probe failure.
+    assignment. Fails open on any probe failure. A path carrying an unexpanded
+    shell expansion names no file the guard can read: it allows, never probing
+    a substitute index.
     """
     if not cmd or "GIT_INDEX_FILE" not in cmd:
         return None
@@ -2329,6 +2331,8 @@ def _check_stale_temp_index_base(cmd: str, payload: Optional[Dict[str, Any]]) ->
             continue
         index_file = _dc._bt_git_index_file_env(seg_tokens)
         if not index_file:
+            continue
+        if "$" in index_file or "`" in index_file:
             continue
         reverted = stale_base_reverted_paths(
             index_file, _dc._bt_probe_cwd(seg_tokens, payload, cmd), _dc._dc_git_probe._run_git

@@ -284,9 +284,24 @@ def _agy_record_age_origin(conversation, rec, home) -> float | None:
     return None
 
 
+def agy_leg_held(rec) -> bool:
+    """True for a leg record with no `agy_pid` (a router-started leg) whose own `pid` is still its process.
+
+    That leg serves a conversation with no agy process, so its own liveness replaces the agy-session
+    test; it exits itself when its conversation reads dead. The spawning router's pid is never read:
+    a leg outlives its parent."""
+    if not isinstance(rec, dict) or rec.get("agy_pid") is not None:
+        return False
+    pid = rec.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        return False
+    start = rec.get("procStart")
+    return entry_live({"pid": pid, "procStart": start} if isinstance(start, str) and start else {"pid": pid})
+
+
 def agy_session_state(conversation, rec, home=None, now=None) -> str:
     """'live' | 'dead' | 'unknown' for a conversation's agy session."""
-    if agy_presence_held(conversation):
+    if agy_presence_held(conversation) or agy_leg_held(rec):
         return "live"
     rec = rec if isinstance(rec, dict) else {}
     agy_pid = rec.get("agy_pid")
@@ -314,7 +329,9 @@ def agy_face_unbacked(d, home=None) -> bool:
     if row is None:
         return True
     target = row.get("target")
-    if not isinstance(target, str) or not target or "/" in target or "\\" in target:
+    if not isinstance(target, str) or not target:
+        return True  # a row naming no conversation has no leg record to serve it
+    if "/" in target or "\\" in target:
         return False
     try:
         rec = json.loads((base / "agy-legs" / f"{target}.json").read_text(encoding="utf-8"))
@@ -325,7 +342,7 @@ def agy_face_unbacked(d, home=None) -> bool:
     if not isinstance(rec, dict):
         return False
     if rec.get("mode", "live") != "live":  # a pending leg only spools: its face is not served; absent mode reads live
-        return True
+        return not agy_leg_held(rec)  # a record held by a live leg stays listed: it spools
     return agy_session_state(target, rec, home) == "dead"
 
 
@@ -399,18 +416,216 @@ def agy_peer_rows_orphaned(home=None) -> list:
     ]
 
 
-def codex_holder_live(row):
-    """Liveness of the Codex process a peer row recorded as `codexPid`/`codexProcStart`."""
+def _win_lock_holder_pids(path) -> "list[int] | None":
+    import ctypes
+    from ctypes import wintypes
+
+    class _RmProcess(ctypes.Structure):
+        _fields_ = [("pid", wintypes.DWORD), ("start_lo", wintypes.DWORD), ("start_hi", wintypes.DWORD),
+                    ("app", ctypes.c_wchar * 256), ("service", ctypes.c_wchar * 64), ("app_type", ctypes.c_uint),
+                    ("status", ctypes.c_ulong), ("session", wintypes.DWORD), ("restartable", wintypes.BOOL)]
+
+    rm = ctypes.WinDLL("rstrtmgr")
+    session, key = wintypes.DWORD(), ctypes.create_unicode_buffer(33)
+    if rm.RmStartSession(ctypes.byref(session), 0, key):
+        return None
+    try:
+        files = (wintypes.LPCWSTR * 1)(str(path))
+        if rm.RmRegisterResources(session.value, 1, files, 0, None, 0, None):
+            return None
+        needed, count, reasons = wintypes.UINT(0), wintypes.UINT(0), wintypes.DWORD(0)
+        code = rm.RmGetList(session.value, ctypes.byref(needed), ctypes.byref(count), None, ctypes.byref(reasons))
+        if code == 0:
+            return []
+        for _ in range(3):
+            if code != 234:  # ERROR_MORE_DATA
+                return None
+            count = wintypes.UINT(needed.value + 4)
+            procs = (_RmProcess * count.value)()
+            code = rm.RmGetList(session.value, ctypes.byref(needed), ctypes.byref(count), procs, ctypes.byref(reasons))
+            if code == 0:
+                return [procs[i].pid for i in range(count.value)]
+        return None
+    finally:
+        rm.RmEndSession(session.value)
+
+
+def _linux_lock_holder_pids(path) -> "list[int] | None":
+    target = os.path.realpath(path)
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return None
+    holders = []
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/comm", encoding="utf-8", errors="replace") as fh:
+                if fh.read().strip() not in ("codex", "node"):
+                    continue
+            for fd in os.listdir(f"/proc/{name}/fd"):
+                if os.readlink(f"/proc/{name}/fd/{fd}") == target:
+                    holders.append(int(name))
+                    break
+        except OSError:
+            continue
+    return holders
+
+
+def _mac_lock_holder_pids(path) -> "list[int] | None":
+    import ctypes
+    import ctypes.util
+    lib = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib", use_errno=True)
+    target = os.path.realpath(path)
+    count = lib.proc_listpids(1, 0, None, 0)  # PROC_ALL_PIDS
+    if count <= 0:
+        return None
+    pids = (ctypes.c_int * (count // 4 + 32))()
+    count = lib.proc_listpids(1, 0, pids, ctypes.sizeof(pids))
+    if count <= 0:
+        return None
+    holders = []
+    name = ctypes.create_string_buffer(64)
+    for pid in pids[:count // 4]:
+        if pid <= 0 or lib.proc_name(pid, name, 64) <= 0 or name.value.decode("utf-8", "replace") not in ("codex", "node"):
+            continue
+        size = lib.proc_pidinfo(pid, 1, 0, None, 0)  # PROC_PIDLISTFDS
+        if size <= 0:
+            continue
+        fds = (ctypes.c_uint32 * (size // 4 + 2))()
+        size = lib.proc_pidinfo(pid, 1, 0, fds, ctypes.sizeof(fds))
+        for i in range(max(size, 0) // 8):
+            fd, fdtype = fds[2 * i], fds[2 * i + 1]
+            if fdtype != 1:  # PROX_FDTYPE_VNODE
+                continue
+            info = ctypes.create_string_buffer(1200)  # vnode_fdinfowithpath; vip_path at +176
+            if lib.proc_pidfdinfo(pid, fd, 2, info, 1200) == 1200 \
+                    and info.raw[176:].split(b"\0", 1)[0].decode("utf-8", "replace") == target:
+                holders.append(pid)
+                break
+    return holders
+
+
+def lock_holder_pids(path) -> "list[int] | None":
+    """Pids holding `path` open; None when this platform or the caller's rights cannot tell. Never spawns."""
+    try:
+        if sys.platform == "win32":
+            return _win_lock_holder_pids(path)
+        if sys.platform == "darwin":
+            return _mac_lock_holder_pids(path)
+        return _linux_lock_holder_pids(path)
+    except (OSError, ValueError, AttributeError, ImportError):
+        return None
+
+
+def _win_argv(pid) -> "list[str] | None":
+    import ctypes
+    from ctypes import wintypes
+    if ctypes.sizeof(ctypes.c_void_p) != 8:
+        return None
+    k32, nt = ctypes.WinDLL("kernel32"), ctypes.WinDLL("ntdll")
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.ReadProcessMemory.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+                                      ctypes.POINTER(ctypes.c_size_t)]
+    nt.NtQueryInformationProcess.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong,
+                                             ctypes.POINTER(ctypes.c_ulong)]
+    handle = k32.OpenProcess(0x0410, False, pid)  # QUERY_INFORMATION | VM_READ
+    if not handle:
+        return None
+    try:
+        pbi = (ctypes.c_void_p * 6)()
+        if nt.NtQueryInformationProcess(handle, 0, pbi, ctypes.sizeof(pbi), ctypes.byref(ctypes.c_ulong())) != 0:
+            return None
+
+        def read(addr, size) -> bytes:
+            buf, got = ctypes.create_string_buffer(size), ctypes.c_size_t()
+            if not addr or not k32.ReadProcessMemory(handle, addr, buf, size, ctypes.byref(got)) or got.value != size:
+                raise OSError("unreadable process memory")
+            return buf.raw
+
+        params = struct.unpack("<Q", read(pbi[1], 0x28)[0x20:0x28])[0]
+        length, _max, _pad, text_ptr = struct.unpack("<HHIQ", read(params + 0x70, 16))
+        text = read(text_ptr, length).decode("utf-16-le")
+    except (OSError, struct.error, UnicodeDecodeError):
+        return None
+    finally:
+        k32.CloseHandle(handle)
+    import re
+    return [a or b for a, b in re.findall(r'"([^"]*)"|(\S+)', text)]
+
+
+def _mac_argv(pid) -> "list[str] | None":
+    import ctypes
+    import ctypes.util
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    size = ctypes.c_size_t(1 << 20)
+    buf = ctypes.create_string_buffer(size.value)
+    mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2
+    if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+        return None
+    raw = buf.raw[:size.value]
+    argc = struct.unpack("<i", raw[:4])[0]
+    parts = raw[4:].split(b"\0")
+    parts.pop(0)  # exec path
+    while parts and not parts[0]:
+        parts.pop(0)
+    return [p.decode("utf-8", "replace") for p in parts[:max(argc, 0)]]
+
+
+def _process_argv(pid) -> "list[str] | None":
+    try:
+        if sys.platform == "win32":
+            return _win_argv(pid)
+        if sys.platform == "darwin":
+            return _mac_argv(pid)
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return [p.decode("utf-8", "replace") for p in fh.read().split(b"\0") if p]
+    except (OSError, ValueError, AttributeError, ImportError, struct.error):
+        return None
+
+
+def _argv_is_codex_cli(argv) -> bool:
+    """True for a `codex` image, or a node launcher of one, whose argv carries no `app-server` token."""
+    if not argv or "app-server" in argv[1:]:
+        return False
+    image = os.path.basename(argv[0].replace("\\", "/")).lower()
+    for suffix in (".exe", ".cmd", ".js"):
+        if image.endswith(suffix):
+            image = image[:-len(suffix)]
+    if image == "codex":
+        return True
+    if image in ("node", "nodejs"):
+        script = next((a for a in argv[1:] if not a.startswith("-")), "")
+        return "@openai/codex" in script.replace("\\", "/") or os.path.basename(script.replace("\\", "/")).startswith("codex")
+    return False
+
+
+def codex_cli_process(pid) -> bool:
+    """True when `pid` is a codex CLI/TUI, not an app-server; any unreadable argv is False."""
+    return _argv_is_codex_cli(_process_argv(pid))
+
+
+def codex_holder_live(row, pid_alive_fn=None, proc_start_fn=None, presence_held_fn=None,
+                      lock_pids_fn=None, cli_fn=None) -> "bool | None":
+    """Liveness of the Codex process a peer row recorded as `codexPid`/`codexProcStart`.
+
+    With the recorded holder dead, the thread's writer lock keeps the row live only while a codex CLI/TUI holds it."""
     pid = row.get("codexPid") if isinstance(row, dict) else None
     if not isinstance(pid, int) or isinstance(pid, bool):
         return None
-    if entry_live({"pid": pid, "procStart": row.get("codexProcStart")}):
+    if not holder_proven_dead({"pid": pid, "procStart": row.get("codexProcStart")}, pid_alive_fn, proc_start_fn):
         return True
     target = row.get("target")
     if row.get("vendor") != "codex" or not isinstance(target, str):
         return False
-    code_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-    return agy_presence_held(target, presence_dir=code_home / "thread-writer-locks")
+    lock_dir = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "thread-writer-locks"
+    if not (presence_held_fn or agy_presence_held)(target, presence_dir=lock_dir):
+        return False
+    holders = (lock_pids_fn or lock_holder_pids)(lock_dir / f"{target}.lock")
+    return any((cli_fn or codex_cli_process)(p) for p in holders or ())
 
 
 def _codex_peer_rows(home=None) -> "list | None":

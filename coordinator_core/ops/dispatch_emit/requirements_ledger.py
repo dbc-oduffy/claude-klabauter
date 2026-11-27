@@ -3142,6 +3142,7 @@ def judge(
     wave_reviews: Sequence[Mapping] = (), noted_paths: Sequence[str] = (),
     code_paths: Sequence[str] = (), review_verdicts: Optional[int] = None,
     note_ids: Collection[str] = (), mended: Collection[str] = (), run_id: Optional[str] = None,
+    inline_review: Optional[Mapping] = None,
 ) -> dict:
     """`{"pass": bool, "failures": [{"id", "reason"}], "open": [{"id", "reason"}]}` for a checker
     `verdict` (`{"items": [{"id", "status", "essential"?, "withheld_by"?, "superseded_by"?,
@@ -3318,6 +3319,7 @@ def judge(
                     _spine_writes(plan_text, item.id, all_rows=by_id.get(item.id) is None),
                     row,
                     run_id or ledger.run_id,
+                    inline_review,
                 )
                 if stale is not None:
                     failures.append({"id": item.id, "reason": stale})

@@ -135,12 +135,31 @@ def _changed_since_leg(repo_root: Path, run_id: Optional[str], leg_at: datetime,
         return newer[0]
 
 
+def _reverify_at(repo_root: Path, inline_review: Optional[Mapping]) -> Optional[datetime]:
+    """Finish time (UTC) of the run's green review re-verify; None when absent, red, errored or unstamped.
+
+    trap: the stamp is the newest mtime of the record's sidecar, and the re-verify's own coverage of an item's writes is not checked."""
+    if not isinstance(inline_review, Mapping):
+        return None
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests, terminal_commit_review
+
+    if not landing_targeted_tests.reverify_passed_clean({"inline_review": inline_review}):
+        return None
+    block = inline_review.get("reverify")
+    if isinstance(block, Mapping) and block.get("tests_run") == 0:
+        return None
+    epoch = terminal_commit_review._reverify_finished_at(Path(repo_root), dict(inline_review))
+    return None if epoch is None else datetime.fromtimestamp(epoch, tz=timezone.utc)
+
+
 def stale_tests_refusal(
     repo_root: Path, writes: Sequence[str], item: Mapping, run_id: Optional[str] = None,
+    inline_review: Optional[Mapping] = None,
 ) -> Optional[str]:
     """Refusal reason when no test run is stamped at or after the content of the row's writes; None otherwise.
 
-    The stamp is the later of the item's `tests_ran_at` and the `run_id` run's test-leg `measured_at`.
+    The stamp is the latest of the item's `tests_ran_at`, the `run_id` run's test-leg `measured_at` and the
+    finish of a green `inline_review` re-verify (red, errored or unstamped ones count for nothing).
     A write whose mtime is past the stamp still passes while its bytes equal the run's measured-rev
     record (a peer's touch is not an edit); content that differs from it is refused. None also when no
     write exists. A naive stamp is refused, never assumed UTC.
@@ -152,7 +171,8 @@ def stale_tests_refusal(
     raw = item.get(TESTS_RAN_AT_KEY)
     ran = _parse_aware(raw)
     leg_at = _leg_measured_at(repo_root, run_id)
-    stamp = max((s for s in (ran, leg_at) if s is not None), default=None)
+    reverify_at = _reverify_at(repo_root, inline_review)
+    stamp = max((s for s in (ran, leg_at, reverify_at) if s is not None), default=None)
     if stamp is None:
         shown = "absent" if raw in (None, "") else f"unusable ({raw!r})"
         return (

@@ -165,6 +165,22 @@ def test_dispatch_is_silent_on_a_current_index(tmp_path: Path) -> None:
     assert _stale_deny_text(_dispatch(repo, _hand_commit(idx))) is None
 
 
+@pytest.mark.parametrize("spelling", ['"$S/m2.idx"', "${S}/m2.idx", "$(mktemp)/m2.idx", "`pwd`/m2.idx"])
+def test_dispatch_allows_a_hand_commit_with_an_unexpanded_index_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spelling: str
+) -> None:
+    repo = _repo(tmp_path)
+    _commit(repo, "p.txt", "p-peer\n", "peer lands p")
+    calls: list = []
+    monkeypatch.setattr(
+        "coordinator_core.bash_guards._stale_index_base.stale_base_reverted_paths",
+        lambda *a, **k: calls.append(a) or ["p.txt"],
+    )
+    out = _dispatch(repo, 'GIT_INDEX_FILE=%s git commit -m "mine"' % spelling)
+    assert _stale_deny_text(out) is None
+    assert calls == []
+
+
 def test_dispatch_without_git_index_file_spawns_no_stale_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "p.txt", "p-peer\n", "peer lands p")

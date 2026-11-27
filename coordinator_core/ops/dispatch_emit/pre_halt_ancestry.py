@@ -15,6 +15,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import UNCHANGED_SINCE_HALT
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import sha_tokens
 
 MAX_CITED: int = 8
+#: Marks a synthesised resume ledger whose stage staged no row: the gate declares paths from the run's leg footprint.
+EMPTY_STAGE_RESUME_FIELD: str = "empty_stage"
 CITED_DETAIL_KEY: str = "cited"
 
 

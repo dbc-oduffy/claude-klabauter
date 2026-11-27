@@ -283,6 +283,118 @@ def test_a_leg_that_recorded_itself_red_is_not_credited_as_a_stamp(tmp_path, red
     assert reason is not None and reason.startswith(STALE_TESTS_REASON)
 
 
+def _reverify(tmp_path, *, at, **fields):
+    """An `inline_review` whose re-verify record names a sidecar file stamped `at`."""
+    _touch(tmp_path / "rv.json", at)
+    return {"reverify": {"status_after": "pass", "sidecar_path": "rv.json", **fields}}
+
+
+def _stale_item():
+    return _item((EDIT - timedelta(minutes=30)).isoformat())
+
+
+def test_a_green_reverify_after_the_last_edit_stands_as_a_fresh_run(tmp_path):
+    _touch(tmp_path / "a.py")
+    review = _reverify(tmp_path, at=EDIT + timedelta(minutes=1))
+    assert stale_tests_refusal(tmp_path, ["a.py"], _stale_item(), RUN) is not None
+    assert stale_tests_refusal(tmp_path, ["a.py"], _stale_item(), RUN, review) is None
+
+
+@pytest.mark.parametrize(
+    "fields", ({"status_after": "fail"}, {"failing": ["t.py::test_x"]}, {"tests_run": 0}, {"reverify_error": "boom"}, {"sidecar_path": "gone.json"}),
+)
+def test_a_red_errored_or_unstamped_reverify_still_refuses(tmp_path, fields):
+    _touch(tmp_path / "a.py")
+    review = _reverify(tmp_path, at=EDIT + timedelta(minutes=1), **fields)
+    reason = stale_tests_refusal(tmp_path, ["a.py"], _stale_item(), RUN, review)
+    assert reason is not None and reason.startswith(STALE_TESTS_REASON)
+
+
+def test_no_reverify_or_one_finished_before_the_edit_still_refuses(tmp_path):
+    _touch(tmp_path / "a.py")
+    early = _reverify(tmp_path, at=EDIT - timedelta(minutes=1))
+    for review in (None, {}, early):
+        reason = stale_tests_refusal(tmp_path, ["a.py"], _stale_item(), RUN, review)
+        assert reason is not None and reason.startswith(STALE_TESTS_REASON)
+
+
+def test_judge_meets_an_item_covered_by_a_later_green_reverify(tmp_path):
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    _touch(tmp_path / "a.py")
+    ledger = rl.Ledger(
+        items=(rl.Item("R1", "text R1", "pm", "2026-11-16T00:00:00Z", anchor="pm_verbatims"),), all_of_pm_ask=False,
+    )
+    row = {"id": "R1", "status": "met", "evidence": "verified", "essential": True, "wired": False,
+           TESTS_RAN_AT_KEY: (EDIT - timedelta(minutes=30)).isoformat()}
+    refused = rl.judge(ledger, {"items": [row]}, repo_root=tmp_path, plan_text=_JUDGE_PLAN)
+    assert not refused["pass"]
+    review = _reverify(tmp_path, at=EDIT + timedelta(minutes=1))
+    met = rl.judge(ledger, {"items": [row]}, repo_root=tmp_path, plan_text=_JUDGE_PLAN, inline_review=review)
+    assert met["pass"] is True and met["failures"] == []
+    red = _reverify(tmp_path, at=EDIT + timedelta(minutes=1), status_after="fail")
+    out = rl.judge(ledger, {"items": [row]}, repo_root=tmp_path, plan_text=_JUDGE_PLAN, inline_review=red)
+    assert not out["pass"]
+
+
+_GATE_RUN = "ask-20261120T000000-gate01"
+_GATE_REL = "state/sizings/2026-11-20-gate.yaml"
+
+
+def _gate_fixture(root):
+    """A bound ledger-bearing run, its met verdict (every item stale-stamped) and a plan spine whose row writes `a.py`."""
+    import yaml
+
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    (root / ".git").mkdir()
+    (root / "state" / "sizings").mkdir(parents=True)
+    doc = {
+        "schema": "sizing-object", "intent": "build the op", "estimate": {"tshirt": "S", "provisional": True},
+        "route": "dispatch", "detents": [], "fork": None, "xl_exit": None, "status": "sized",
+        "premise": {"provenance": "not-applicable", "evidence": "fixture"},
+        "pm_verbatims": [{"turn": 1, "text": "build the op"}],
+    }
+    (root / _GATE_REL).write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    rl.start(root, _GATE_RUN, all_of_pm_ask=False)
+    rl.bind(root, _GATE_RUN, _GATE_REL, ask_text="a raw ask")
+    run_dir = root / RECORD_DIR_ROOT / _GATE_RUN
+    ids = [i.id for i in rl.read_ledger(root, run_dir).items]
+    stale = (EDIT - timedelta(minutes=30)).isoformat()
+    verdict = {"items": [
+        {"id": i, "status": "met", "evidence": "verified", "essential": True, "wired": False, TESTS_RAN_AT_KEY: stale}
+        for i in ids
+    ]}
+    plan = _JUDGE_PLAN.replace('["R1"]', json.dumps(ids))
+    return run_dir, verdict, plan
+
+
+def _gate_calls(root, run_dir, verdict, plan, review):
+    from coordinator_core.ops.dispatch_emit import land_run, terminal_commit_ledger
+
+    return {
+        "land_run": land_run._ledger_gate(root, run_dir, verdict, None, (), {}, plan, review, None, None)[0],
+        "terminal_commit_ledger": terminal_commit_ledger._ledger_gate(
+            root, run_dir, verdict, plan_text=plan, inline_review=review
+        )[0],
+    }
+
+
+def test_the_commit_gates_meet_an_item_covered_by_a_later_green_reverify(tmp_path):
+    _touch(tmp_path / "a.py")
+    run_dir, verdict, plan = _gate_fixture(tmp_path)
+    refused = _gate_calls(tmp_path, run_dir, verdict, plan, {})
+    assert {k: (v or {}).get("refused") for k, v in refused.items()} == {
+        "land_run": "ledger-unmet", "terminal_commit_ledger": "ledger-unmet",
+    }
+    green = _reverify(tmp_path, at=EDIT + timedelta(minutes=1))
+    assert _gate_calls(tmp_path, run_dir, verdict, plan, green) == {"land_run": None, "terminal_commit_ledger": None}
+    red = _reverify(tmp_path, at=EDIT + timedelta(minutes=1), status_after="fail")
+    assert {k: (v or {}).get("refused") for k, v in _gate_calls(tmp_path, run_dir, verdict, plan, red).items()} == {
+        "land_run": "ledger-unmet", "terminal_commit_ledger": "ledger-unmet",
+    }
+
+
 def test_a_green_leg_record_is_still_credited(tmp_path):
     _touch(tmp_path / "a.py")
     _record(tmp_path)
