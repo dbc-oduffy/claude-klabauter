@@ -500,8 +500,9 @@ def peer_split(
 
 def untouched_declared(root: Path, run_id: str, paths: Sequence[str]) -> list:
     """Sorted `paths` the run declares whose worktree bytes (checkin form) equal its `write_baseline`
-    blob, differ from HEAD and match no kept blob of the run: the run never rewrote them, so their in-tree
-    bytes are what it declared and no peer is named for them. Zero spawn; never raises."""
+    blob, differ from HEAD and match no kept blob of the run (a path at the manifest's `foreign_at_baseline` blob
+    counts only when a kept blob matches): the run never rewrote them, so their in-tree bytes are what it declared
+    and no peer is named for them. Zero spawn; never raises."""
     with invariants_scope(root, run_id):
         root = Path(root)
         return sorted({
@@ -536,13 +537,14 @@ def _never_rewritten(root: Path, run_id: str, path: str) -> bool:
         base_form = kept_work.checkin_form(root, path, obj[1])
         if base_form is None or kept_work.blob_sha(base_form) != sha:
             return False
-        # Trap: a kept blob equal to the baseline's foreign dirt is the baseline snapshot, not a rewrite
-        # (`_unproduced` discounts it the same way); counting it read the run's own declared bytes as a peer's.
-        if _inv(root, run_id).foreign_at_baseline().get(path) == sha:
-            return True
-        return not any(
+        owned = any(
             kept_work.matches_committed(root, path, kept, sha) for kept in _inv(root, run_id).own_kept().get(path, ())
         )
+        # invariant: bytes equal to the first-stage foreign dirt are the run's own only when an own kept blob matches
+        # them (baseline snapshot); otherwise they are a peer's and fall to `_unproduced`, which splits them out.
+        if _inv(root, run_id).foreign_at_baseline().get(path) == sha:
+            return owned
+        return not owned
     except Exception:  # noqa: BLE001
         return False
 

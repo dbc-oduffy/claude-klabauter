@@ -50,6 +50,26 @@ def test_own_hunk_after_foreign_baseline_is_still_credited(world):
     assert "2" in found.detail and "8" not in found.detail.split("were")[0]
 
 
+def test_declared_foreign_at_baseline_path_the_run_never_rewrote_is_split_out_of_its_commit(world, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import co_declared_settle
+
+    monkeypatch.setattr(co_declared_settle, "settled_blob", lambda *a, **k: "c" * 40)
+    dirt = _text({2: "PEER"})
+    world.head(_text({}))
+    world.baseline(dirt)
+    world.tree(dirt)
+    d = world.root / "state" / "warp" / ME
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "manifest.json").write_text(
+        json.dumps({"rows": [{"writes": [PATH]}], "foreign_at_baseline": {PATH: kept_work.blob_sha(dirt)}}),
+        encoding="utf-8",
+    )
+    untouched: list = []
+    split, unsettled = hp.peer_split(world.root, ME, [PATH], untouched=untouched)
+    assert untouched == [] and unsettled == {}
+    assert split == {PATH: {"blob": "c" * 40, "owner": hp.UNKNOWN_OWNER, "lines": "2,1"}}
+
+
 def test_unmarked_baseline_keeps_the_kept_blob_shortcut(world):
     """A restage's own earlier dirt carries no first-stage marker: the kept blob still credits it."""
     world.head(_text({}))

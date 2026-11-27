@@ -104,6 +104,28 @@ def test_a_kept_blob_equal_to_the_baseline_dirt_is_the_snapshot_not_a_rewrite(wo
     assert hp.peer_split(world, RUN, [PATH]) == ({}, {})
 
 
+def test_a_foreign_at_baseline_path_the_run_never_rewrote_stays_out_of_the_commit_candidate(world, monkeypatch):
+    (world / PATH).write_bytes(PRE_RUN)
+    blob = _git(world, "hash-object", PATH)
+    monkeypatch.setattr(hp.RunInvariants, "foreign_at_baseline", lambda self: {PATH: blob})
+    monkeypatch.setattr("coordinator_core.ops.dispatch_emit.co_declared_settle.settled_blob", lambda *a, **k: _git(
+        world, "rev-parse", "HEAD:" + PATH))
+    out = mr.measured_rev(RUN, [PATH], repo_root=world)
+    head_blob = _git(world, "rev-parse", "HEAD:" + PATH)
+    assert "untouched_declared" not in out
+    assert out["peer_hunks"][PATH]["split"] is True
+    assert _git(world, "rev-parse", out["overlay_sha"] + ":" + PATH) == head_blob == out["own_blobs"][PATH]
+
+
+def test_a_rewritten_foreign_at_baseline_path_keeps_the_runs_own_hunks(world, monkeypatch):
+    (world / PATH).write_bytes(REWRITTEN)
+    foreign = _git(world, "hash-object", "-w", "--stdin", data=PRE_RUN)
+    monkeypatch.setattr(hp.RunInvariants, "foreign_at_baseline", lambda self: {PATH: foreign})
+    assert hp.untouched_declared(world, RUN, [PATH]) == []
+    split, _ = hp.peer_split(world, RUN, [PATH])
+    assert split == {PATH: {"blob": "d" * 40, "owner": hp.UNKNOWN_OWNER, "lines": "1,1"}}
+
+
 def test_measured_rev_records_the_untouched_path_and_the_overlay_keeps_its_bytes(world):
     (world / PATH).write_bytes(PRE_RUN)
     out = mr.measured_rev(RUN, [PATH], repo_root=world)

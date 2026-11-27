@@ -48,15 +48,17 @@ def repo(tmp_path):
     return root
 
 
-def _fire(repo: Path, verdict: str) -> dict:
+def _fire(repo: Path, verdict: str, sidecar: str | None = None, claim: bool = True) -> dict:
     (repo / "a.py").write_text("a\n", encoding="utf-8")
-    (repo / _SIDECAR).write_text(_sidecar(verdict), encoding="utf-8")
+    (repo / _SIDECAR).write_text(_sidecar(verdict) if sidecar is None else sidecar, encoding="utf-8")
     request = CommitRequest(chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),))
     (repo / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
     review = {
         "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
         "wave_sidecar_paths": [_SIDECAR],
-        "wave_reviews": [{"agent_type": "coordinator:reviewer", "verdict": verdict, "sidecar_path": _SIDECAR}],
+        "wave_reviews": (
+            [{"agent_type": "coordinator:reviewer", "verdict": verdict, "sidecar_path": _SIDECAR}] if claim else []
+        ),
     }
     return terminal_commit._handler(
         {"script_path": "run.mjs", "incomplete_chunks": [], "inline_review": review},
@@ -77,7 +79,71 @@ def test_standing_requires_changes_with_owed_findings_refuses_the_commit(repo):
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
-def test_the_same_ledger_under_a_passing_verdict_is_not_refused_as_review_owed(repo):
+def _assert_review_owed(repo: Path, out: dict, head: str) -> None:
+    assert out.get("committed") is not True, out
+    assert not out.get("sha"), out
+    assert out.get("refused") == "review-owed", out
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
+def test_the_same_ledger_under_a_passing_verdict_commits(repo):
     out = _fire(repo, "PASS")
 
     assert out.get("refused") != "review-owed", out
+    assert out.get("committed") is True, out
+
+
+def test_blocked_verdict_with_owed_findings_refuses_the_commit(repo):
+    head = _git(["rev-parse", "HEAD"], repo)
+
+    out = _fire(repo, "BLOCKED")
+
+    _assert_review_owed(repo, out, head)
+    assert f"{_SIDECAR}:F1" in out["error"]
+
+
+@pytest.mark.parametrize("verdict", ["REQUIRES_CHANGES", "BLOCKED", "Requires Changes"])
+def test_standing_verdict_with_no_ledger_rows_refuses_the_commit(repo, verdict):
+    head = _git(["rev-parse", "HEAD"], repo)
+
+    out = _fire(repo, verdict, sidecar=f"---\nverdict: {verdict}\n---\n# review\n\nFinding: route.py import is broken.\n")
+
+    _assert_review_owed(repo, out, head)
+    assert "no-ledger-rows" in out["error"]
+
+
+@pytest.mark.parametrize("verdict", ["REQUIRES_CHANGES", "BLOCKED"])
+def test_standing_verdict_stated_only_in_the_body_refuses_without_a_relayed_claim(repo, verdict):
+    head = _git(["rev-parse", "HEAD"], repo)
+
+    out = _fire(repo, verdict, sidecar=f"# Staff review\n\n**Verdict:** {verdict}\n\nroute.py import is broken.\n", claim=False)
+
+    _assert_review_owed(repo, out, head)
+
+
+def test_a_quoted_standing_verdict_in_a_blockquote_or_fence_does_not_flip_a_passing_review(repo):
+    body = (
+        "# Review\n\n> verdict: BLOCKED\n\n```\nVerdict: REQUIRES_CHANGES\n```\n\n**Verdict:** PASS\n"
+    )
+
+    out = _fire(repo, "PASS", sidecar=body, claim=False)
+
+    assert out.get("refused") != "review-owed", out
+    assert out.get("committed") is True, out
+
+
+def test_standing_verdict_whose_findings_are_all_disposed_commits(repo):
+    ledger = '[{"id": "F1", "status": "rejected", "severity": "ASK", "file": "a.py"}]'
+    sidecar = f"---\nverdict: BLOCKED\n---\n# review\n\n## Findings Ledger\n\n```json\n{ledger}\n```\n"
+
+    out = _fire(repo, "BLOCKED", sidecar=sidecar)
+
+    assert out.get("refused") != "review-owed", out
+    assert out.get("committed") is True, out
+
+
+def test_a_superseding_passing_verdict_in_the_sidecar_commits(repo):
+    out = _fire(repo, "REQUIRES_CHANGES", sidecar="---\nverdict: PASS\n---\n# review\n\nSuperseded.\n")
+
+    assert out.get("refused") != "review-owed", out
+    assert out.get("committed") is True, out

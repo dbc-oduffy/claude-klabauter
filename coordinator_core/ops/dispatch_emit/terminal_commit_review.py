@@ -316,6 +316,38 @@ def _run_agent_write_events(
         for p, v in _agent_newest_hashed_writes(hub, agent_id, wanted).items():
             if v[1] >= since and v[1] >= out.get(p, (None, float("-inf")))[1]:
                 out[p] = v
+    unrecorded = wanted - out.keys()
+    if unrecorded:
+        out.update(_unrecorded_executor_writes(worktree_root, ledger, since, unrecorded))
+    return out
+
+
+def _unrecorded_executor_writes(worktree_root: Path, ledger: str, since: float, paths: set) -> dict:
+    """``{path: (sha256, mtime)}`` of ``paths`` last written since ``since`` while the run had
+    dispatched an executor, for a path no agent sink recorded a hashed write to. Trap: agent sinks
+    can be absent, so the file's own mtime stands as the write time; a write after the re-verify
+    finish still refuses in ``_less_run_agent_edits``."""
+    from coordinator_core.session import touch_record
+
+    def spawned_executor(row: str) -> bool:
+        cols = row.split("\t")
+        try:
+            return len(cols) >= 4 and "executor" in cols[2] and float(cols[3]) >= since
+        except ValueError:
+            return False
+
+    if not any(spawned_executor(r) for r in ledger.splitlines()):
+        return {}
+    out: dict = {}
+    for p in paths:
+        target = worktree_root / p
+        try:
+            mtime = target.stat().st_mtime
+        except OSError:
+            continue
+        digest = touch_record.compute_content_hash(target)
+        if digest and mtime >= since:
+            out[p] = (digest, mtime)
     return out
 
 
@@ -424,13 +456,15 @@ def _slash_path(path: str) -> str:
     return norm
 
 
-def _applied_fix_rows(text: str) -> list:
+def _applied_fix_rows(text: str, unverified_ok: bool = False) -> list:
     """``[(file, row)]`` for each verified ledger row whose status is ``applied`` (a row with no
-    status is applied) and that changed text. A ``handed-to-em``, ``open``, rejected or suspended
-    row is not an applied fix."""
+    status is applied) and that changed text; with ``unverified_ok`` a row carrying no ``verified``
+    key counts too (an explicit ``verified: false`` never does). A ``handed-to-em``, ``open``,
+    rejected or suspended row is not an applied fix."""
     out = []
     for row in _ledger_rows(text):
-        if row.get("verified") is not True or (row.get("status") or "applied") != "applied":
+        verified = row.get("verified")
+        if not (verified is True or (unverified_ok and verified is None)) or (row.get("status") or "applied") != "applied":
             continue
         if not (row.get("before") or row.get("after")):
             continue
@@ -452,8 +486,20 @@ def _applied_row_paths(text: str) -> list:
 
 
 _DISPOSED_STATUSES = frozenset({"suspended", "rejected", "em-rejected", "em_rejected"})
-_VERDICT_RE = re.compile(r"^verdict:\s*['\"]?([A-Za-z_]+)", re.MULTILINE)
+_VERDICT_RE = re.compile(r"^verdict:[ \t]*['\"]?([A-Za-z_][A-Za-z_ \-]*)", re.MULTILINE)
+_BODY_VERDICT_RE = re.compile(
+    r"^[ \t#*_\-]*verdict[ \t*_]*[:—–\-][ \t*_`'\"]*([A-Za-z_][A-Za-z_ \-]*)", re.MULTILINE | re.IGNORECASE
+)
+_FENCE_RE = re.compile(r"^[ \t]*(```|~~~).*?^[ \t]*\1[^\n]*$", re.MULTILINE | re.DOTALL)
 REQUIRES_CHANGES = "REQUIRES_CHANGES"
+BLOCKED = "BLOCKED"
+
+
+def _sidecar_verdict(text: str) -> Optional[str]:
+    """Frontmatter ``verdict``, else the first body ``Verdict:`` line; None when neither."""
+    head = text.split("\n---", 2)[0] if text.startswith("---") else ""
+    found = _VERDICT_RE.search(head) or _BODY_VERDICT_RE.search(_FENCE_RE.sub("", text))
+    return found.group(1) if found else None
 
 
 def _row_fix(row: dict) -> tuple:
@@ -484,9 +530,7 @@ def review_applied_in_tree(worktree_root: Path, inline_review: object) -> Option
         rows = _ledger_rows(text)
         if not rows and _LEDGER_BLOCK_RE.search(text) is None:
             return None
-        head = text.split("\n---", 2)[0] if text.startswith("---") else ""
-        found = _VERDICT_RE.search(head)
-        standing = bool(found) and _claimed_standing(found.group(1))
+        standing = _claimed_standing(_sidecar_verdict(text))
         for i, row in enumerate(rows):
             status = row.get("status") or "applied"
             if status in _DISPOSED_STATUSES or row.get("out_of_ask") is True:
@@ -505,7 +549,11 @@ def review_applied_in_tree(worktree_root: Path, inline_review: object) -> Option
 
 
 def _claimed_standing(verdict: object) -> bool:
-    return isinstance(verdict, str) and re.sub(r"[\s-]+", "_", verdict.strip()).upper() == REQUIRES_CHANGES
+    """True for a ``REQUIRES_CHANGES`` or ``BLOCKED`` verdict, however spaced or cased."""
+    if not isinstance(verdict, str):
+        return False
+    tokens = [t for t in re.split(r"[\s_\-]+", verdict.strip().upper()) if t]
+    return tokens[:2] == ["REQUIRES", "CHANGES"] or tokens[:1] == [BLOCKED]
 
 
 def _unverifiable_standing(worktree_root: Path, inline_review: object) -> list:
@@ -534,10 +582,9 @@ def _unverifiable_standing(worktree_root: Path, inline_review: object) -> list:
             if claims.get(w):
                 out.append(f"{w}:sidecar-unreadable")
             continue
-        head = text.split("\n---", 2)[0] if text.startswith("---") else ""
-        found = _VERDICT_RE.search(head)
-        if (found.group(1) if found else None) is not None:
-            standing = _claimed_standing(found.group(1))
+        stated = _sidecar_verdict(text)
+        if stated is not None:
+            standing = _claimed_standing(stated)
         else:
             standing = bool(claims.get(w))
         if standing and not _ledger_rows(text):
@@ -664,7 +711,7 @@ def _reverify_clean(inline_review: object) -> bool:
     if block.get("status_after") == "pass":
         return True
     failing = block.get("failing")
-    if block.get("status_after") != "fail" or not isinstance(failing, list) or not failing:
+    if block.get("status_after") not in ("fail", None) or not isinstance(failing, list) or not failing:
         return False
     known = {*(block.get("pre_existing") or ()), *(block.get("foreign") or ())}
     return all(f in known for f in failing) and not block.get("unattributed")
@@ -781,9 +828,10 @@ def _less_applied_fix_edits(worktree_root: Path, inline_review: object, stale: l
     if not stale or not isinstance(listed, list):
         return stale
     rows: dict = {}
+    lenient = _reverify_clean(inline_review)
     for w in listed:
         if isinstance(w, str) and w:
-            for f, pairs in _reviewer_fix_rows(worktree_root / w).items():
+            for f, pairs in _reviewer_fix_rows(worktree_root / w, lenient).items():
                 rows.setdefault(_worktree_relative(worktree_root, f), []).extend(pairs)
     return [p for p in stale if p not in rows or not _carries_applied_fix(worktree_root / p, rows[p])]
 
@@ -857,7 +905,7 @@ def review_owed_refusal(
         return verdict_pin_refusal(stale) if stale else None
     applied = derived[0] if derived is not None else 0
     return (
-        f"review verdict {REQUIRES_CHANGES} stands with {len(owed)} finding(s) not in the landed tree "
+        f"review verdict {REQUIRES_CHANGES} or {BLOCKED} stands with {len(owed)} finding(s) not in the landed tree "
         f"({applied} applied): {', '.join(owed[:8])}{' ...' if len(owed) > 8 else ''}"
     )
 
@@ -869,14 +917,14 @@ class _WavePaths(frozenset):
     fix_rows: dict
 
 
-def _reviewer_fix_rows(sidecar: Path) -> dict:
+def _reviewer_fix_rows(sidecar: Path, unverified_ok: bool = False) -> dict:
     """``{path: [(before, after), ...]}`` of the applied ledger rows of a reviewer's sidecar."""
     try:
         text = sidecar.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return {}
     out: dict = {}
-    for f, row in _applied_fix_rows(text):
+    for f, row in _applied_fix_rows(text, unverified_ok):
         b, a = row.get("before"), row.get("after")
         out.setdefault(f, []).append((b if isinstance(b, str) else "", a if isinstance(a, str) else ""))
     return out

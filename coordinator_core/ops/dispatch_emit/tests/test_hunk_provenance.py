@@ -486,3 +486,35 @@ def test_a_non_predecessors_kept_blob_is_not_this_runs_work(world, monkeypatch):
     monkeypatch.setattr(rao, "own_artifact_paths", lambda root, run: rao.OwnArtifacts(predecessors=()))
     world.kept(_foreign_baseline_tree(world), run=PEER)
     assert [f.reason for f in _run(world)] == [hp.FOREIGN_HUNK_UNPRODUCED]
+
+
+@pytest.mark.parametrize(
+    ("measured", "non_live", "halted", "own"),
+    [
+        (True, True, None, True),
+        (False, True, None, False),
+        (True, False, None, False),
+        (True, True, PEER, False),
+    ],
+    ids=["finished-owner-own-measured", "not-measured", "live-owner", "halted-owner-still-withholding"],
+)
+def test_own_measured_past_finished_owner_is_own_only_when_finished_and_not_withholding(
+    world, monkeypatch, measured, non_live, halted, own
+):
+    from coordinator_core.ops.dispatch_emit import measured_rev
+
+    monkeypatch.setattr(measured_rev, "touched_paths", lambda root, run: [PATH] if measured else [])
+    monkeypatch.setattr(hp, "_declares", lambda root, run, path: True)
+    monkeypatch.setattr(hp, "_non_live", lambda root, owner: non_live)
+    monkeypatch.setattr(hp, "_halted_holder", lambda root, run, plan, path: halted)
+    monkeypatch.setattr(hp, "_predecessor_measured", lambda root, run, path: False)
+    world.head(_text({}))
+    world.baseline(_text({2: "PEER"}))
+    world.tree(_text({2: "PEER", 8: "OWN"}))
+    world.owner(PEER)
+    from coordinator_core.ops.dispatch_emit import co_declared_settle
+
+    monkeypatch.setattr(co_declared_settle, "settled_blob", lambda *a, **k: "c" * 40)
+    split, unsettled = hp.peer_split(world.root, ME, [PATH])
+    assert (split == {} and unsettled == {}) is own
+    assert hp._own_measured_past_finished(world.root, ME, "plan-a", PATH, PEER) is own
