@@ -51,7 +51,10 @@ def test_resolve_excludes_mirrors_transport_self_and_workers(roster, tmp_path):
     out = roll_call.resolve_addressees(
         "/x", "caller-1", snapshot_dir=str(tmp_path), local_id="boxA"
     )
-    assert out["local"] == [{"session_id": "aaaa-1", "name": "alpha"}]
+    assert out["local"] == [
+        {"session_id": "aaaa-1", "name": "alpha", "kind": "claude"},
+        {"session_id": "codex:run1", "name": "codex-exec", "kind": "codex"},
+    ]
     assert out["far"] == [{"key": "boxB:bbbb-2", "box_id": "boxB", "name": "beta"}]
     reasons = {e["key"]: e["reason"] for e in out["excluded"]}
     assert reasons == {
@@ -59,18 +62,40 @@ def test_resolve_excludes_mirrors_transport_self_and_workers(roster, tmp_path):
         "peer-ssh-box-456": "unimatrix_transport",
         "me-1": "self",
         "caller-1": "self",
-        "codex:run1": "non_claude_worker",
         "nameless-1": "no_name",
         "boxB:peer-codex-9": "codex_mirror",
         "boxB:peer-t-8": "unimatrix_transport",
     }
 
 
-def test_unreachable_box_is_excluded(roster, tmp_path):
+def test_unreachable_box_sessions_are_addressees_flagged_unreachable(roster, tmp_path):
     _snapshot(tmp_path, "boxC", [_sess("cccc-3", "gamma")], ok=False)
     out = roll_call.resolve_addressees("/x", None, snapshot_dir=str(tmp_path), local_id="boxA")
-    assert out["far"] == []
-    assert out["excluded"] == [{"key": "boxC", "reason": "box_unreachable"}]
+    assert out["far"] == [{"key": "boxC:cccc-3", "box_id": "boxC", "name": "gamma", "unreachable": True}]
+    assert out["excluded"] == []
+
+
+def test_dead_pid_local_row_is_not_an_addressee(tmp_path, monkeypatch):
+    from coordinator_core.session import harness_registry as hr
+
+    def rec(name, pid):
+        return hr.RegistryRecord(
+            pid=pid, start_epoch=1000.0, cwd="/x", name=name,
+            messaging_socket_path=None, status=None,
+        )
+
+    snap = {"live-sid": rec("live", 111), "dead-sid": rec("ghost", 222)}
+    monkeypatch.setattr(hr, "snapshot", lambda: snap)
+    monkeypatch.setattr(hr, "self_record", lambda: None)
+    monkeypatch.setattr(peer_roster, "_process_alive", lambda pid, start_epoch: pid == 111)
+    out = roll_call.resolve_addressees("/x", None, snapshot_dir=str(tmp_path), local_id="boxA")
+    assert [r["session_id"] for r in out["local"]] == ["live-sid"]
+
+
+def test_render_ask_carries_origin_box():
+    assert "origin_box" not in roll_call.render_ask("rc-1")
+    text = roll_call.render_ask("rc-1", origin_box="boxA")
+    assert "origin_box" in text and "boxA" in text
 
 
 def test_render_ask_names_every_required_part():
@@ -156,6 +181,16 @@ def test_identical_reply_is_a_noop(tmp_path):
     replies = roll_call.load_record("rc-1", tmp_path)["replies"]
     assert list(replies) == ["aaaa-1"]
     assert replies["aaaa-1"]["received_at"] == 1010.0
+
+
+def test_reply_stamps_origin_box_and_forwarded_by_only_when_given(tmp_path):
+    _open(tmp_path)
+    _upsert("rc-1", "boxB:bbbb-2", _REPLY, home=tmp_path, origin_box="boxA", forwarded_by="boxB")
+    _upsert("rc-1", "aaaa-1", _REPLY, home=tmp_path)
+    replies = roll_call.load_record("rc-1", tmp_path)["replies"]
+    assert replies["boxB:bbbb-2"]["origin_box"] == "boxA"
+    assert replies["boxB:bbbb-2"]["forwarded_by"] == "boxB"
+    assert "origin_box" not in replies["aaaa-1"] and "forwarded_by" not in replies["aaaa-1"]
 
 
 def test_changed_reply_replaces(tmp_path):

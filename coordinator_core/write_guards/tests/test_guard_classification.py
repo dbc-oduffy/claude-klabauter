@@ -201,6 +201,7 @@ ADVISORY_NAMES = [
     "nudge_baton_body_bar",
     "nudge_dangling_sizing_citation",
     "nudge_em_code_dispatch",
+    "nudge_executor_added_comment",
     "nudge_handoff_ac_shape",
     "nudge_handoff_author_lint",
     "nudge_peer_notice_unread",

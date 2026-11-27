@@ -224,6 +224,25 @@ class ExternalWorkspaceReceiverError(RegistryReadError):
         )
 
 
+class NonGitReceiverError(RegistryReadError):
+    """A registered receiver root that is missing or carries no `.git` entry.
+
+    Subclasses RegistryReadError so every caller that already fails loud on a
+    registry defect refuses this the same way.
+    """
+
+    def __init__(self, receiver: str, repo_key: Optional[str], path: Path) -> None:
+        self.receiver = receiver
+        self.repo_key = repo_key
+        self.path = path
+        super().__init__(
+            f"{receiver!r} resolves to {path}, which is not a git checkout "
+            f"(no .git entry); no inbox written.\n"
+            f"  Re-register the live checkout: machine-local set "
+            f"{repo_key or 'repos.<name>'} <abs-path-to-repo>."
+        )
+
+
 class AmbiguousReceiverError(Exception):
 
     def __init__(self, receiver_em_id: str, candidate_keys) -> None:
@@ -620,7 +639,7 @@ def publish_mirror_path_match(candidate: Path) -> Optional[str]:
 
     Uses `same_repo_path()` (samefile, else normcase+realpath fallback) —
     the one path-equality helper this module already standardises on, so a
-    ``repos.*`` value and a ``publish.mirrors.*.path`` value written with
+    ``repos.*`` value and a mirror ``.path`` value written with
     different casing/separators/trailing-slash still compare equal.
 
     Second layer (2026-08-07 nested-subdirectory hardening): when a
@@ -921,6 +940,10 @@ def resolve_receiver_inbox(
     _refuse_external_workspace(receiver_em_id, str(receiver_repo_path))
     if publish_mirror_path_match(receiver_repo_path):
         return _group_em_target()
+    if not _is_never_inbox_mirror_path(receiver_repo_path) and (
+        receiver_checkout_defect(receiver_repo_path) == _CHECKOUT_DEFECT_NO_CHECKOUT
+    ):
+        raise NonGitReceiverError(receiver_em_id, repo_key, receiver_repo_path)
     corpus_root_str, _ = receiver_inbox_root(str(receiver_repo_path))
     inbox_dir = Path(corpus_root_str) / "inbox"
     return inbox_dir, receiver_repo_path, all_repos
@@ -1156,7 +1179,7 @@ def unique_nearest_receiver(
 # regardless of how (or whether) that machine's registry declares them.
 # `reroute_owner()`/`publish_mirror_path_match()` above already rereoute a
 # CORRECTLY-registered mirror to its owner, but that routing is itself
-# registry-state-dependent (`publish.mirrors.<key>.path`/`.owner` must be
+# registry-state-dependent (a mirror's `.path`/`.owner` must be
 # set) — the live hole this closes (2026-09-23, reported by example-retrieval-repo-em):
 # a `to: coordinator-claude-em` item on a machine where that mirror wasn't
 # (fully) declared fell through registry-driven classification entirely,

@@ -25,6 +25,10 @@ def home(monkeypatch, tmp_path):
         "resolve_addressees",
         lambda *a, **k: {"local": list(LOCAL), "far": list(FAR), "excluded": [{"key": "peer-codex-1", "reason": "codex_mirror"}]},
     )
+    from coordinator_core.group_em import box_registry
+
+    monkeypatch.setattr(box_registry, "local_box_id", lambda home=None: "boxa")
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: [])
     launches = []
     monkeypatch.setattr(
         roll_call_deliver, "launch", lambda path, **k: launches.append(path) or {"launched": True, "pid": 7}
@@ -59,12 +63,20 @@ def test_live_call_launches_one_worker_on_the_record(home, tmp_path):
     assert "hi" in out["text"]
 
 
-def test_no_far_addressees_launches_nothing(home, monkeypatch):
+def test_local_only_addressees_still_launch_the_worker(home, monkeypatch):
     monkeypatch.setattr(
         roll_call, "resolve_addressees", lambda *a, **k: {"local": list(LOCAL), "far": [], "excluded": []}
     )
     out = ops._groupem_roll_call({})
-    assert out["delivery"]["launched"] is False and home == []
+    assert out["delivery"] == {"launched": True, "pid": 7} and len(home) == 1
+
+
+def test_no_addressees_launches_nothing(home, monkeypatch):
+    monkeypatch.setattr(
+        roll_call, "resolve_addressees", lambda *a, **k: {"local": [], "far": [], "excluded": []}
+    )
+    out = ops._groupem_roll_call({})
+    assert out["delivery"] == {"launched": False, "reason": "no_addressees"} and home == []
 
 
 def test_existing_id_is_not_relaunched(home):
@@ -157,6 +169,111 @@ def test_late_reply_is_stamped(home, monkeypatch):
     rc = ops._groupem_roll_call({"dry_run": True, "deadline_minutes": 1})["roll_call_id"]
     monkeypatch.setattr(roll_call.time, "time", lambda: 1e12)
     assert _reply(rc)["late"] is True
+
+
+@pytest.fixture
+def boxes(monkeypatch):
+    from coordinator_core.group_em import box_registry, box_transport
+
+    sent: list = []
+    monkeypatch.setattr(box_registry, "local_box_id", lambda home=None: "boxa")
+    monkeypatch.setattr(
+        box_registry, "read_boxes", lambda directory=None: [{"box_id": "boxa"}, {"box_id": "boxz"}]
+    )
+
+    def invoke(box, op, params, runner=None, *, timeout):
+        sent.append((box["box_id"], op, params))
+        return {"ok": True, "reply": {"ok": True, "result": "stored", "late": False}}
+
+    monkeypatch.setattr(box_transport, "invoke_remote", invoke)
+    return sent
+
+
+def test_reply_naming_another_box_is_forwarded_there_without_origin_box(home, boxes):
+    out = _reply("rc-1", key="b1:s1", origin_box="boxz")
+    assert out == {"ok": True, "result": "stored", "late": False}
+    ((box_id, op, params),) = boxes
+    assert (box_id, op) == ("boxz", "groupem.roll_call_reply")
+    assert "origin_box" not in params and params["session_key"] == "b1:s1"
+    assert params["forwarded_by"] == "boxa"
+
+
+def test_reply_naming_this_box_or_no_box_upserts_locally(home, boxes):
+    rc = ops._groupem_roll_call({"dry_run": True})["roll_call_id"]
+    assert _reply(rc, origin_box="BOXA")["result"] == "stored"
+    assert _reply(rc, key="other")["result"] == "stored"
+    assert boxes == []
+
+
+def test_reply_without_origin_box_and_without_a_local_record_is_forwarded_to_the_minting_box(home, boxes):
+    out = _reply("rc-far", key="b1:s1")
+    assert out == {"ok": True, "result": "stored", "late": False}
+    ((box_id, op, params),) = boxes
+    assert (box_id, op) == ("boxz", "groupem.roll_call_reply")
+    assert params["forwarded_by"] == "boxa" and params["session_key"] == "b1:s1"
+
+
+def test_reply_without_origin_box_stays_unknown_when_no_box_has_the_record(home, boxes, monkeypatch):
+    from coordinator_core.group_em import box_transport
+
+    monkeypatch.setattr(
+        box_transport,
+        "invoke_remote",
+        lambda *a, **k: {"ok": True, "reply": {"ok": False, "reason": "unknown_roll_call"}},
+    )
+    assert _reply("rc-none") == {"ok": False, "reason": "unknown_roll_call"}
+
+
+def test_reply_with_a_local_record_never_probes_other_boxes(home, boxes):
+    rc = ops._groupem_roll_call({"dry_run": True})["roll_call_id"]
+    assert _reply(rc)["result"] == "stored"
+    assert boxes == []
+
+
+def test_a_forwarded_leg_never_probes_further(home, boxes):
+    assert _reply("rc-none", key="b1:s1", forwarded_by="boxz") == {"ok": False, "reason": "unknown_roll_call"}
+    assert boxes == []
+
+
+def test_stored_reply_carries_the_minting_box_and_the_forwarding_box(home, boxes):
+    rc = ops._groupem_roll_call({"dry_run": True})["roll_call_id"]
+    assert _reply(rc, key="b1:s1", forwarded_by="boxz")["result"] == "stored"
+    assert _reply(rc)["result"] == "stored"
+    replies = roll_call.load_record(rc)["replies"]
+    assert replies["b1:s1"]["origin_box"] == "boxa" and replies["b1:s1"]["forwarded_by"] == "boxz"
+    assert replies["sid-1"]["origin_box"] == "boxa" and "forwarded_by" not in replies["sid-1"]
+
+
+def test_unknown_origin_box_is_refused_with_no_send(home, boxes):
+    assert _reply("rc-1", origin_box="nowhere") == {"ok": False, "reason": "unknown_origin_box"}
+    assert boxes == []
+
+
+def test_forward_failure_is_a_reason_not_a_raise(home, boxes, monkeypatch):
+    from coordinator_core.group_em import box_transport
+
+    monkeypatch.setattr(
+        box_transport, "invoke_remote", lambda *a, **k: {"ok": False, "state": "unknown", "reason": "ssh_timeout"}
+    )
+    assert _reply("rc-1", origin_box="boxz") == {"ok": False, "reason": "forward_failed:ssh_timeout"}
+    monkeypatch.setattr(
+        box_transport, "invoke_remote", lambda *a, **k: {"ok": False, "state": "unknown", "reason": "not_ssh_transport"}
+    )
+    assert _reply("rc-1", origin_box="boxz")["reason"] == "forward_unsupported_transport"
+
+
+def test_forwarded_reply_lands_only_for_a_far_addressee(home, boxes):
+    rc = ops._groupem_roll_call({"dry_run": True})["roll_call_id"]
+    refused = _reply(rc, key="sid-1", forwarded_by="boxz")
+    assert refused == {"ok": False, "reason": "not_an_addressee"}
+    assert ops._groupem_roll_call_status({"roll_call_id": rc})["replied"] == []
+    assert _reply(rc, key="b1:s1", forwarded_by="boxz")["result"] == "stored"
+    assert ops._groupem_roll_call_status({"roll_call_id": rc})["replied"] == ["b1:s1"]
+    assert boxes == []
+
+
+def test_forwarded_reply_for_an_unknown_roll_call_is_unknown_roll_call(home, boxes):
+    assert _reply("rc-none", key="b1:s1", forwarded_by="boxz") == {"ok": False, "reason": "unknown_roll_call"}
 
 
 def test_unknown_roll_call_is_a_reply(home):

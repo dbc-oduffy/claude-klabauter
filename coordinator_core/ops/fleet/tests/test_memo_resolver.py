@@ -12,6 +12,7 @@ pytestmark = pytest.mark.complete
 
 from coordinator_core.ops.fleet._memo_resolver import (
     AmbiguousReceiverError,
+    NonGitReceiverError,
     RegistryReadError,
     canonical_receiver_id,
     convention_repo_key,
@@ -74,7 +75,9 @@ def _drop_settings_home_override(monkeypatch):
     monkeypatch.delenv("MACHINE_LOCAL_IMPL", raising=False)
 
 
-def _make_claude_home(tmp_path: Path, receiver_repos: dict[str, Path]) -> Path:
+def _make_claude_home(
+    tmp_path: Path, receiver_repos: dict[str, Path], *, make_checkouts: bool = True,
+) -> Path:
     claude_home = tmp_path / "claude-home"
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
     machine_local.mkdir(parents=True)
@@ -83,6 +86,8 @@ def _make_claude_home(tmp_path: Path, receiver_repos: dict[str, Path]) -> Path:
     for key_suffix, repo_path in receiver_repos.items():
         toml_val = str(repo_path).replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'"repos.{key_suffix}" = "{toml_val}"')
+        if make_checkouts:
+            (repo_path / ".git").mkdir(parents=True, exist_ok=True)
     (machine_local / "registry.local.toml").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
     )
@@ -135,7 +140,7 @@ class TestReadRegistryReposNestedTable:
         from coordinator_core.ops.fleet._memo_resolver import resolve_receiver_inbox
 
         repo = tmp_path / "mk"
-        repo.mkdir()
+        (repo / ".git").mkdir(parents=True)
         self._home(tmp_path, monkeypatch, f"[repos]\nclaude_klabauter = '{repo}'\n")
         inbox, path, repos = resolve_receiver_inbox("claude-klabauter-em")
         assert path == repo and inbox is not None and "repos.claude_klabauter" in repos
@@ -701,7 +706,6 @@ class TestDoeIdentityContentLayouts:
 
     def test_bare_directory_warns_and_returns_empty(self, tmp_path, monkeypatch, caplog):
         claude_home = _make_claude_home(tmp_path, {_DOE_KEY: tmp_path / "bare"})
-        (tmp_path / "bare").mkdir()
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
         (machine_local / ".coordinator-content-root").write_text(str(tmp_path / "bare"), encoding="utf-8")
@@ -915,7 +919,7 @@ class TestTwoKeysOneCloneAreOneReceiver:
 
     def test_symlinked_and_trailing_slash_spellings_dedupe(self, tmp_path, monkeypatch):
         doe = tmp_path / _DOE_REPO
-        doe.mkdir()
+        (doe / ".git").mkdir(parents=True)
         link = tmp_path / "doe-link"
         try:
             link.symlink_to(doe)
@@ -1004,3 +1008,77 @@ class TestExternalWorkspaceReceiverRefused:
         self._setup(tmp_path, monkeypatch, {"gadget_repo": repo})
         _, receiver_repo, _ = resolve_receiver_inbox("gadget-repo-em")
         assert receiver_repo == repo
+
+
+class TestNonGitRegisteredReceiverRefused:
+    def test_existing_directory_without_git_raises_naming_receiver_and_path(
+        self, tmp_path, monkeypatch
+    ):
+        stale = tmp_path / "stale-clone"
+        stale.mkdir()
+        home = _make_claude_home(tmp_path, {"gadget_repo": stale}, make_checkouts=False)
+        monkeypatch.setenv("CLAUDE_HOME", str(home))
+
+        with pytest.raises(NonGitReceiverError) as exc:
+            resolve_receiver_inbox("gadget-repo-em")
+
+        assert isinstance(exc.value, RegistryReadError)
+        assert exc.value.receiver == "gadget-repo-em"
+        assert exc.value.path == stale
+        assert "gadget-repo-em" in str(exc.value)
+        assert str(stale) in str(exc.value)
+        assert "repos.gadget_repo" in str(exc.value)
+
+    def test_missing_directory_raises(self, tmp_path, monkeypatch):
+        home = _make_claude_home(
+            tmp_path, {"gadget_repo": tmp_path / "never-existed"}, make_checkouts=False
+        )
+        monkeypatch.setenv("CLAUDE_HOME", str(home))
+
+        with pytest.raises(NonGitReceiverError):
+            resolve_receiver_inbox("gadget-repo-em")
+
+    def test_no_inbox_directory_is_created_under_the_non_git_root(self, tmp_path, monkeypatch):
+        stale = tmp_path / "stale-clone"
+        stale.mkdir()
+        home = _make_claude_home(tmp_path, {"gadget_repo": stale}, make_checkouts=False)
+        monkeypatch.setenv("CLAUDE_HOME", str(home))
+
+        with pytest.raises(NonGitReceiverError):
+            resolve_receiver_inbox("gadget-repo-em")
+
+        assert list(stale.iterdir()) == []
+
+    def test_git_checkout_resolves_unchanged(self, tmp_path, monkeypatch):
+        live = tmp_path / "live-clone"
+        (live / ".git").mkdir(parents=True)
+        home = _make_claude_home(tmp_path, {"gadget_repo": live}, make_checkouts=False)
+        monkeypatch.setenv("CLAUDE_HOME", str(home))
+
+        inbox, repo, _all = resolve_receiver_inbox("gadget-repo-em")
+
+        assert repo == live
+        assert inbox == live / "cross-repo" / "inbox"
+
+    def test_git_worktree_file_counts_as_a_checkout(self, tmp_path, monkeypatch):
+        live = tmp_path / "linked-clone"
+        live.mkdir()
+        (live / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+        home = _make_claude_home(tmp_path, {"gadget_repo": live}, make_checkouts=False)
+        monkeypatch.setenv("CLAUDE_HOME", str(home))
+
+        _inbox, repo, _all = resolve_receiver_inbox("gadget-repo-em")
+
+        assert repo == live
+
+    def test_never_inbox_mirror_basename_is_left_to_the_mirror_refusal(
+        self, tmp_path, monkeypatch
+    ):
+        mirror = tmp_path / "claude-klabauter"
+        mirror.mkdir()
+        home = _make_claude_home(tmp_path, {"claude_klabauter": mirror}, make_checkouts=False)
+        monkeypatch.setenv("CLAUDE_HOME", str(home))
+
+        _inbox, repo, _all = resolve_receiver_inbox("claude-klabauter-em")
+
+        assert never_inbox_mirror_refusal("claude-klabauter-em", repo) is not None

@@ -170,6 +170,78 @@ def _pid_alive(pid: int) -> bool:
         k32.CloseHandle(ctypes.c_void_p(handle))
 
 
+def _grok_home(tmp_path, windows=(256000, 500000), config="[models]\ndefault = \"grok-4.7\"\n"):
+    home = tmp_path / "grokhome"
+    home.mkdir()
+    (home / "config.toml").write_text(config, encoding="utf-8")
+    (home / "models_cache.json").write_text(
+        json.dumps({"models": {"grok-4.7": {"info": {"context_windows": list(windows)}}}}), encoding="utf-8")
+    return home
+
+
+def test_default_launch_selects_the_500k_window(tmp_path):
+    import tomllib
+
+    home = _grok_home(tmp_path)
+    assert gc.ensure_context_window(home, ["--model", "grok-4.7"], environ={}) is True
+    cfg = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+    assert cfg["model"]["grok-4.7"]["context_window"] == 500000
+    assert cfg["models"]["default"] == "grok-4.7"
+    assert gc.ensure_context_window(home, ["--model", "grok-4.7"], environ={}) is False
+
+
+def test_headless_and_interactive_launches_both_ensure_the_window(monkeypatch, tmp_path):
+    seen = []
+    mod = type("M", (), {"grok_home": staticmethod(lambda: tmp_path), "record_launch": staticmethod(lambda *a: None)})
+    monkeypatch.setattr(gc, "load_grok_adapter", lambda: mod)
+    monkeypatch.setattr(gc, "grok_binary", lambda: "grok")
+    monkeypatch.setattr(gc, "ensure_context_window", lambda home, argv, environ=None: seen.append(list(argv)))
+    monkeypatch.setattr(gc, "sweep_tmp_sessions", lambda *a, **k: 0)
+    monkeypatch.setattr(gc.subprocess, "run",
+                        lambda *a, **k: type("P", (), {"stdout": "", "stderr": "", "returncode": 1})())
+    gc.run_headless("hi")
+    child = type("C", (), {"pid": 1, "wait": lambda self: 0})()
+    monkeypatch.setattr(gc, "ensure_stop_hook", lambda home: None)
+    monkeypatch.setattr(gc, "_hold_inbox", lambda m, pid, stop: None)
+    monkeypatch.setattr(gc.subprocess, "Popen", lambda *a, **k: child)
+    monkeypatch.setattr(gc, "bind_kill_on_close", lambda pid: None)
+    gc.run_interactive(["--model", "grok-4.5"])
+    assert len(seen) == 2 and "--model" in seen[0] and seen[1].count("--model") == 1
+    assert seen[1][seen[1].index("--model") + 1] == "grok-4.5"
+
+
+def test_a_window_already_in_config_wins(tmp_path):
+    cfg = '[models]\ndefault = "grok-4.7"\n\n[model."grok-4.7"]\ncontext_window = 256000\n'
+    home = _grok_home(tmp_path, config=cfg)
+    assert gc.ensure_context_window(home, [], environ={}) is False
+    assert (home / "config.toml").read_text(encoding="utf-8") == cfg
+
+
+def test_env_default_skips_and_env_size_must_be_listed(tmp_path):
+    home = _grok_home(tmp_path)
+    before = (home / "config.toml").read_text(encoding="utf-8")
+    assert gc.ensure_context_window(home, [], environ={gc.CONTEXT_WINDOW_ENV: "default"}) is False
+    assert gc.ensure_context_window(home, [], environ={gc.CONTEXT_WINDOW_ENV: "1000000"}) is False
+    assert gc.ensure_context_window(home, [], environ={gc.CONTEXT_WINDOW_ENV: "junk"}) is False
+    assert (home / "config.toml").read_text(encoding="utf-8") == before
+    assert gc.ensure_context_window(home, [], environ={gc.CONTEXT_WINDOW_ENV: "256000"}) is True
+
+
+def test_a_model_without_500k_is_left_on_its_default(tmp_path):
+    home = _grok_home(tmp_path, windows=(256000,))
+    before = (home / "config.toml").read_text(encoding="utf-8")
+    assert gc.ensure_context_window(home, [], environ={}) is False
+    assert (home / "config.toml").read_text(encoding="utf-8") == before
+
+
+def test_missing_cache_or_unknown_model_never_fails_the_launch(tmp_path):
+    home = _grok_home(tmp_path)
+    assert gc.ensure_context_window(home, ["--model", "grok-9"], environ={}) is False
+    (home / "models_cache.json").unlink()
+    assert gc.ensure_context_window(home, [], environ={}) is False
+    assert gc.ensure_context_window(tmp_path / "nohome", [], environ={}) is False
+
+
 def test_session_for_pid_matches_only_the_child():
     rows = [{"session_id": "aaa", "pid": 5}, {"session_id": "bbb", "pid": 9}]
     assert gc.session_for_pid(rows, 9)["session_id"] == "bbb"

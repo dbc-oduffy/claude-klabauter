@@ -61,6 +61,7 @@ ALLOWED_OPS: frozenset = frozenset(
         "groupem.box_key_pin",
         "groupem.suite_grant_revoke_receive",
         "groupem.box_key_pin_from_peer",
+        "groupem.roll_call_reply",
         # Issued by coordinator_core.percolate.fleet_adoption.
         "fleet.klabauter_freshness",
     }

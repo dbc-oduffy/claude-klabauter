@@ -287,6 +287,21 @@ def test_new_ops_are_on_the_allowlist():
     } <= box_transport.ALLOWED_OPS
 
 
+def test_roll_call_reply_is_admitted_and_invoked_on_the_far_box():
+    calls: list = []
+    out = box_transport.invoke_remote(
+        BOX, "groupem.roll_call_reply", {"roll_call_id": "rc-1"}, _runner('{"ok": true}', calls=calls), timeout=2.0
+    )
+    assert out == {"ok": True, "reply": {"ok": True}}
+    assert "groupem.roll_call_reply" in calls[0][-1]
+
+
+def test_an_op_outside_the_allowlist_is_still_refused():
+    calls: list = []
+    out = box_transport.invoke_remote(BOX, "groupem.roll_call", {}, _runner("{}", calls=calls), timeout=2.0)
+    assert _refused(out, "op_not_allowed") and calls == []
+
+
 def test_invoke_remote_error_envelope_is_unknown_not_a_reply():
     err = json.dumps({"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "x"}})
 

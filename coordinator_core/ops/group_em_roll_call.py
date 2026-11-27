@@ -4,15 +4,15 @@ coordinator_core.ops.group_em_roll_call -- JSON-RPC "groupem.roll_call",
 
 Purpose: thin veneers over `coordinator_core.group_em.roll_call` (addressee resolution, the
 templated ask, the per-id record under the group-em home) and `roll_call_deliver.launch` (one
-detached far-delivery worker). Mirrors `group_em_idle_report`'s registration convention.
+detached local and far delivery worker). Mirrors `group_em_idle_report`'s registration convention.
 
 Self-registration: importing this module registers the three ops as a side-effect. Registered in
 `coordinator_core/ops/__init__.py`, `_registry_map.py`'s `OP_MODULE_MAP`, `op_scopes.py` (scope
 "none" -- same resolution story as `groupem.idle_report`) and `authz/classification.py`.
 
 Negative-spec:
-    - Never delivers to a far addressee inside the op: the worker does, detached and not awaited.
-    - Never SendMessages: the engine cannot, so local addressees are returned to the caller.
+    - Never delivers inside the op: the worker does, to local and far addressees, detached and not awaited.
+    - Never SendMessages: local delivery is a mailbox append or a bridge route in the worker.
     - `dry_run` writes the record and launches nothing.
     - `groupem.roll_call_status` only reads.
 """
@@ -24,6 +24,9 @@ from typing import Optional
 
 from coordinator_core.group_em import roll_call
 from coordinator_core.ipc import CallerFacingValidationError, register_op
+
+
+FORWARD_TIMEOUT_S = 15.0
 
 
 def _str(op: str, p: dict, key: str, *, required: bool = False) -> Optional[str]:
@@ -66,7 +69,8 @@ def _groupem_roll_call(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Returns: {roll_call_id, text, local: [{session_id, name}], far: [{key, box_id, name}],
     excluded: [{key, reason}], record_path, deadline, dry_run, delivery} where `delivery` is the
-    worker launch result (`{launched, pid | reason}`). The caller SendMessages `local` by name.
+    worker launch result (`{launched, pid | reason}`); the worker delivers to `local` and `far` and
+    records one `deliveries` row per addressee key.
     """
     p = params if isinstance(params, dict) else {}
     op = "groupem.roll_call"
@@ -87,16 +91,21 @@ def _groupem_roll_call(params: dict, repo_root: Optional[Path] = None) -> dict:
     else:
         override = p.get("repo_root")
         target_root = override if isinstance(override, str) and override else str(Path.cwd())
+        from coordinator_core.group_em import box_registry
+
         addressees = roll_call.resolve_addressees(target_root, caller)
         record, created = roll_call.open_roll_call_once(
-            rc_id, addressees, roll_call.render_ask(rc_id, note), deadline_minutes=minutes
+            rc_id,
+            addressees,
+            roll_call.render_ask(rc_id, note, origin_box=box_registry.local_box_id()),
+            deadline_minutes=minutes,
         )
         if not created:
             launched = {"launched": False, "reason": "existing_roll_call"}
         elif dry_run:
             launched = {"launched": False, "reason": "dry_run"}
-        elif not addressees["far"]:
-            launched = {"launched": False, "reason": "no_far_addressees"}
+        elif not (addressees["local"] or addressees["far"]):
+            launched = {"launched": False, "reason": "no_addressees"}
         else:
             from coordinator_core.group_em import roll_call_deliver
 
@@ -115,6 +124,55 @@ def _groupem_roll_call(params: dict, repo_root: Optional[Path] = None) -> dict:
     }
 
 
+def _forward_reply(origin: str, p: dict) -> dict:
+    """Run `groupem.roll_call_reply` on the issuing box `origin` and return its reply; never raises."""
+    from coordinator_core.group_em import box_registry
+
+    box = next(
+        (b for b in box_registry.read_boxes() if box_registry.same_box(b.get("box_id"), origin)), None
+    )
+    if box is None:
+        return {"ok": False, "reason": "unknown_origin_box"}
+    return _send_reply(box, p)
+
+
+def _probe_minting_box(p: dict) -> Optional[dict]:
+    """Forward to each other registered box; the first reply that is not a miss, else None."""
+    from coordinator_core.group_em import box_registry
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    local = box_registry.local_box_id()
+    others = [b for b in box_registry.read_boxes() if not box_registry.same_box(b.get("box_id"), local)]
+    if not others:
+        return None
+    pool = ThreadPoolExecutor(max_workers=len(others))
+    try:
+        for fut in [pool.submit(_send_reply, box, p) for box in others]:
+            res = fut.result()
+            if res.get("ok") or res.get("error") or res.get("reason") == "not_an_addressee":
+                return res
+        return None
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _send_reply(box: dict, p: dict) -> dict:
+    from coordinator_core.group_em import box_registry, box_transport
+
+    params = {k: v for k, v in p.items() if k not in ("origin_box", "forwarded_by")}
+    params["forwarded_by"] = box_registry.local_box_id()
+    res = box_transport.invoke_remote(
+        box, "groupem.roll_call_reply", params, timeout=FORWARD_TIMEOUT_S
+    )
+    if res.get("ok"):
+        return res["reply"]
+    reason = res.get("reason")
+    if reason == "not_ssh_transport":
+        return {"ok": False, "reason": "forward_unsupported_transport"}
+    return {"ok": False, "reason": f"forward_failed:{reason}"}
+
+
 @register_op("groupem.roll_call_reply")
 def _groupem_roll_call_reply(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "groupem.roll_call_reply" handler.
@@ -122,7 +180,14 @@ def _groupem_roll_call_reply(params: dict, repo_root: Optional[Path] = None) -> 
     Params: roll_call_id (str, required), session_key (str, required), goals (list, required):
     one `{goal_id, target, measured_now, gap, next_lever, expected_gain, owner, eta (ISO date),
     blocked_on?: {what, owner, date}}` per goal; priority_goal_id (str, required; one of the
-    reply's goal_ids, else refused); activity (any JSON, optional; log only).
+    reply's goal_ids, else refused); activity (any JSON, optional; log only); origin_box (str,
+    optional): the issuing box named in the ask; without it and without a local record, each other
+    registered box is tried in turn and the first non-miss reply is returned. When it is a
+    registered box other than this one the call runs there through `box_transport.invoke_remote`
+    and its reply is returned
+    (`unknown_origin_box` when unregistered, `forward_unsupported_transport` for a non-ssh row,
+    `forward_failed:<reason>` otherwise). `forwarded_by` (str) marks the issuing-side leg of a
+    forward: its `session_key` must be a far addressee of the record, else `not_an_addressee`.
 
     Returns the `upsert_reply` dict: `{ok, result: stored | unchanged, late}` or
     `{ok: False, reason: "unknown_roll_call"}`. A reply failing the per-goal check (missing field,
@@ -135,9 +200,34 @@ def _groupem_roll_call_reply(params: dict, repo_root: Optional[Path] = None) -> 
     op = "groupem.roll_call_reply"
     rc_id = _checked_id(op, _required(op, p, "roll_call_id"))
     session_key = _required(op, p, "session_key")
+    origin = _str(op, p, "origin_box")
+    forwarded_by = _str(op, p, "forwarded_by")
+    if origin is not None and forwarded_by is None:
+        from coordinator_core.group_em import box_registry
+
+        if not box_registry.same_box(origin, box_registry.local_box_id()):
+            return _forward_reply(origin, p)
+    record = roll_call.load_record(rc_id)
+    if forwarded_by is not None:
+        if record is not None:
+            far_keys = {row.get("key") for row in record.get("addressees", {}).get("far", [])}
+            if session_key not in far_keys:
+                return {"ok": False, "reason": "not_an_addressee"}
+    elif record is None and origin is None:
+        found = _probe_minting_box(p)
+        if found is not None:
+            return found
     try:
+        from coordinator_core.group_em import box_registry
+
         return roll_call.upsert_reply(
-            rc_id, session_key, p.get("goals"), p.get("activity"), p.get("priority_goal_id")
+            rc_id,
+            session_key,
+            p.get("goals"),
+            p.get("activity"),
+            p.get("priority_goal_id"),
+            origin_box=box_registry.local_box_id(),
+            forwarded_by=forwarded_by,
         )
     except roll_call.RollCallReplyRefused as refused:
         return {"ok": False, "error": "RollCallReplyRefused", **refused.as_dict()}

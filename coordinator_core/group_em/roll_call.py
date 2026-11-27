@@ -80,13 +80,11 @@ def record_path(roll_call_id: str, home: Optional[Path] = None) -> Path:
     return base / RECORD_DIRNAME / (roll_call_id + ".json")
 
 
-def _exclusion(session_id: str, kind: Optional[str]) -> Optional[str]:
+def _exclusion(session_id: str) -> Optional[str]:
     if session_id.startswith(CODEX_MIRROR_PREFIX):
         return "codex_mirror"
     if session_id.startswith(ROUTER_FACE_PREFIX):
         return "unimatrix_transport"
-    if kind not in (None, "claude"):
-        return "non_claude_worker"
     return None
 
 
@@ -98,10 +96,10 @@ def resolve_addressees(
 ) -> dict:
     """``{local, far, excluded}``: every live EM on this box and each reachable far box.
 
-    ``local`` rows are ``{session_id, name}`` (addressed by name); ``far`` rows are ``{key,
-    box_id, name}`` with ``key = <box_id>:<session_id>``; ``excluded`` rows are ``{key, reason}``
-    (reasons: self, codex_mirror, unimatrix_transport, non_claude_worker, no_name,
-    box_unreachable). One registry scan plus one listdir and one open per snapshot.
+    ``local`` rows are ``{session_id, name, kind}`` (addressed by name); ``far`` rows are ``{key,
+    box_id, name}`` with ``key = <box_id>:<session_id>``, plus ``unreachable: True`` when the box
+    snapshot is down; ``excluded`` rows are ``{key, reason}`` (reasons: self, codex_mirror,
+    unimatrix_transport, no_name). One registry scan plus one listdir and one open per snapshot.
     """
     from coordinator_core.session import peer_roster
 
@@ -109,7 +107,7 @@ def resolve_addressees(
     far: list = []
     excluded: list = []
     for row in peer_roster.build_roster(repo_root, box_wide=True):
-        reason = _exclusion(row.session_id, row.kind)
+        reason = _exclusion(row.session_id)
         if reason is None and (row.is_self or row.session_id == caller_session_id):
             reason = "self"
         if reason is None and not row.name:
@@ -117,30 +115,37 @@ def resolve_addressees(
         if reason:
             excluded.append({"key": row.session_id, "reason": reason})
         else:
-            local.append({"session_id": row.session_id, "name": row.name})
+            local.append({"session_id": row.session_id, "name": row.name, "kind": row.kind or "claude"})
 
     base = Path(snapshot_dir) if snapshot_dir else settings_home() / "state" / "group-em"
     for box_id, snap in sorted(remote_roster.read_snapshot(base, local_id=local_id).items()):
-        if not snap.get("reachable"):
-            excluded.append({"key": box_id, "reason": "box_unreachable"})
-            continue
-        for sess in snap.get("sessions", []):
+        unreachable = not snap.get("reachable")
+        sessions = snap.get("sessions", [])
+        if unreachable:
+            prior = remote_roster._raw(remote_roster.snapshot_path(base, box_id)) or {}
+            sessions = remote_roster._trim(prior.get("sessions"))
+        for sess in sessions:
             sid = sess.get("session_id")
             if not isinstance(sid, str) or not sid:
                 continue
             key = remote_identity.peer_key(box_id, sid)
-            reason = _exclusion(sid, None)
+            reason = _exclusion(sid)
             if reason is None and not sess.get("name"):
                 reason = "no_name"
             if reason:
                 excluded.append({"key": key, "reason": reason})
             else:
-                far.append({"key": key, "box_id": box_id, "name": sess.get("name")})
+                far_row = {"key": key, "box_id": box_id, "name": sess.get("name")}
+                if unreachable:
+                    far_row["unreachable"] = True
+                far.append(far_row)
     return {"local": local, "far": far, "excluded": excluded}
 
 
-def render_ask(roll_call_id: str, note: Optional[str] = None) -> str:
-    """The one templated ask every addressee receives."""
+def render_ask(
+    roll_call_id: str, note: Optional[str] = None, origin_box: Optional[str] = None
+) -> str:
+    """The one templated ask every addressee receives; ``origin_box`` is the issuing box id."""
     lines = [
         f"ROLL CALL {roll_call_id}: stop and answer this before anything else.",
         "",
@@ -148,7 +153,9 @@ def render_ask(roll_call_id: str, note: Optional[str] = None) -> str:
         "2. Refocus on your goals: re-read them and re-point the remaining work at them.",
         "3. Set a long /loop so you keep working after you answer.",
         "4. Reply with the groupem.roll_call_reply op (roll_call_id, session_key, goals, "
-        "priority_goal_id, optional activity), one entry per goal with these fields, all required:",
+        "priority_goal_id, optional activity"
+        + (", origin_box" if origin_box else "")
+        + "), one entry per goal with these fields, all required:",
         "   - goal_id, target, measured_now, gap",
         "   - next_lever and expected_gain (what you pull next, and what it buys)",
         "   - owner, and eta as an ISO date (YYYY-MM-DD)",
@@ -158,6 +165,8 @@ def render_ask(roll_call_id: str, note: Optional[str] = None) -> str:
         "   A missing field, a TBD, or a missing ETA is refused and returned to you.",
         "   Put done/next narrative in activity; it goes to the log, not the brief.",
     ]
+    if origin_box:
+        lines += [f"   origin_box: pass {origin_box} so the reply reaches the issuing box."]
     if note:
         lines += ["", f"Note from the caller: {note}"]
     return "\n".join(lines)
@@ -312,8 +321,13 @@ def upsert_reply(
     priority_goal_id: Any = None,
     now: Optional[float] = None,
     home: Optional[Path] = None,
+    origin_box: Optional[str] = None,
+    forwarded_by: Optional[str] = None,
 ) -> dict:
     """Validate then store ``goals`` under ``session_key``; ``activity`` goes to the log only.
+
+    ``origin_box`` (the minting box) and ``forwarded_by`` (the replying box of a far reply) are
+    stamped on a stored reply when given.
 
     ``priority_goal_id`` is required and must name one of the reply's goal_ids; otherwise the
     refusal row ``{goal_id: None, field: "priority_goal_id", reason}`` joins the ``validate_reply``
@@ -346,9 +360,12 @@ def upsert_reply(
         ):
             return {"ok": True, "result": "unchanged", "late": bool(prior.get("late"))}
         late = when > record.get("deadline", float("inf"))
-        replies[session_key] = {
-            "goals": accepted, "priority_goal_id": priority, "received_at": when, "late": late,
-        }
+        entry = {"goals": accepted, "priority_goal_id": priority, "received_at": when, "late": late}
+        if origin_box:
+            entry["origin_box"] = origin_box
+        if forwarded_by:
+            entry["forwarded_by"] = forwarded_by
+        replies[session_key] = entry
         atomic_record.write_json_atomic(path, record)
         if activity is not None:
             _append_log(path, {"session_key": session_key, "at": when, "late": late, "activity": activity})

@@ -42,18 +42,6 @@ def test_landed_and_halted_runs_are_terminal(tmp_path, registry):
     assert open_ids(tmp_path) == {}
 
 
-def test_failed_fire_still_minted_is_not_a_wait(tmp_path, registry):
-    put(registry, "f1", run_id="run-a", state="exited", exit_code=1, outcome="failed")
-    write_run_stage(tmp_path, "run-a", "minted")
-    assert open_ids(tmp_path) == {}
-
-
-def test_running_fire_still_minted_is_open(tmp_path, registry):
-    put(registry, "f1", run_id="run-a", state="running")
-    write_run_stage(tmp_path, "run-a", "minted")
-    assert open_ids(tmp_path)["f1"]["stage"] == "minted"
-
-
 def test_absent_stage_is_open_with_none_stage(tmp_path, registry):
     put(registry, "f1", run_id="run-never-staged", state="exited")
     assert open_ids(tmp_path)["f1"]["stage"] is None

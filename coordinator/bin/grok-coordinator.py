@@ -56,6 +56,61 @@ def _plan_flags(extra: list[str]) -> list[str]:
     return flags
 
 
+DEFAULT_CONTEXT_WINDOW = 500_000
+CONTEXT_WINDOW_ENV = "GROK_COORDINATOR_CONTEXT_WINDOW"
+
+
+def _argv_model(argv: list[str]) -> str | None:
+    for i, a in enumerate(argv):
+        if a in ("--model", "-m") and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--model="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def ensure_context_window(home, argv: list[str], environ=None) -> bool:
+    """Make grok's config pick the 500k window for the launch model; True when it appended the key.
+
+    grok has no window flag, and its GROK_CONFIG overlay drops `[model.<id>]` tables, so the only
+    launch-time selector is `[model."<id>"] context_window` in `<grok home>/config.toml`. Any
+    `[model.<id>]` table already there is the caller's choice and stays. A model whose cached
+    `context_windows` lacks the size is left on grok's default. `GROK_COORDINATOR_CONTEXT_WINDOW`
+    names another listed size, or `default` to skip.
+    """
+    import tomllib
+
+    env = os.environ if environ is None else environ
+    want = env.get(CONTEXT_WINDOW_ENV, "").strip().lower()
+    if want == "default":
+        return False
+    try:
+        size = int(want) if want else DEFAULT_CONTEXT_WINDOW
+    except ValueError:
+        return False
+    home = Path(home)
+    config = home / "config.toml"
+    try:
+        text = config.read_text(encoding="utf-8") if config.is_file() else ""
+        parsed = tomllib.loads(text)
+        model = _argv_model(argv) or (parsed.get("models") or {}).get("default")
+        if not isinstance(model, str) or not model:
+            return False
+        if model in (parsed.get("model") or {}):
+            return False
+        cache = json.loads((home / "models_cache.json").read_text(encoding="utf-8"))
+        windows = cache["models"][model]["info"]["context_windows"]
+        if size not in windows:
+            return False
+        block = f'\n[model."{model}"]\ncontext_window = {size}\n'
+        tmp = config.with_name(config.name + ".tmp")
+        tmp.write_text(text + block, encoding="utf-8")
+        tmp.replace(config)
+        return True
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
 def interactive_argv(binary: str, extra: list[str]) -> list[str]:
     """TUI launch. No -p and no -r. Extra args are the caller's."""
     return [binary, "--dangerously-skip-permissions", *_plan_flags(extra), *extra]
@@ -276,6 +331,7 @@ def sweep_tmp_sessions(cwd, live_ids: set[str], drive_root=None) -> int:
 def run_interactive(extra: list[str]) -> int:
     mod = load_grok_adapter()
     ensure_stop_hook(mod.grok_home())
+    ensure_context_window(mod.grok_home(), [*_plan_flags(extra), *extra])
     try:
         return _run_interactive(mod, extra)
     finally:
@@ -300,6 +356,7 @@ def _run_interactive(mod, extra: list[str]) -> int:
 def run_headless(text: str) -> int:
     mod = load_grok_adapter()
     cwd = os.getcwd()
+    ensure_context_window(mod.grok_home(), _plan_flags([]))
     proc = subprocess.run(headless_argv(grok_binary(), cwd, text), cwd=cwd, capture_output=True,
                           text=True, encoding="utf-8", errors="replace",
                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

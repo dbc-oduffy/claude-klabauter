@@ -304,12 +304,6 @@ def decide(host: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
         refused = branch_creation.match(event)
         if refused is not None:
             return adapter.render(event, refused)
-    if host == HOST_GROK:
-        from coordinator_core.host_hooks import task_repo_reads
-
-        refused = task_repo_reads.match(event)
-        if refused is not None:
-            return adapter.render(event, refused)
     previous = os.environ.get(_SESSION_ENV)
     if event.session_id:
         os.environ[_SESSION_ENV] = event.session_id
