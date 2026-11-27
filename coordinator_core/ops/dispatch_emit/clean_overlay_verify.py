@@ -76,7 +76,8 @@ class OverlayVerdict:
     `PYTEST_STALL_S`); every other inconclusive keeps it False. `failing` is the FAILED/ERROR node ids that made
     a "red" or "pre_existing" verdict (empty on every other verdict). `argv` is the pytest argv (with its
     `--basetemp`) of each run behind the verdict, one shell-joined string per run; `cause` is
-    `ZERO_RUN_TEST_INFRA` when every outcome was a setup error, else `""`."""
+    `ZERO_RUN_TEST_INFRA` when every outcome was a setup error, else `""`. `guard_refusal` is the verbatim text
+    of the guard that ended or refused the run's pytest command, else `""`; a zero-run halt quotes it."""
 
     verdict: str
     detail: str = ""
@@ -85,6 +86,7 @@ class OverlayVerdict:
     failing: tuple = field(default_factory=tuple)
     argv: tuple = field(default_factory=tuple)
     cause: str = ""
+    guard_refusal: str = ""
 
     @property
     def red(self) -> bool:
@@ -2114,6 +2116,7 @@ def verify(
                         f"verify could not run: a repo guard ended pytest (exit {bad[0].returncode}) before any test ran under "
                         f"{pin.command or 'the undeclared gate interpreter'}; {REMEDY}; {process_facts(bad[0], dest, seeds)}: {kept}{tail}",
                         seeds, argv=tuple(launched),
+                        guard_refusal="\n".join(s for s in (bad[0].stdout.strip(), bad[0].stderr.strip()) if s)[:1500],
                     )
             infra = infra_setup_error(full) if failed else ""
             if failed and not infra:
@@ -2210,7 +2213,7 @@ def name_peer_owners(outcome: OverlayVerdict, measured: dict) -> OverlayVerdict:
             notes.append("the red may belong to that run's hunks, not this run: re-run once the owner lands or releases them")
     return OverlayVerdict(
         verdict, f"{'; '.join(notes)}: {outcome.detail}", outcome.seeds, outcome.timed_out, outcome.failing,
-        outcome.argv, outcome.cause,
+        outcome.argv, outcome.cause, outcome.guard_refusal,
     )
 
 
@@ -2249,6 +2252,7 @@ def write_verdict(root: Path, run_id: str, measured: dict, outcome: OverlayVerdi
                 "timed_out": outcome.timed_out, "failing_ids": list(outcome.failing), "key": landing_key(measured), "base_sha": measured.get("base_sha"), "sha": measured.get("sha"),
                 "keyed": keyed_components(measured), "argv": list(outcome.argv),
                 **({"zero_run_cause": outcome.cause} if outcome.cause else {}),
+                **({"guard_refusal": outcome.guard_refusal} if outcome.guard_refusal else {}),
             },
             indent=2, sort_keys=True,
         ),
@@ -2438,6 +2442,7 @@ def check_verdict(root: Path, run_id: str, measured: dict, git_root: Optional[Pa
     return OverlayVerdict(
         verdict, str(data.get("detail", "")), seeds, failing=tuple(data.get("failing_ids") or ()),
         argv=tuple(data.get("argv") or ()), cause=str(data.get("zero_run_cause") or ""),
+        guard_refusal=str(data.get("guard_refusal") or ""),
     )
 
 

@@ -147,6 +147,92 @@ def test_a_read_past_the_500ms_bar_still_parks(repo, monkeypatch):
     assert out["refused"] == "halt-read-indeterminate" and out["retry_safe"] is True
 
 
+def _stall_first_non_leg_reads(monkeypatch, times: int) -> list:
+    """Wedge the first `times` bounded reads of a non-test-leg halt file past the 500ms deadline."""
+    from coordinator_core import bounded_io
+
+    real = bounded_io._read_registered
+    stalls: list = []
+
+    def wedged(path):
+        if path.endswith((".json", ".jsonl", ".mjs")) and not path.endswith("test-leg.json") and len(stalls) < times:
+            stalls.append(path)
+            time.sleep(0.8)
+        return real(path)
+
+    monkeypatch.setattr(bounded_io, "_read_registered", wedged)
+    return stalls
+
+
+def test_a_single_stalled_non_leg_read_is_retried_and_the_halt_record_commits(repo, monkeypatch):
+    _write(repo, f"{RECORD_DIR_ROOT}/{RUN}/widened-paths.jsonl", '{"row": "C1", "path": "a.py"}\n')
+    token = run_token.mint(repo, RUN, "run.mjs")
+    head = _git(repo, "rev-parse", "HEAD")
+    stalls = _stall_first_non_leg_reads(monkeypatch, 1)
+
+    out = _op(repo, token)
+
+    assert len(stalls) == 1, "no non-test-leg halt read stalled; the retry branch was not reached"
+    assert out.get("refused") != "halt-read-indeterminate" and not out.get("parked"), out
+    assert out["committed"] is True
+    assert _git(repo, "rev-parse", "HEAD") != head
+
+
+def test_a_late_stall_after_earlier_reads_succeeded_retries_into_exactly_one_commit(repo, monkeypatch):
+    from coordinator_core import bounded_io
+
+    _write(repo, f"{RECORD_DIR_ROOT}/{RUN}/widened-paths.jsonl", '{"row": "C1", "path": "a.py"}\n')
+    token = run_token.mint(repo, RUN, "run.mjs")
+    head = _git(repo, "rev-parse", "HEAD")
+    real = bounded_io._read_registered
+    seen: list = []
+    stalls: list = []
+
+    def late_wedge(path):
+        if path.endswith((".json", ".jsonl", ".mjs")) and not path.endswith("test-leg.json"):
+            seen.append(path)
+            if len(seen) == 2 and not stalls:
+                stalls.append(path)
+                time.sleep(0.8)
+        return real(path)
+
+    monkeypatch.setattr(bounded_io, "_read_registered", late_wedge)
+
+    out = _op(repo, token)
+
+    assert stalls, "no read stalled after an earlier read succeeded; the late-stall path was not reached"
+    assert out["committed"] is True and not out.get("parked"), out
+    assert _git(repo, "rev-list", "--count", f"{head}..HEAD") == "1"
+
+
+def test_a_second_stall_on_the_retry_still_parks(repo, monkeypatch):
+    token = run_token.mint(repo, RUN, "run.mjs")
+    head = _git(repo, "rev-parse", "HEAD")
+    stalls = _stall_first_non_leg_reads(monkeypatch, 100)
+
+    out = _op(repo, token)
+
+    assert len(stalls) >= 2
+    assert out["committed"] is False and out["parked"] is True
+    assert out["refused"] == "halt-read-indeterminate" and out["retry_safe"] is True
+    assert _git(repo, "rev-parse", "HEAD") == head
+
+
+def test_a_stalled_land_retries_once(repo, monkeypatch):
+    token = run_token.mint(repo, RUN, "run.mjs")
+    with monkeypatch.context() as patched:
+        calls = _stall_land(patched, after_commit=False)
+        out = _op(repo, token)
+
+    assert len(calls) == 2 and out["refused"] == "halt-read-indeterminate"
+
+
+def test_the_halt_read_deadline_is_unchanged():
+    from coordinator_core.git import call_io_scope
+
+    assert call_io_scope.HALT_READ_DEADLINE_SECS == 0.5
+
+
 def test_unstalled_halted_land_is_unchanged(repo):
     token = run_token.mint(repo, RUN, "run.mjs")
     out = _op(repo, token)

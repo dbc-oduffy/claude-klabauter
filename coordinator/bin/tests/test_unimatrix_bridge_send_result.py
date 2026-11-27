@@ -91,7 +91,7 @@ def test_a_mirror_whose_name_disagrees_with_its_far_name_is_refused_naming_name_
     conn = Conn([], deliveries)
     bridge.serve_one(conn)
     rows = [json.loads(l) for l in deliveries.read_text().splitlines()]
-    assert conn.replies == [{"ok": False, "error": rows[0]["error"]}]  # refused before custody: a synchronous failure
+    assert conn.replies == [{"ok": False, "reason": "target_mismatch", "error": rows[0]["error"]}]  # refused before custody: a synchronous failure
     assert ssh == [] and [r["ok"] for r in rows] == [False]
     for part in ("group-em-54.machine-a", "example-game-repo-fc", "fc000000-0000-4000-8000-000000000003"):
         assert part in rows[0]["error"]
@@ -231,3 +231,28 @@ def test_ok_reply_without_the_matching_far_receipt_is_unconfirmed_and_notifies(e
     assert [r["ok"] for r in rows] == [False]
     assert rows[0]["error"] == "unconfirmed: no far receipt for this line"
     assert bridge.notices == ["unconfirmed: no far receipt for this line"]
+
+
+@pytest.mark.parametrize("error, reason", [
+    ("addressed a, endpoint is b (session s); re-mirror", "target_mismatch"),
+    ("mirror lacks far session id; re-mirror", "mirror_stale"),
+    ("nothing to send", "mirror_stale"),
+    ("no live session with pid 9", "session_gone"),
+    ("ssh exit 255: Connection timed out", "socket_timeout"),
+    ("ssh exit 255: Connection refused", "far_unreachable"),
+    ("local send-leg fault: OSError: x", None),
+])
+def test_reason_of_names_the_class_an_observed_refusal_text_carries(env, error, reason) -> None:
+    bridge, _ = env
+    assert bridge.reason_of(error) == reason
+
+
+def test_a_failure_notice_to_the_sender_names_the_reason(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge, _ = env
+    told = []
+    fresh = load_bridge()
+    fresh.cfg, fresh.log = bridge.cfg, bridge.log
+    monkeypatch.setattr(fresh, "_tell_sender", lambda line, text: told.append(text))
+    fresh.notify_sender(SENT, "far", "ssh exit 255: Connection refused")
+    fresh.notify_sender(SENT, "far", "local send-leg fault: OSError: x")
+    assert told[0].endswith("[reason: far_unreachable]") and "reason" not in told[1]

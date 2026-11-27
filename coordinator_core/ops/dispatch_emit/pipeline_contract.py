@@ -123,7 +123,9 @@ class Stage:
     """One agent() call site; template and schema are names keyed into Manifest (an inline schema
     is keyed `<inline:<stage id>>`). model None keeps the agent definition's pinned model;
     agent_type_from `inputs.<roster>` replaces agent_type with a per-item lookup; phase None is
-    the stage id; max_concurrent None fans out unchunked."""
+    the stage id; max_concurrent None fans out unchunked. requires_output names a stage this one
+    depends on, an un-fanned one whose `output` file must exist and be non-empty before this stage
+    dispatches, else the run halts naming that stage."""
 
     id: str
     agent_type: str | None
@@ -144,6 +146,7 @@ class Stage:
     halts_unless: str | None = None
     halts_unless_nonempty: str | None = None
     halts_unless_count: HaltCount | None = None
+    requires_output: str | None = None
 
 
 @dataclass(frozen=True)

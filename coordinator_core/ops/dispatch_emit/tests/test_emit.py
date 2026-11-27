@@ -2367,3 +2367,35 @@ def test_context_memo_is_dropped_with_its_context(tmp_path) -> None:
     del ctx
     gc.collect()
     assert key not in _CONTEXT_MEMOS
+
+
+def _run_zero_run_halt(test_result_js: str) -> dict | None:
+    import json as _json
+    import shutil as _shutil
+    node = _shutil.which("node")
+    if node is None:
+        pytest.skip("node absent")
+    script = (
+        f"let _halted = null; const _runId = 'r1'; const _testResult = {test_result_js};\n"
+        f"{emit._zero_run_halt_js()}\nconsole.log(JSON.stringify(_halted));"
+    )
+    out = _subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30,
+                          creationflags=getattr(_subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    return _json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+def test_zero_run_halt_names_a_guard_refusal_not_test_infra_failure():
+    halted = _run_zero_run_halt(
+        f"{{ tests_run: 0, zero_run_cause: '{emit.GUARD_REFUSED_CAUSE}', guard_refusal: 'guard-x denied it' }}"
+    )
+    assert halted["halted"] == emit.GUARD_REFUSED_HALT != emit.TEST_INFRA_HALT
+    assert "guard-x denied it" in halted["detail"]
+
+
+@pytest.mark.spawns_process
+def test_zero_run_halt_without_a_guard_cause_stays_test_infra_failure():
+    halted = _run_zero_run_halt("{ tests_run: 0, zero_run_cause: 'collection-failure' }")
+    assert halted["halted"] == emit.TEST_INFRA_HALT
+    assert _run_zero_run_halt("{ tests_run: 3, zero_run_cause: 'guard_refused' }") is None

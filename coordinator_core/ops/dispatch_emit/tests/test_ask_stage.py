@@ -586,3 +586,10 @@ def test_a_plain_refusal_ends_the_run(tmp_path, monkeypatch):
     reply, ended = _drive_refusal(tmp_path, monkeypatch, AskStageError("nope"))
     assert "nope" in reply["error"]
     assert ended == ["ask-20260101T000000-aaaaaa"]
+
+
+def test_stage_foreign_at_baseline_without_a_record_passes_the_fresh_marker_through(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_stage, write_baseline
+
+    monkeypatch.setattr(write_baseline, "foreign_at_baseline", lambda root, baseline: {"a.py": "sha1"})
+    assert ask_stage._stage_foreign_at_baseline(tmp_path, None, {"a.py": "sha1", "b.py": "sha2"}) == {"a.py": "sha1"}

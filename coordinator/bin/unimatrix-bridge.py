@@ -37,6 +37,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import ModuleType
 
 IS_WIN = sys.platform == "win32"
 LOOPBACK = "localhost"
@@ -73,6 +74,37 @@ def _roster():
         spec.loader.exec_module(mod)
     return mod
 
+
+
+def _unimatrix_module(name: str) -> ModuleType:
+    """The `_unimatrix.<name>` module, importable from this script's directory."""
+    bin_dir = str(Path(__file__).resolve().parent)
+    if bin_dir not in sys.path:
+        sys.path.insert(0, bin_dir)
+    return importlib.import_module(f"_unimatrix.{name}")
+
+
+def _delivery_reason() -> ModuleType:
+    return _unimatrix_module("delivery_reason")
+
+
+_REASON_MARKERS = (
+    ("target_mismatch", ("target mismatch", ", endpoint is ")),
+    ("mirror_stale", ("re-mirror", "nothing to send")),
+    ("session_gone", ("no live session with pid",)),
+    ("socket_timeout", ("TimeoutExpired", "timed out")),
+    ("far_unreachable", ("ssh exit", "Connection refused", "No route to host", "Could not resolve", "Network is unreachable",
+                         "Permission denied", "Host key verification failed")),
+)
+
+
+def reason_of(error) -> "str | None":
+    """The delivery_reason class an observed refusal text names; None when the text names none (a local fault)."""
+    text = error or ""
+    for reason, markers in _REASON_MARKERS:
+        if any(m in text for m in markers):
+            return reason
+    return None
 
 
 def pick_remote(lan, tunnel):
@@ -287,10 +319,12 @@ def notify_sender(line, target, error) -> None:
     The notice is stamped from this bridge's own endpoint: the inbox accepts it because
     this process is the one the mirror entry vouches for.
     """
+    reason = reason_of(error)
+    tag = f" [reason: {reason}]" if reason else ""
     if "unconfirmed" in error:
-        _tell_sender(line, f"Delivery unconfirmed: your message to {target} may have reached the far box ({error}). Do not resend blindly.")
+        _tell_sender(line, f"Delivery unconfirmed: your message to {target} may have reached the far box ({error}). Do not resend blindly.{tag}")
         return
-    _tell_sender(line, f"Delivery failed: your message to {target} did not reach the far box ({error}). It was not delivered.")
+    _tell_sender(line, f"Delivery failed: your message to {target} did not reach the far box ({error}). It was not delivered.{tag}")
 
 
 def _tell_sender(line, text):
@@ -422,6 +456,12 @@ def _client_gone(e) -> bool:
     return type(e).__name__ == "error" and bool(e.args) and e.args[0] in _PIPE_GONE_WINERRORS
 
 
+def _refusal(error) -> dict:
+    """The pre-custody refusal answer; carries `reason` when the error text names a delivery_reason class."""
+    reason = reason_of(error)
+    return _delivery_reason().refuse(reason, error) if reason else {"ok": False, "error": error}
+
+
 def relay_send(conn) -> None:
     """Relay one client's message lines; answer the client when the bridge takes custody, not after the far leg.
 
@@ -455,12 +495,13 @@ def relay_send(conn) -> None:
         _relay_deliver(buf, on_custody=accept)
         if not v.answered:
             errors = [e for e in v.errors if e]
-            answer({"ok": False, "error": (errors[0] if errors else "nothing to send")[-300:]})
+            error = (errors[0] if errors else "nothing to send")[-300:]
+            answer(_refusal(error))
     except Exception as e:  # a local fault before custody is still a failed send to the client
         if v.answered:
             log.write(f"relay: far leg fault after custody: {type(e).__name__}: {e}\n")
         else:
-            answer({"ok": False, "error": f"{LOCAL_FAULT}: {type(e).__name__}: {e}"[-300:]})
+            answer(_refusal(f"{LOCAL_FAULT}: {type(e).__name__}: {e}"[-300:]))
     finally:
         v.errors = None
 
@@ -943,7 +984,7 @@ def drop_own_files(endpoint=True):
             pass
 
 
-def watch_supervisor():
+def watch_supervisor() -> None:
     """Exit with the roster: blocking accept loops cannot poll, so this daemon thread does."""
     while True:
         time.sleep(SUPERVISOR_POLL_SECONDS)
@@ -973,7 +1014,7 @@ def watch_socket():
             os._exit(0)
 
 
-def main(argv=None):
+def main(argv=None) -> None:
     global cfg, log
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["status"]:

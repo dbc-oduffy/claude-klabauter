@@ -19,6 +19,7 @@ def _stage(tmp_path: Path, only_rows: list[str], **extra: object) -> dict:
 
 def test_pivot_resume_retires_ids_the_replan_removed_and_stages_the_rest(tmp_path: Path) -> None:
     _plan(tmp_path, _row("C2") + _row("C8"))
+    resume_snapshot.write(tmp_path, RUN, PLAN_REL, [], ["C2"], reasons={})
     reply = _stage(tmp_path, ONLY, pivot_resume=True)
     assert "error" not in reply
     assert reply["retired_resume_rows"] == ["C1", "C3"]
@@ -52,6 +53,12 @@ def test_pivot_resume_with_every_id_present_retires_nothing(tmp_path: Path) -> N
     reply = _stage(tmp_path, ONLY, pivot_resume=True)
     assert reply["retired_resume_rows"] == []
     assert {r["id"] for r in reply["rows"]} == set(ONLY)
+
+
+def test_pivot_resume_without_a_snapshot_refuses_a_missing_id(tmp_path: Path) -> None:
+    _plan(tmp_path, _row("C2") + _row("C8"))
+    reply = _stage(tmp_path, ONLY, pivot_resume=True)
+    assert "C1" in reply["error"] and "C3" in reply["error"]
 
 
 def test_pivot_resume_refuses_a_landed_row_the_replan_deleted(tmp_path: Path) -> None:

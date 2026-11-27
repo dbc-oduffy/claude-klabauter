@@ -73,7 +73,7 @@ def _denied(result) -> bool:
 
 AGENT_TYPES = ["coordinator:test-runner"]
 EXECUTOR = "coordinator:executor"
-OTHER_AGENT_TYPES = [None, "coordinator:code-reviewer"]
+OTHER_AGENT_TYPES = ["coordinator:code-reviewer"]
 
 
 @pytest.mark.parametrize("transcript", [_RUN_TRANSCRIPT, _RUN_TRANSCRIPT_WIN])
@@ -92,6 +92,31 @@ def test_a_non_test_runner_subagent_stays_refused_on_identity(tmp_path, shape, a
     payload = _payload(tmp_path, SHAPES[shape], agent_type=agent_type, transcript=transcript)
     assert _denied(suite.check(payload))
     assert _denied(heavy.check(payload))
+
+
+@pytest.mark.parametrize("transcript", [_RUN_TRANSCRIPT, _AD_HOC_TRANSCRIPT])
+@pytest.mark.parametrize("shape", ["single-file", "multi-file", "export-run"])
+def test_a_typeless_subagent_named_test_files_run_is_promoted_to_the_executor_row_gate(tmp_path, shape, transcript):
+    payload = _payload(tmp_path, SHAPES[shape], agent_type=None, transcript=transcript)
+    assert not _denied(suite.check(payload))
+
+
+@pytest.mark.parametrize("command", [
+    "python -m pytest",
+    "python -m pytest tests/",
+    f"python -m pytest {TARGET} -n 4",
+], ids=["bare", "directory", "workers"])
+def test_a_typeless_subagent_broad_run_stays_refused(tmp_path, command):
+    payload = _payload(tmp_path, command, agent_type=None, transcript=_RUN_TRANSCRIPT)
+    assert _denied(suite.check(payload))
+
+
+def test_the_admission_verdict_still_refuses_a_typeless_non_export_run_on_identity(tmp_path):
+    from coordinator_core.bash_guards import _test_run_admission as adm
+
+    p = _payload(tmp_path, SHAPES["single-file"], agent_type=None, transcript=_RUN_TRANSCRIPT)
+    v = adm.test_run_verdict(p, [["python", "-m", "pytest", TARGET]], str(tmp_path), is_subagent=True)
+    assert not v.allowed and v.leg == "identity"
 
 
 @pytest.mark.parametrize("transcript", [_RUN_TRANSCRIPT, _AD_HOC_TRANSCRIPT])
@@ -230,19 +255,23 @@ def test_the_engine_export_run_leg_with_a_broad_scope_stays_refused_with_no_agen
     assert _denied(suite.check(payload))
 
 
-@pytest.mark.parametrize("agent_type", _TYPELESS)
-@pytest.mark.parametrize("command", [
-    f"python -m pytest {TARGET}",
-    f"cd /repo && python -m pytest {TARGET}",
-    f"python -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --run-id r1 -- python -m pytest {TARGET}",
-    f"python -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --export-run python -m pytest {TARGET}",
-    f"python -m other_module --export-run -- python -m pytest {TARGET}",
-    f"python -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --export-run -- python -m pytest {TARGET}"
-    f" ; python -m pytest {OTHER}",
-], ids=["direct", "chained-direct", "no-export-flag", "no-separator", "other-module", "export-then-direct-chain"])
-def test_only_the_export_wrapper_admits_a_subagent_with_no_agent_type(tmp_path, command, agent_type):
-    payload = _payload(tmp_path, command, agent_type=agent_type, transcript=_RUN_TRANSCRIPT)
-    assert _denied(suite.check(payload))
+_VERIFY = "coordinator_core.ops.dispatch_emit.clean_overlay_verify"
+_PYTEST = ["python", "-m", "pytest", TARGET]
+
+
+@pytest.mark.parametrize("argvs", [
+    [_PYTEST],
+    [["python", "-m", _VERIFY, "--run-id", "r1", "--", *_PYTEST]],
+    [["python", "-m", _VERIFY, "--export-run", *_PYTEST]],
+    [["python", "-m", "other_module", "--export-run", "--", *_PYTEST]],
+    [["python", "-m", _VERIFY, "--export-run", "--", *_PYTEST], ["python", "-m", "pytest", OTHER]],
+], ids=["direct", "no-export-flag", "no-separator", "other-module", "export-then-direct-chain"])
+def test_only_the_export_wrapper_admits_a_subagent_with_no_agent_type(tmp_path, argvs):
+    from coordinator_core.bash_guards import _test_run_admission as adm
+
+    p = _payload(tmp_path, "x", agent_type=None, transcript=_RUN_TRANSCRIPT)
+    v = adm.test_run_verdict(p, argvs, str(tmp_path), is_subagent=True)
+    assert not v.allowed and v.leg == "identity"
 
 
 @pytest.mark.parametrize("agent_type", ["coordinator:code-reviewer", "general-purpose"])
@@ -253,6 +282,61 @@ def test_a_typed_non_test_runner_subagent_stays_refused_on_the_engine_export_run
     payload = _payload(tmp_path, command, agent_type=agent_type, transcript=_RUN_TRANSCRIPT)
     payload["tool_name"] = tool
     assert _denied(suite.check(payload))
+
+
+def _overlay_command(repo, shell, tool, targets):
+    """The wrapper plus the exact argv `clean_overlay_verify._pytest_argv` builds, marker expression quoted."""
+    import shlex
+
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as leg
+    from coordinator_core.ops.dispatch_emit.engine_command import OVERLAY_VERIFY_MODULE, engine_module_command
+
+    wrapper = engine_module_command(
+        OVERLAY_VERIFY_MODULE, str(repo), "--export-run --run-id r1 --repo-root %s --" % repo.as_posix(), shell=shell,
+    )
+    argv = leg._pytest_argv(repo, repo / "mirror", repo / "bt", targets)
+    quote = (lambda t: "'" + t.replace("'", "''") + "'") if tool == "PowerShell" else shlex.quote
+    return f"{wrapper} {' '.join(quote(t) for t in argv)}"
+
+
+def _box_below_floor_and_held(monkeypatch):
+    hold = types.SimpleNamespace(set_by_session="other-sess", reason="roll")
+    monkeypatch.setattr(heavy, "_read_box_hold", lambda: hold)
+    monkeypatch.setattr(
+        heavy, "_read_available", lambda: types.SimpleNamespace(trusted=True, avail_mb=1000, source="t")
+    )
+
+
+@pytest.mark.parametrize("agent_type", ["coordinator:test-runner", EXECUTOR, None])
+@pytest.mark.parametrize("form", sorted(_SHELLS))
+@pytest.mark.parametrize("targets", [[TARGET, OTHER], [TARGET + "::test_a", OTHER + "::test_b"]], ids=["files", "node-ids"])
+def test_the_exact_overlay_argv_is_admitted_while_the_box_is_held_and_below_the_ram_floor(
+    tmp_path, monkeypatch, form, targets, agent_type
+):
+    tool, shell = _SHELLS[form]
+    _box_below_floor_and_held(monkeypatch)
+    command = _overlay_command(tmp_path, shell, tool, targets)
+    assert "not cadence and not complete and not pending_fix and not designed_red" in command
+    assert "--basetemp" in command and "--rootdir" in command
+    payload = _payload(tmp_path, command, agent_type=agent_type, transcript=_RUN_TRANSCRIPT)
+    payload["tool_name"] = tool
+    assert not _denied(suite.check(payload))
+    assert not _denied(heavy.check(payload))
+
+
+def test_the_ceiling_still_refuses_a_non_export_scoped_run_while_the_box_is_held(tmp_path, monkeypatch):
+    from coordinator_core.bash_guards import _test_run_admission as adm
+
+    _box_below_floor_and_held(monkeypatch)
+    p = _payload(tmp_path, SHAPES["multi-file"], agent_type="coordinator:test-runner", transcript=_RUN_TRANSCRIPT)
+    v = adm.test_run_verdict(p, [["python", "-m", "pytest", TARGET]], str(tmp_path), is_subagent=True)
+    assert not v.allowed and v.leg == "ceiling"
+    mixed = [
+        ["python", "-m", "coordinator_core.ops.dispatch_emit.clean_overlay_verify", "--export-run", "--", "python", "-m", "pytest", TARGET],
+        ["python", "-m", "pytest", OTHER],
+    ]
+    v = adm.test_run_verdict(p, mixed, str(tmp_path), is_subagent=True)
+    assert not v.allowed and v.leg == "ceiling"
 
 
 def test_the_export_wrapper_stem_names_the_engine_module():

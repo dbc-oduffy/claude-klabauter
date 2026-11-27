@@ -173,6 +173,7 @@ _PARAMS = (
     Field("only_rows", "str_list"),
     Field("claim_register_rows", "bool"),
     Field("pivot_resume", "bool"),
+    Field("kept_rows", "str_list"),
     Field("materialise_wave", "str"),
 )
 
@@ -792,7 +793,7 @@ def _sibling_owner_rows(plan_rows: Sequence[Mapping], sibling_roots: Mapping[str
 
 def _only_rows(
     rows: list, exclusions: list, keep: frozenset, snap: Optional[resume_snapshot.Snapshot] = None,
-    revise_ids: frozenset = frozenset(), pivot_resume: bool = False,
+    revise_ids: frozenset = frozenset(), pivot_resume: bool = False, kept: Optional[frozenset] = None,
 ) -> tuple[list, list, tuple[str, ...], list]:
     """The resume subset of a spine read, the resume rows a re-plan retired, and the dispatchable
     rows dropped as landed: `keep` rows only,
@@ -801,8 +802,12 @@ def _only_rows(
     kept, rows a re-plan added included. A `keep` id the spine lacks but `snap.resume_rows` names
     is retired: reported, never staged, never refused. `revise_ids` (a ledger resume's register
     row ids) retire the same way, snapshot or not. With `pivot_resume` (a PIVOT-halted refire's
-    from-scratch replan) every missing id retires except one the snapshot records as landed or closed
-    (`snap.not_to_run`), which refuses. Any other missing id refuses."""
+    from-scratch replan) with a snapshot, every missing id retires except one the snapshot records as
+    landed or closed (`snap.not_to_run`), which refuses; without a snapshot no landed row is
+    knowable, so a missing id refuses. Any other missing id refuses. With `kept` also given (a
+    pivot leg's kept_rows, `frozenset()` when it kept none), every open unlanded id in
+    `snap.resume_rows` outside `kept` retires even while the spine still holds it; a closed
+    exclusion never does."""
     known = {r.id for r in rows} | {e.get("id") for e in exclusions}
     missing = keep - known
     retired: tuple[str, ...] = tuple(sorted(missing & revise_ids))
@@ -812,25 +817,31 @@ def _only_rows(
         missing = missing - snap.resume_rows
     if pivot_resume and snap is not None and missing & snap.not_to_run:
         raise AskStageError(
-            f"pivot replan deleted landed or closed row(s): {sorted(missing & snap.not_to_run)}"
+            f"pivot replan deleted landed, closed or unstaged row(s): {sorted(missing & snap.not_to_run)}"
         )
-    if pivot_resume and missing:
+    if pivot_resume and snap is not None and missing:
         retired = tuple(sorted({*retired, *missing}))
         missing = frozenset()
     if missing:
         raise AskStageError(f"resume row id(s) not in the plan's spine: {sorted(missing)}")
+    superseded: frozenset = frozenset()
+    if pivot_resume and snap is not None and kept is not None:
+        closed = {e.get("id") for e in exclusions if _is_closed_exclusion(e)}
+        superseded = frozenset((keep & snap.resume_rows & known) - kept - closed)
+        retired = tuple(sorted({*retired, *superseded}))
     if snap is not None:
-        keep = frozenset(known - snap.not_to_run)
+        keep = frozenset(known - snap.not_to_run - superseded)
     landed = known - keep
-    kept = []
+    kept_rows = []
     dropped = []
     for row in rows:
         if row.id not in keep:
-            dropped.append(row)
+            if row.id not in superseded:
+                dropped.append(row)
             continue
         edges = [e for e in row.depends_on if not (isinstance(e, dict) and e.get("chunk") in landed)]
-        kept.append(row._replace(depends_on=edges) if len(edges) != len(row.depends_on) else row)
-    return kept, [e for e in exclusions if e.get("id") in keep], retired, dropped
+        kept_rows.append(row._replace(depends_on=edges) if len(edges) != len(row.depends_on) else row)
+    return kept_rows, [e for e in exclusions if e.get("id") in keep], retired, dropped
 
 
 def _is_closed_exclusion(e: Mapping) -> bool:
@@ -1680,6 +1691,7 @@ def stage(
     ledger_resume: bool = False,
     claim_register_rows: bool = False,
     pivot_resume: bool = False,
+    kept_rows: Optional[Sequence[str]] = None,
     classify_receiver: Optional[Callable[[str, bool], object]] = None,
     plan_parse: Optional["_PlanParse"] = None,
     family_report: Optional[dict] = None,
@@ -1699,6 +1711,8 @@ def stage(
     claims the rows a later revise minted.
     `pivot_resume=True` (a PIVOT-halted refire replanned from scratch) retires every requested id the
     spine no longer holds, so it lands in `retired_resume_rows`; a requested id still present stays staged.
+    With `kept_rows` (the leg's kept ids, `[]` for none) it also requests the snapshot's open unlanded
+    rows and retires each one outside `kept_rows`, whether or not the spine still holds it.
     `plan_parse` is the handler's one parse of an unmodified full plan; it is ignored under
     `claim_register_rows`, which rewrites the plan first.
     """
@@ -1767,6 +1781,9 @@ def stage(
             _refuse_unapproved_design(run_sizing, run_sizing_rel)
     plan_posix = _rel(root, plan_path)
 
+    pivot_kept = pivot_resume and kept_rows is not None
+    if pivot_kept and only_rows is None:
+        only_rows = ()
     if plan_rel:
         unfilled = scaffold_markers(plan_text)
         if unfilled:
@@ -1789,6 +1806,8 @@ def stage(
     exclusions = list(parse.exclusions)
     retired_resume: tuple[str, ...] = ()
     resume_snap = resume_snapshot.read(root, run_id, plan_posix) if only_rows is not None else None
+    if pivot_kept and resume_snap is not None:
+        only_rows = [*only_rows, *sorted(resume_snap.resume_rows - set(only_rows))]
     if not ledger_resume and resume_snap is None and only_rows is not None and not len(only_rows):
         # An empty resume set with no snapshot names no landed row; the parse already excluded landed and closed rows.
         only_rows = None
@@ -1802,7 +1821,8 @@ def stage(
             if ledger_resume else frozenset()
         )
         rows, exclusions, retired_resume, dropped_landed = _only_rows(
-            rows, exclusions, frozenset(only_rows), resume_snap, revise_ids, pivot_resume
+            rows, exclusions, frozenset(only_rows), resume_snap, revise_ids, pivot_resume,
+            frozenset(kept_rows) if pivot_kept else None,
         )
         if not ledger_resume and not rows and _draft_resume_without_evidence(
             plan_text, dropped_landed, resume_snap
@@ -1856,7 +1876,10 @@ def stage(
     memo_close = memo_close_only(exclusions, raw_by_id)
     closing_ids = {c["id"] for c in memo_close}
     memo_close_run = bool(memo_close) and not gated and all(o.id in closing_ids for o in owed)
-    if not waves and not ledger_resume and not memo_close_run and not (only_rows is not None and (owed or gated)):
+    if (
+        not waves and not ledger_resume and not memo_close_run and not (pivot_kept and retired_resume)
+        and not (only_rows is not None and (owed or gated))
+    ):
         named = f"; gated: {', '.join(g.id for g in gated)}" if gated else ""
         if owed:
             named += f"; owed by the EM: {', '.join(o.id for o in owed)}"
@@ -3465,6 +3488,7 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
             only_rows=params["only_rows"] if params.get("only_rows") is not None else None,
             claim_register_rows=bool(params.get("claim_register_rows")),
             pivot_resume=bool(params.get("pivot_resume")),
+            kept_rows=params["kept_rows"] if params.get("kept_rows") is not None else None,
             plan_parse=plan_parse,
         )
         if params.get("plan_path"):

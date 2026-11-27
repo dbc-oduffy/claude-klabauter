@@ -7,7 +7,9 @@ stages name are the only reads.
 
 Constructs beyond the vendored schema: stage `halts_unless_nonempty: <array field>` and
 `halts_unless_count: {fields: [..], equals: inputs.<list>}` (claude-klabauter-side, both need an inline
-object schema on an un-fanned stage); `${CLAUDE_PLUGIN_ROOT}` in a template is bound to the
+object schema on an un-fanned stage); stage `requires_output: <stage id>` (claude-klabauter-side, names an
+un-fanned dependency whose output file must exist before this stage dispatches);
+`${CLAUDE_PLUGIN_ROOT}` in a template is bound to the
 content root at load.
 """
 
@@ -64,7 +66,7 @@ _LIST_KINDS = ("strings", "roster")
 _MODELS = ("haiku", "sonnet", "opus")
 _EFFORTS = ("low", "medium", "high")
 _WHEN_KEYS = {"flag", "return", "nonempty", "equals"}
-_CLAUDE_KLABAUTER_STAGE_KEYS = {"halts_unless_nonempty", "halts_unless_count"}
+_CLAUDE_KLABAUTER_STAGE_KEYS = {"halts_unless_nonempty", "halts_unless_count", "requires_output"}
 _STAGE_KEYS = set(_SCHEMA["$defs"]["stage"]["properties"]) | _CLAUDE_KLABAUTER_STAGE_KEYS
 _PLUGIN_ROOT_TOKEN = "${CLAUDE_PLUGIN_ROOT}"
 _STAGE_REQUIRED = ("id", "template", "output")
@@ -292,6 +294,10 @@ def _load_stage(
         reasons.append(f"{label}: halts_unless_nonempty must be a field name matching ^[A-Za-z][A-Za-z0-9_]*$")
         halts_nonempty = None
     halts_count = _load_halt_count(raw["halts_unless_count"], label, reasons) if "halts_unless_count" in raw else None
+    requires_output = raw.get("requires_output")
+    if requires_output is not None and not (isinstance(requires_output, str) and _STAGE_ID_RE.match(requires_output)):
+        reasons.append(f"{label}: requires_output must be a stage id matching ^[a-z0-9][a-z0-9_-]*$")
+        requires_output = None
     when = _load_when(raw["when"], label, reasons) if "when" in raw else None
 
     depends = raw.get("depends_on") or []
@@ -338,7 +344,7 @@ def _load_stage(
         output=raw["output"], phase=raw.get("phase"), agent_type_from=from_ref,
         effort=raw.get("effort"), max_concurrent=max_concurrent, when=when, optional=optional,
         produces_brief=produces_brief, halts_unless=halts_unless,
-        halts_unless_nonempty=halts_nonempty, halts_unless_count=halts_count,
+        halts_unless_nonempty=halts_nonempty, halts_unless_count=halts_count, requires_output=requires_output,
     )
 
 
@@ -462,6 +468,19 @@ def _check_halts_count(stage: Stage, schemas: dict[str, dict], lists: dict[str, 
             )
 
 
+def _check_requires_output(stage: Stage, by_id: dict[str, Stage], reasons: list[str]) -> None:
+    producer = by_id.get(stage.requires_output or "")
+    if producer is None:
+        reasons.append(f"stage {stage.id!r}: requires_output names unknown stage {stage.requires_output!r}")
+        return
+    if producer.id not in stage.depends_on:
+        reasons.append(f"stage {stage.id!r}: requires_output {producer.id!r} is not in its depends_on")
+    if producer.fan_out.kind != FAN_OUT_NONE or producer.optional or producer.when is not None:
+        reasons.append(f"stage {stage.id!r}: requires_output {producer.id!r} must be an un-fanned, non-optional, unconditional stage")
+    if stage.when is not None and stage.when.kind != WHEN_FLAG:
+        reasons.append(f"stage {stage.id!r}: requires_output is not legal beside a return-conditioned when")
+
+
 def _check_graph_shape(
     stages: list[Stage], schemas: dict[str, dict], flags: dict[str, FlagSpec],
     lists: dict[str, str], reasons: list[str],
@@ -491,6 +510,8 @@ def _check_graph_shape(
             _check_halts_nonempty(stage, schemas, reasons)
         if stage.halts_unless_count is not None:
             _check_halts_count(stage, schemas, lists, reasons)
+        if stage.requires_output is not None:
+            _check_requires_output(stage, by_id, reasons)
         if stage.fan_out.over_inputs and stage.fan_out.inputs not in lists:
             reasons.append(f"stage {stage.id!r}: fan_out.over names undeclared list {stage.fan_out.inputs!r}")
         when = stage.when

@@ -707,7 +707,8 @@ _PIVOT_HALT_SPREAD_JS = f"...({_BLITZ_PIVOT_PULLED_JS} ? {{ {RESUME_LEDGER_PIVOT
 _LEDGER_REPLAN_PIVOT_CLAUSE = (
     "The halted run's review was PIVOT: replan from scratch against that review and the ledger. Delete from the "
     "spine every open, unlanded row the pivot supersedes, and add the rows the pivot calls for; never touch a "
-    "landed or coded row. Return the ids you deleted as retired_rows."
+    "landed or coded row. Return the ids you deleted as retired_rows and the open unlanded ids you keep as "
+    "kept_rows ([] when you keep none): the stage retires every open unlanded row named in neither."
 )
 _LEDGER_REPLAN_ADD_ONLY_CLAUSE = (
     "Do not edit, reopen or remove any existing row: the rows that landed stay landed."
@@ -1585,7 +1586,8 @@ _REPLAN_STAGED_SCHEMA = _obj(
     ["plan_rel", "added_rows"],
     {
         "plan_rel": _STR, "added_rows": {"type": "array", "items": _STR},
-        "retired_rows": {"type": "array", "items": _STR}, **_STAGE_REPLY_PROP,
+        "retired_rows": {"type": "array", "items": _STR}, "kept_rows": {"type": "array", "items": _STR},
+        **_STAGE_REPLY_PROP,
     },
 )
 #: The pre-sized gate agent's return: the gate reply plus the stage it runs as its closing act.
@@ -6851,9 +6853,9 @@ def compose_ask_script(
                         "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
                         " with only_rows set to the ids of exactly the rows you added",
                         f"js:({unlanded}.length ? ' together with these unlanded rows: ' + JSON.stringify({unlanded}) : '')",
-                        f"js:({rl}?.{RESUME_LEDGER_PIVOT_FIELD} === true ? ' (on this pivot resume, drop from that unlanded list "
-                        "every row you deleted and add the ids you deleted, which the stage reports retired; stage "
-                        "also when you only deleted rows)' : '')",
+                        f"js:({rl}?.{RESUME_LEDGER_PIVOT_FIELD} === true ? ' (on this pivot resume, add kept_rows to "
+                        "<params>, the open unlanded ids you keep, [] when you keep none: the stage retires every other "
+                        "open unlanded row and reports it retired; stage also when you added no row)' : '')",
                         ", and return its JSON reply "
                         "verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). When you added no row, "
                         f"stage nothing and return stage_reply null.{session_tail}",
@@ -6897,7 +6899,7 @@ def compose_ask_script(
             f"while (!_ledgerAdded.length && _unclaimedOwed && _try < {MAX_IN_RUN_REMEDY_ATTEMPTS}); "
             "const _ledgerRetired = _pivotResume && Array.isArray(_replanned?.retired_rows) "
             "? _replanned.retired_rows.filter((s) => typeof s === 'string' && s.trim()) : []; "
-            "if (_ledgerAdded.length || _ledgerRetired.length) { _ledgerExec = true; "
+            "if (_ledgerAdded.length || _ledgerRetired.length || (_pivotResume && _replanned?.stage_reply)) { _ledgerExec = true; "
             "await _adoptStageReply(_replanned?.stage_reply); } "
             "else { if (!_ledgerUnlanded.length) { _xsTail = true; } else if (_pivotResume) { _ledgerExec = true; } "
             "_stagedManifest = _gateStaged; _relayGap = _gateGap; _diskHalt = _gateDisk; "

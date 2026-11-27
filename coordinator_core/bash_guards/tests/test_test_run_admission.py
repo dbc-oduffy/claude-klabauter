@@ -108,8 +108,6 @@ def test_test_runner_absolute_path_and_dot_prefix_resolve_to_touched(repo, monke
 @pytest.mark.parametrize(
     "args",
     [
-        (UNTOUCHED,),
-        (TOUCHED, UNTOUCHED),
         ("coordinator_core/bash_guards/tests",),
         (),
         ("-k", "foo"),
@@ -127,15 +125,25 @@ def test_test_runner_outside_touched_scope_is_refused(repo, monkeypatch, args):
     assert v.leg == "scope"
 
 
+@pytest.mark.parametrize("args", [(UNTOUCHED,), (TOUCHED, UNTOUCHED)])
+def test_test_runner_untouched_target_is_allowed_with_an_advisory(repo, monkeypatch, capsys, args):
+    _touched(monkeypatch, [TOUCHED])
+    v = _verdict(repo, _payload(adm.TEST_RUNNER_TYPE), *args)
+    assert v.allowed
+    assert "not in this session's touched test files; scope leg allows" in capsys.readouterr().err
+
+
 def test_test_runner_n_zero_is_serial_and_allowed(repo, monkeypatch):
     _touched(monkeypatch, [TOUCHED])
     assert _verdict(repo, _payload(adm.TEST_RUNNER_TYPE), TOUCHED, "-n", "0").allowed
 
 
-def test_touched_non_test_file_does_not_admit_itself(repo, monkeypatch):
+def test_touched_non_test_file_is_not_a_touched_test_file(repo, monkeypatch, capsys):
     _touched(monkeypatch, ["coordinator_core/foo.py"])
     v = _verdict(repo, _payload(adm.TEST_RUNNER_TYPE), "coordinator_core/foo.py")
-    assert v.leg == "scope"
+    assert v.allowed
+    assert "not in this session's touched test files" in capsys.readouterr().err
+    assert _verdict(repo, _payload(adm.TEST_RUNNER_TYPE), "coordinator_core/foo.txt").leg == "scope"
 
 
 def test_unreadable_touch_record_allows_with_advisory(repo, monkeypatch, capsys):
@@ -231,7 +239,8 @@ def test_ceiling_only_after_identity_and_scope(repo, monkeypatch):
     _touched(monkeypatch, [TOUCHED])
     _low_ram(monkeypatch)
     assert _verdict(repo, _payload("coordinator:reviewer"), TOUCHED).leg == "identity"
-    assert _verdict(repo, _payload(adm.TEST_RUNNER_TYPE), UNTOUCHED).leg == "scope"
+    assert _verdict(repo, _payload(adm.TEST_RUNNER_TYPE)).leg == "scope"
+    assert _verdict(repo, _payload(adm.TEST_RUNNER_TYPE), UNTOUCHED).leg == "ceiling"
 
 
 # ------------------------------------------------------------------ spawns

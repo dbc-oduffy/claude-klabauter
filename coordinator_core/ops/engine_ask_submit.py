@@ -2,14 +2,15 @@
 caller with no Workflow tool (Codex).
 
 Wire params: `ask` xor `sizing`; `ask_source` ("pm" | "relayed", required with `ask`); `session_id`,
-`caller` (identity string) and absolute `cwd`, all required. A launcher-spawned headless EM may omit
-them: with `session_id` absent, `COORDINATOR_SESSION_ID` from the caller env is taken only when the
-headless-EM grant binds it (`COORDINATOR_ALLOW_HEADLESS_EM_TOKEN`), `caller` defaults to `<family>-em`
+`caller` (identity string) required; absolute `cwd` defaults to the op's repo root when omitted. A
+launcher-spawned headless EM may also omit `session_id` and `caller`: with `session_id` absent,
+`COORDINATOR_SESSION_ID` from the caller env is taken only when the headless-EM grant binds it (`COORDINATOR_ALLOW_HEADLESS_EM_TOKEN`), `caller` defaults to `<family>-em`
 from that grant and `cwd` to the op's repo root; a native Codex thread may supply its own registered EM identity when the launcher id is absent. Optional
 `repo`, `agent_id`, `notify_to`, the hook's optional args (`em_context`, `context`, `brief`, `brief_file`, `route_preference`,
 `em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and
 `fire` (bool, default true: hand the run to `workflow.fire` with `expected=<sha256>`; false mints without starting),
-`executor` (headless by default, or claude), and `backend` (codex by default; claude, grok or agy opt-in).
+`executor` (headless by default, or claude), and `backend` (codex, claude, grok or agy; omitted means the caller's own family, `grok` or `grok-em` runs
+grok, and a caller naming no family with no backend is refused as `bad-request`; an explicit backend wins).
 Completion defaults to the submitting session UUID; notify_to explicitly overrides it.
 An empty params object reads the object in `.coordinator-local/em-submit.json` under the repo; a missing file
 is created as an empty-ask scaffold and refused as `bad-request` naming that path, a non-object file likewise. Non-empty params are used as given.
@@ -46,6 +47,9 @@ def _with_bound_identity(params: dict, repo_root: Optional[Path]) -> dict:
     """Resolve an omitted identity from a bound launch grant or the registered native Codex EM."""
     sid = params.get("session_id")
     if isinstance(sid, str) and sid.strip():
+        if repo_root is not None and not (isinstance(params.get("cwd"), str) and params["cwd"].strip()):
+            root = Path(repo_root)
+            return dict(params, cwd=str(root.parent if root.name == ".git" else root))
         return params
     from coordinator_core.ops.workflow_fire.headless_em_grant import HEADLESS_EM_FAMILIES, headless_em_grant_matches
     from coordinator_core.session.caller_env import effective_caller_env
@@ -74,23 +78,56 @@ def _with_bound_identity(params: dict, repo_root: Optional[Path]) -> dict:
     return filled
 
 
+def _caller_family(caller: object) -> Optional[str]:
+    """The backend family named by `caller` (`grok` or `grok-em`); None when it names none."""
+    if not isinstance(caller, str):
+        return None
+    name = caller.strip().lower()
+    name = name[:-3] if name.endswith("-em") else name
+    return name if name in BACKENDS else None
+
+
+def _prepared_scaffold(worktree: Path) -> dict:
+    """The scaffold plus the caller's own `session_id` (and `caller`, `cwd`) when the invoking session resolves.
+
+    The id is the one `require_submission_em` compares against, so staging it grants nothing the caller
+    could not state itself; an unresolved session stages nothing and the gates refuse as before.
+    """
+    from coordinator_core.ops.workflow_fire.authority import caller_principal
+
+    try:
+        principal = caller_principal(str(worktree))
+    except Exception:
+        return dict(_SCAFFOLD)
+    if not principal.session_id:
+        return dict(_SCAFFOLD)
+    env = principal.env
+    family = env.get("COORDINATOR_AGENT_PROVIDER") or ("codex" if env.get("CODEX_THREAD_ID") else "")
+    prepared = {**_SCAFFOLD, "session_id": principal.session_id}
+    if family:
+        prepared["caller"] = f"{family}-em"
+    prepared["cwd"] = str(worktree)
+    return prepared
+
+
 def _canonical_params(repo_root: Path) -> dict:
     """Load `.coordinator-local/em-submit.json` under the main worktree; a refusal dict names the path.
 
     `repo_root` is the op's common-dir key (`<worktree>/.git`) when served through the CLI.
     """
-    path = (repo_root.parent if repo_root.name == ".git" else repo_root) / CANONICAL_PARAMS_PATH
+    worktree = repo_root.parent if repo_root.name == ".git" else repo_root
+    path = worktree / CANONICAL_PARAMS_PATH
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("x", encoding="utf-8") as fh:
-                json.dump(_SCAFFOLD, fh, indent=2)
+                json.dump(_prepared_scaffold(worktree), fh, indent=2)
         except OSError:
             pass
         return {"refused": "bad-request",
-                "reason": f"No ask staged: set `ask` to the PM's words verbatim in {CANONICAL_PARAMS_PATH}, then repeat this call."}
+                "reason": f"No ask staged: set `ask` to the PM's words verbatim in {CANONICAL_PARAMS_PATH} with a file-edit tool, then run this same command again."}
     except (OSError, ValueError) as exc:
         return {"refused": "bad-request",
                 "reason": f"No params given and {CANONICAL_PARAMS_PATH} is unreadable ({type(exc).__name__}); write the params object there."}
@@ -122,15 +159,20 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
     # aliases may not yet be exported by the installed transport on this box.
     target = params.get("notify_to", params.get("session_id"))
     executor = params.get("executor", "headless")
-    backend = params.get("backend", "codex")
-    if executor not in ("headless", "claude") or backend not in BACKENDS:
+    backend = params["backend"] if "backend" in params else _caller_family(params.get("caller"))
+    identified = isinstance(params.get("session_id"), str) and bool(params["session_id"].strip())
+    backend_pending = backend is None and "backend" not in params and not identified
+    if backend is None and "backend" not in params and identified:
+        return {"refused": "bad-request",
+                "reason": f"backend omitted and caller {params.get('caller')!r} names no family; pass backend ({'|'.join(BACKENDS)})."}
+    if executor not in ("headless", "claude") or (backend not in BACKENDS and not backend_pending):
         return {"refused": "bad-request", "reason": f"executor must be headless or claude; backend must be {'|'.join(BACKENDS)}."}
     if target is not None and (not isinstance(target, str) or not target.strip()):
         return {"refused": "bad-request", "reason": "notify_to must be a non-empty peer name."}
     if not isinstance(params.get("fire", True), bool):
         return {"refused": "bad-request", "reason": "fire must be a boolean (default true; false mints without starting)."}
     private_spec = None
-    if params.get("private_engine") is not None:
+    if params.get("private_engine") is not None and backend is not None:
         from coordinator_core.ops.workflow_fire.headless import validate_private_engine_config
 
         try:

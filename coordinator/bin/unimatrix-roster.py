@@ -422,6 +422,48 @@ def listed_row(d, rows=()) -> bool:
             and not codex_superseded(d, rows))
 
 
+def agy_leg_listening(d) -> bool | None:
+    """False when a local agy router face's leg record shows no live leg process, True when one holds
+    it, None when the registration cannot be read (no verdict)."""
+    if not isinstance(d, dict) or d.get("vendor") != "agy" or not d.get("unimatrixRouterPid"):
+        return None
+    if d.get(FAR_SOCKET_FIELD) or d.get("unimatrixMirror") or d.get("unimatrixRemote"):
+        return None
+    base = delivery_settings_home() / "unimatrix"
+    try:
+        peers = json.loads((base / "peers.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    peers = peers.get("peers") if isinstance(peers, dict) else peers
+    row = next((p for p in peers if isinstance(p, dict) and p.get("name") == d.get("name")), None) \
+        if isinstance(peers, list) else None
+    target = row.get("target") if row else None
+    if not isinstance(target, str) or not target or "/" in target or "\\" in target:
+        return None
+    try:
+        rec = json.loads((base / "agy-legs" / f"{target}.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return None
+    return entry_live(rec) if isinstance(rec, dict) else None
+
+
+def receive_state(d) -> tuple[bool, str | None]:
+    """(canReceive, receiveReason) for a listed row, from facts the poll already holds.
+
+    A false verdict is a mark, never a withdrawal: an inferred fact (no leg process on the record) must
+    not hide a row the harness may still reach. Withdrawal stays with the observed facts `listed_row`
+    and `sync` already act on (registry entry gone, dead holder, deaf bridge). A far box's own false
+    mark with a known reason passes through."""
+    reasons = _core_module("delivery_reason").REASONS
+    if isinstance(d, dict) and d.get("canReceive") is False and d.get("receiveReason") in reasons:
+        return False, d["receiveReason"]
+    if agy_leg_listening(d) is False:
+        return False, "no_leg_listening"
+    return True, None
+
+
 def far_seen_fields():
     return {FAR_SEEN_FIELD: int(time.time() * 1000)}
 
@@ -1564,6 +1606,9 @@ def session_identity(entry, box=None) -> dict:
     out = {"vendor": vendor, "box": str(origin), "cwd": entry.get("cwd") or ""}
     if entry.get("leg_mode") == "pending":
         out["leg_mode"] = "pending"
+    out["canReceive"], reason = receive_state(entry)
+    if reason:
+        out["receiveReason"] = reason
     holder = _liveness().codex_face_holder(entry) if box is None and vendor == "codex" else None
     if holder:
         out["codexHolder"] = holder

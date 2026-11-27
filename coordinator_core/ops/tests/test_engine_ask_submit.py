@@ -277,6 +277,42 @@ def test_fire_carries_an_opt_in_backend_family(params, seen, monkeypatch: pytest
     assert [c["backend"] for c in calls] == [backend]
 
 
+@pytest.mark.parametrize("caller,expected", [
+    ("grok", "grok"), ("grok-em", "grok"), ("agy", "agy"), ("agy-em", "agy"),
+    ("claude", "claude"), ("claude-em", "claude"), ("codex-em", "codex"),
+])
+def test_omitted_backend_follows_the_callers_family(params, seen, monkeypatch: pytest.MonkeyPatch, caller, expected) -> None:
+    calls = []
+    monkeypatch.setattr(
+        "coordinator_core.ops.workflow_fire.op._workflow_fire",
+        lambda p, repo_root=None: calls.append(p) or {"fire_id": "f1"},
+    )
+    assert "backend" not in params
+    _dispatch({**params, "caller": caller})
+    assert [c["backend"] for c in calls] == [expected]
+
+
+def test_explicit_backend_overrides_the_callers_family(params, seen, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        "coordinator_core.ops.workflow_fire.op._workflow_fire",
+        lambda p, repo_root=None: calls.append(p) or {"fire_id": "f1"},
+    )
+    _dispatch({**params, "caller": "grok-em", "backend": "claude"})
+    assert [c["backend"] for c in calls] == ["claude"]
+
+
+@pytest.mark.parametrize("caller", ["gemini-em", "operator", "", "codex-emx"])
+def test_unknown_caller_without_backend_is_refused_never_codex(params, seen, monkeypatch: pytest.MonkeyPatch, caller) -> None:
+    monkeypatch.setattr(
+        "coordinator_core.ops.workflow_fire.op._workflow_fire",
+        lambda p, repo_root=None: pytest.fail("fired without a resolvable backend"),
+    )
+    result = _dispatch({**params, "caller": caller})
+    assert result["refused"] == "bad-request" and "backend" in result["reason"]
+    assert seen == []
+
+
 @pytest.mark.parametrize("backend", ["gemini", "", None])
 def test_unknown_backend_is_refused_naming_the_set(params, seen, backend) -> None:
     result = _dispatch({**params, "backend": backend})
@@ -393,10 +429,36 @@ def test_missing_canonical_file_is_scaffolded_and_the_next_call_reads_it(params,
     canonical = tmp_path / ".coordinator-local" / "em-submit.json"
     first = op._engine_ask_submit({}, repo_root=tmp_path)
     assert first["refused"] == "bad-request" and "No ask staged" in first["reason"] and "unreadable" not in first["reason"]
-    assert json.loads(canonical.read_text(encoding="utf-8")) == {"ask": "", "ask_source": "pm"}
+    assert "same command again" in first["reason"]
+    assert json.loads(canonical.read_text(encoding="utf-8")) == {
+        "ask": "", "ask_source": "pm", "session_id": "sess-1", "cwd": str(tmp_path)}
     assert seen == []
     canonical.write_text(json.dumps({**params, "fire": False}), encoding="utf-8")
     assert op._engine_ask_submit({}, repo_root=tmp_path)["run_id"] == "run-abc123"
+
+
+def test_scaffold_stages_the_callers_session_and_a_staged_ask_submits_cold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seen) -> None:
+    from coordinator_core.ops.workflow_fire import authority
+
+    monkeypatch.setattr(authority, "caller_principal", lambda *a: authority.Principal("thread-9", "unknown", {"CODEX_THREAD_ID": "thread-9"}))
+    canonical = tmp_path / ".coordinator-local" / "em-submit.json"
+    op._engine_ask_submit({}, repo_root=tmp_path)
+    staged = json.loads(canonical.read_text(encoding="utf-8"))
+    assert staged["session_id"] == "thread-9" and staged["caller"] == "codex-em"
+    canonical.write_text(json.dumps({**staged, "ask": "build the thing", "fire": False}), encoding="utf-8")
+    got = []
+    monkeypatch.setattr(gates, "submit_ask", lambda **kw: got.append(kw) or {"refused": "no-run", "reason": "x"})
+    op._engine_ask_submit({}, repo_root=tmp_path)
+    assert (got[0]["session_id"], got[0]["caller"], got[0]["cwd"]) == ("thread-9", "codex-em", str(tmp_path))
+
+
+def test_scaffold_stages_no_session_when_the_caller_resolves_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.ops.workflow_fire import authority
+
+    monkeypatch.setattr(authority, "caller_principal", lambda *a: authority.Principal("", "unknown", {}))
+    op._engine_ask_submit({}, repo_root=tmp_path)
+    staged = json.loads((tmp_path / ".coordinator-local" / "em-submit.json").read_text(encoding="utf-8"))
+    assert staged == {"ask": "", "ask_source": "pm"}
 
 
 def test_existing_canonical_file_is_never_overwritten_by_the_scaffold(tmp_path: Path, seen) -> None:
@@ -449,8 +511,23 @@ def test_env_session_the_grant_binds_to_another_session_is_refused(tmp_path: Pat
 def test_explicit_session_id_is_never_replaced_by_the_env(tmp_path: Path, launcher_env, monkeypatch: pytest.MonkeyPatch) -> None:
     got = []
     monkeypatch.setattr(gates, "submit_ask", lambda **kw: got.append(kw) or {"refused": "no-run", "reason": "x"})
-    op._engine_ask_submit({**_no_args(tmp_path), "session_id": "sess-explicit", "caller": "me", "cwd": str(tmp_path)})
+    op._engine_ask_submit({**_no_args(tmp_path), "session_id": "sess-explicit", "caller": "me", "backend": "codex", "cwd": str(tmp_path)})
     assert (got[0]["session_id"], got[0]["caller"]) == ("sess-explicit", "me")
+
+
+def test_documented_payload_without_cwd_defaults_to_the_repo_root(tmp_path: Path, seen) -> None:
+    documented = {"ask": "build the thing", "ask_source": "pm", "session_id": "sess-1", "caller": "codex-em", "fire": False}
+    for root in (tmp_path, tmp_path / ".git"):
+        seen.clear()
+        result = op._engine_ask_submit(dict(documented), repo_root=root)
+        assert "refused" not in result, result
+        assert seen[0]["cwd"] == str(tmp_path)
+
+
+def test_a_missing_cwd_is_still_refused_when_the_op_has_no_repo_root(seen) -> None:
+    result = op._engine_ask_submit(
+        {"ask": "x", "ask_source": "pm", "session_id": "sess-1", "caller": "codex-em", "fire": False})
+    assert result["refused"] == "bad-request" and "cwd" in result["reason"] and seen == []
 
 
 @pytest.mark.parametrize("answer", [None, {}, {"run_id": "r1"}, {"script_path": "x"}])

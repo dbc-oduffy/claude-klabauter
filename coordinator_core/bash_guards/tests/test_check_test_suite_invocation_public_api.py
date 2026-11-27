@@ -744,9 +744,20 @@ def test_check_refuses_scoped_pytest_for_a_non_test_runner_subagent(
     repo, real_verdict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(guard, "_mutex_holder", lambda: None)
-    out = _enveloped(guard.check)(_payload(
+    payload = _payload(
         "pytest coordinator_core/frontmatter/tests/test_x.py", repo, agent_id="a0123456789abcdef"
-    ))
+    )
+    payload["agent_type"] = "coordinator:code-reviewer"
+    out = _enveloped(guard.check)(payload)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "only coordinator:test-runner runs pytest" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_check_refuses_unscoped_pytest_for_an_untyped_subagent(
+    repo, real_verdict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(guard, "_mutex_holder", lambda: None)
+    out = _enveloped(guard.check)(_payload("pytest -k schema_validate", repo, agent_id="a0123456789abcdef"))
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "only coordinator:test-runner runs pytest" in out["hookSpecificOutput"]["permissionDecisionReason"]
 

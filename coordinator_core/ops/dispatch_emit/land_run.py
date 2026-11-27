@@ -433,10 +433,7 @@ def _dispatch_halted_bounded(root: Path, repo_root: Path, params: dict) -> dict:
                 started = True
                 return _dispatch_mode("halted", root, repo_root, params)
             except IoIndeterminate as exc:
-                if (
-                    not warmed_again and started and Path(exc.path).name == "test-leg.json"
-                    and _head_after_stall(root) == head_before
-                ):
+                if not warmed_again and started and _head_after_stall(root) == head_before:
                     warmed_again = True
                     _await_read_drain(exc.path)
                 else:
@@ -444,7 +441,7 @@ def _dispatch_halted_bounded(root: Path, repo_root: Path, params: dict) -> dict:
         _warm_test_leg_checkin(root, params)
 
 
-#: Longest the one test-leg stall retry waits for the stalled worker to finish; a wedged read outlasts it and parks.
+#: Longest the one halt-read stall retry waits for the stalled worker to finish; a wedged read outlasts it and parks.
 LEG_STALL_DRAIN_SECS = 0.3
 
 
@@ -454,7 +451,7 @@ def _await_read_drain(path: str, *, clock=None, sleep=None) -> None:
     Trap: `bounded_io.run_bounded` answers a stalled key at once until its worker returns, so a retry
     started while a merely slow read is still running stalls again without reading.
     The wait is a 10ms sleep poll (no spawn, no CPU); it bounds the retry path at one read deadline plus
-    this dial plus one more bounded pass, and only the test-leg stall with HEAD unmoved takes it."""
+    this dial plus one more bounded pass, and only the first stall of a call with HEAD unmoved takes it."""
     import time
 
     from coordinator_core import bounded_io

@@ -5,7 +5,8 @@ guard_heavy_command_admission already takes (RAM floor, box hold).
 Legs run in order: identity (a subagent other than the test-runner or the executor is refused every pytest shape;
 a caller with no agent_type is admitted only inside the engine's `clean_overlay_verify --export-run --` wrapper),
 scope (the test-runner or executor names test files or node ids, no workers; an untouched target is an advisory), ceiling (every caller,
-the EM included, while the box is below its RAM floor or held by another session). A reading that
+the EM included, while the box is below its RAM floor or held by another session; the engine's export wrapper
+is never held by it). A reading that
 cannot be taken allows and logs an advisory (DR-402); the identity leg reads payload fields only and
 always runs.
 """
@@ -220,7 +221,7 @@ def over_admit_ceiling(payload: Mapping[str, Any]) -> Optional[str]:
 # --------------------------------------------------------------------------- verdict
 
 def _scope_verdict(payload: Mapping[str, Any], args: Sequence[str], cwd: str) -> TestRunVerdict:
-    from coordinator_core.bash_guards._heavy_command_class import _pytest_targets
+    from coordinator_core.bash_guards._heavy_command_class import _SCOPED_PYTEST_MAX_FILES, _pytest_targets
 
     if _has_workers(args):
         return _deny(LEG_SCOPE, "a subagent test run is serial: -n workers refused")
@@ -228,6 +229,9 @@ def _scope_verdict(payload: Mapping[str, Any], args: Sequence[str], cwd: str) ->
     if not targets:
         return _deny(LEG_SCOPE, "a subagent test run names touched test files or node ids: a bare run refused")
     files = [t.split("::", 1)[0] for t in targets]
+    distinct = len(set(files))
+    if distinct > _SCOPED_PYTEST_MAX_FILES:
+        return _deny(LEG_SCOPE, "a subagent test run names at most %d test files, not %d" % (_SCOPED_PYTEST_MAX_FILES, distinct))
     bad = [t for t, f in zip(targets, files) if not f.lower().endswith(".py")]
     if bad:
         return _deny(LEG_SCOPE, "a subagent test run names test files, not %s" % bad[0])
@@ -271,6 +275,8 @@ def test_run_verdict(
             verdict = _scope_verdict(payload, _pytest_arg_list(argv), cwd)
             if not verdict.allowed:
                 return verdict
+    if all(is_engine_export_run(a) for a in pytest_argvs):
+        return _ALLOW
     fact = over_admit_ceiling(payload)
     if fact is not None:
         return _deny(LEG_CEILING, fact, "retry once the box recovers or the hold clears")
