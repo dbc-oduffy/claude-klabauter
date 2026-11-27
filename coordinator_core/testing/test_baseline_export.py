@@ -184,7 +184,10 @@ def _break_clone(monkeypatch):
     def boom(*a, **k):
         raise be.ExportError("stream broke")
 
+    from coordinator_core.testing import baseline_cache as bc
+
     monkeypatch.setattr(be, "clone_tree", boom)
+    monkeypatch.setattr(bc, "_take_donor", lambda root, sha40, partial: False, raising=False)
 
 
 def test_clone_failure_exits_3_without_spawning_runner(repo, monkeypatch, capsys, tmp_path):
@@ -242,6 +245,32 @@ def test_unspawnable_runner_is_export_ok(repo, monkeypatch, capsys):
     assert _exports(repo) == []
 
 
+def test_unresolvable_interpreter_name_resolves_to_the_pinned_test_python(repo, monkeypatch, capsys):
+    from coordinator_core import pyresolve
+
+    monkeypatch.setattr(pyresolve, "pytest_python", lambda root: sys.executable)
+    code, res, _ = _run(repo, ["--sha", _base(repo), "--", "python9.99", "-c", "raise SystemExit(7)"],
+                        monkeypatch, capsys)
+    assert code == 0 and res["export"] == "ok" and res["runner_exit"] == 7 and res["why"] is None
+
+
+def test_runner_resolution_tries_cwd_relative_path_then_path_then_pin(tmp_path, monkeypatch):
+    exe = tmp_path / "bin" / "tool.exe"
+    exe.parent.mkdir()
+    exe.write_text("x")
+    other = tmp_path / "other"
+    other.mkdir()
+    assert be.resolve_runner(("bin/tool.exe", "a"), tmp_path, other, tmp_path) == (str(exe), "a")
+    assert be.resolve_runner(("bin/tool.exe",), other, other, tmp_path) == ("bin/tool.exe",)
+    monkeypatch.setattr(shutil, "which", lambda name, *a, **k: "/found/" + name)
+    assert be.resolve_runner(("tool",), tmp_path, tmp_path, tmp_path) == ("/found/tool",)
+
+
+def test_unresolvable_non_interpreter_runner_stays_reported_unspawned(tmp_path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+    assert be.resolve_runner(("no-such-tool-xyz", "1"), tmp_path, tmp_path, tmp_path) == ("no-such-tool-xyz", "1")
+
+
 def test_link_is_visible_to_runner_and_removed_as_a_link(repo, monkeypatch, capsys, tmp_path):
     nm = repo / "node_modules"
     (nm / "dep").mkdir(parents=True)
@@ -273,8 +302,11 @@ def test_remove_tree_does_not_follow_links(tmp_path):
     (root / "sub").mkdir(parents=True)
     (root / "sub" / "ro.txt").write_text("r")
     os.chmod(root / "sub" / "ro.txt", 0o444)
-    os.symlink(target, root / "sub" / "lnk", target_is_directory=True)
-    os.symlink(target / "keep.txt", root / "flnk")
+    try:
+        os.symlink(target, root / "sub" / "lnk", target_is_directory=True)
+        os.symlink(target / "keep.txt", root / "flnk")
+    except OSError as exc:
+        pytest.skip(f"symlink privilege not held: {exc}")
     assert be.remove(root) is True
     assert (target / "keep.txt").read_text() == "k"
 

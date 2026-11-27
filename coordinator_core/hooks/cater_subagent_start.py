@@ -188,6 +188,7 @@ from coordinator_core.session.machinery_paths import share_dir as _share_dir
 from coordinator_core.subagent_sandbox.engine import (
     _NAMED_TEAMMATE_RE,
     load_policy,
+    policy_unresolvable,
     resolve_effective_types,
     resolve_git_root,
 )
@@ -1028,14 +1029,10 @@ def _resolve_sidecar_leg(
     per dispatch (brightline: "add no second one") now that the
     contract-blocks leg needs `agent_type`/`subagent_type` too.
 
-    `policy_path=None` on both `load_policy` and `_provision` deliberately
-    reuses `load_policy`'s own existing 3-rung fallback (explicit path ->
-    `SUBAGENT_SANDBOX_POLICY` env var -> `CLAUDE_PLUGIN_ROOT`-relative
-    default) rather than re-deriving a policy-path resolver here -- unlike
-    the role-framing snippet, `load_policy` already has a working default
-    leg (see that function's own docstring), so a second bespoke resolver
-    would duplicate logic that already exists, exactly the shape this
-    module's own docstring says to avoid.
+    `policy_path=None` on both `load_policy` and `_provision` reuses
+    `load_policy`'s own fallback (env var, then `CLAUDE_PLUGIN_ROOT`, then the
+    plugin content-root rungs). A policy that resolves nowhere emits the miss
+    notice for every dispatch, since eligibility is unknowable.
     """
     if not agent_type and not subagent_type:
         # Nothing-resolved arm: no name leg exists to key a sentinel off
@@ -1067,11 +1064,13 @@ def _resolve_sidecar_leg(
         or (subagent_type and subagent_type in policy.report_sidecar)
     )
     if not sidecar_eligible:
-        return "", ""
-
-    sidecar_path = _provision(payload, None, cwd) or ""
-    if sidecar_path:
-        return sidecar_path, _compose_sidecar_offer_text(sidecar_path)
+        # An absent policy cannot say "ineligible"; only a policy that loaded may stay silent.
+        if not (policy.is_empty and policy_unresolvable()):
+            return "", ""
+    else:
+        sidecar_path = _provision(payload, None, cwd) or ""
+        if sidecar_path:
+            return sidecar_path, _compose_sidecar_offer_text(sidecar_path)
 
     # An eligible type whose `_provision` came back empty gets a sentinel for
     # every `agent_id` shape, named or not, as above.

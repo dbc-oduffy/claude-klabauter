@@ -16,6 +16,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -129,6 +130,30 @@ def counterpart_cwd(toplevel: PurePath | str, cwd: PurePath | str, root: PurePat
     except ValueError:
         return Path(root)
     return Path(root) / rel
+
+
+_INTERPRETER_NAME = re.compile(r"^pythonw?[\d.]*(\.exe)?$", re.IGNORECASE)
+
+
+def resolve_runner(runner: tuple[str, ...], cwd: PurePath | str, run_cwd: PurePath | str,
+                   toplevel: PurePath | str) -> tuple[str, ...]:
+    """`runner` with argv[0] resolved to an existing executable: as given, a relative path under the invoking
+    cwd or the export cwd, a PATH hit, else for an interpreter name the export leg's pinned test python.
+    An unresolvable argv[0] is returned unchanged for the spawn to report."""
+    head = runner[0]
+    if os.path.isfile(head) and os.path.isabs(head):
+        return runner
+    found: str | None = None
+    if os.sep in head or "/" in head:
+        found = next((str(p) for p in (Path(cwd) / head, Path(run_cwd) / head) if p.is_file()), None)
+    found = found or shutil.which(head)
+    if found is None and _INTERPRETER_NAME.fullmatch(Path(head).name):
+        from coordinator_core import pyresolve
+
+        with contextlib.suppress(Exception):
+            pinned = pyresolve.pytest_python(Path(toplevel))
+            found = pinned if os.path.isfile(pinned) else shutil.which(pinned)
+    return (found, *runner[1:]) if found else runner
 
 
 def render_result_line(sha: str, export: str, why: str | None, runner_exit: int | None, removed: bool) -> str:
@@ -659,11 +684,12 @@ def main(argv: list[str]) -> int:
             require_git_root(run_root)
             export_state = "ok"
             run_cwd = counterpart_cwd(toplevel, cwd, run_root)
+            runner = resolve_runner(inv.runner, cwd, run_cwd, toplevel)
             try:
                 with _signals_blocked(sigs):
-                    proc = group.spawn(inv.runner, run_cwd, run_root, shared=cached)
+                    proc = group.spawn(runner, run_cwd, run_root, shared=cached)
             except OSError as exc:
-                why = f"runner spawn failed: {inv.runner[0]}: {exc}"
+                why = f"runner spawn failed: {runner[0]}: {exc}"
             else:
                 runner_exit = proc.wait()
         except _SlotRefused as exc:

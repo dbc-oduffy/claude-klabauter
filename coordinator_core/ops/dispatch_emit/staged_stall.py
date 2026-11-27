@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,11 +83,34 @@ def _mtime(path: Path) -> Optional[float]:
         return None
 
 
+#: Parsed fire records keyed by path, valid while the file's (mtime_ns, size) is unchanged: a repeat
+#: listing re-reads only a record that moved. A file stamped within `_FIRE_RACY_NS` of the read is not kept.
+_FIRE_RECORD_CACHE_MAX = 256
+_FIRE_RACY_NS = 2_000_000_000
+_FIRE_RECORD_CACHE: dict = {}
+
+
+def _fire_record(rec_path: str, sig: tuple) -> Optional[dict]:
+    """The fire record at `rec_path`, parsed once per stat change; None when unreadable or not an object."""
+    held = _FIRE_RECORD_CACHE.get(rec_path)
+    if held is not None and held[0] == sig:
+        return held[1]
+    try:
+        record = json.loads(Path(rec_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    if time.time_ns() - sig[0] > _FIRE_RACY_NS:
+        if len(_FIRE_RECORD_CACHE) >= _FIRE_RECORD_CACHE_MAX:
+            _FIRE_RECORD_CACHE.pop(next(iter(_FIRE_RECORD_CACHE)))
+        _FIRE_RECORD_CACHE[rec_path] = (sig, record)
+    return record
+
+
 def fire_records_for_run(repo_root: Path, run_id: str) -> list:
     """`(record_path, record)` for each of the newest `MAX_FIRE_RECORDS` fire records naming `run_id`,
-    newest first. One listing plus small record reads; `[]` on any failure."""
-    import json
-
+    newest first. One listing plus a record read only for a record that changed; `[]` on any failure."""
     from coordinator_core.session_hub_path import hub_for_common
 
     found: list = []
@@ -96,14 +120,12 @@ def fire_records_for_run(repo_root: Path, run_id: str) -> list:
         with os.scandir(registry) as it:
             for entry in it:
                 if entry.name.endswith(".json") and entry.is_file():
-                    records.append((entry.stat().st_mtime, entry.path))
+                    stat = entry.stat()
+                    records.append((stat.st_mtime, entry.path, (stat.st_mtime_ns, stat.st_size)))
         records.sort(reverse=True)
-        for _, rec_path in records[:MAX_FIRE_RECORDS]:
-            try:
-                record = json.loads(Path(rec_path).read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if isinstance(record, dict) and record.get("run_id") == run_id:
+        for _, rec_path, sig in records[:MAX_FIRE_RECORDS]:
+            record = _fire_record(rec_path, sig)
+            if record is not None and record.get("run_id") == run_id:
                 found.append((Path(rec_path), record))
     except OSError:
         return []
@@ -141,9 +163,21 @@ def fire_progress_epoch(repo_root: Path, run_id: str) -> Optional[float]:
         return None
 
 
-def agent_in_flight(session_id: Optional[str], cutoff: float) -> bool:
+_RUN_ID_RE = re.compile(r"(?:warp|ask)-[A-Za-z0-9._-]*?\d{8}T\d{6}-[0-9a-f]{6}")
+
+
+def _names_other_run(journal_text: str, run_id: str) -> bool:
+    """True when the journal names run ids and none is `run_id`: another run's workflow. A journal that
+    names no run id stays attributable to every run of its session."""
+    return run_id not in journal_text and _RUN_ID_RE.search(journal_text) is not None
+
+
+def agent_in_flight(session_id: Optional[str], cutoff: float, run_id: Optional[str] = None) -> bool:
     """True when the session's workflow dirs show progress at or after `cutoff`: a journal written then,
-    or an unsettled agent whose transcript was. Such a run is `workflow_watch.stall`'s case."""
+    or an unsettled agent whose transcript was. Such a run is `workflow_watch.stall`'s case.
+
+    Invariant: a session drives many runs, so with `run_id` a journal that names only other runs is not
+    this run's progress; without it every journal of the session counts."""
     if not session_id:
         return False
     from coordinator_core.usage import run_locate
@@ -161,10 +195,13 @@ def agent_in_flight(session_id: Optional[str], cutoff: float) -> bool:
     stamped = [(m, wf) for m, wf in stamped if m is not None]
     stamped.sort(key=lambda pair: pair[0], reverse=True)
     for journal_mtime, wf in stamped[:MAX_JOURNALS_PER_RUN]:
+        journal = str(wf / "journal.jsonl")
+        text = stall._tail_text(journal, stall.JOURNAL_TAIL_BYTES)
+        if run_id and _names_other_run(text, run_id):
+            continue
         if journal_mtime >= cutoff:
             return True
-        journal = str(wf / "journal.jsonl")
-        for agent_id, _label in stall._unsettled(stall._tail_text(journal, stall.JOURNAL_TAIL_BYTES)):
+        for agent_id, _label in stall._unsettled(text):
             path = stall._transcript_path(str(wf), agent_id)
             progress = stall._mtime(path) if path else None
             if progress is not None and progress >= cutoff:
@@ -276,7 +313,7 @@ def scan(
         fire_seen = fire_progress_epoch(repo_root, run_id)
         if fire_seen is not None and fire_seen >= cutoff:
             continue
-        probe = in_flight or agent_in_flight
+        probe = in_flight or (lambda sid, at, _run=run_id: agent_in_flight(sid, at, run_id=_run))
         sessions = dict.fromkeys([*_candidate_sessions(repo_root, run_id, session_id), *_recorded_sessions(stage)])
         if any(probe(sid, cutoff) for sid in sessions):
             continue
@@ -313,7 +350,8 @@ def halt_stalled(
     for stalled in scan(repo_root, now, in_flight=in_flight):
         reason = (
             f"staged run idle {int(stalled.idle_seconds)}s (bound {STAGED_STALL_BOUND_SECS}s): "
-            "no run-dir write, fire journal or agent progress since; confirm the fire is not live before resuming or re-firing"
+            "worker gone or stalled: no run-dir write, fire journal or run-attributed agent progress since; "
+            "confirm the fire is not live before resuming or re-firing"
         )
         try:
             halted_run.write_halt_marker(
@@ -329,6 +367,17 @@ def halt_stalled(
         if stalled.session_id:
             (notify or _notify)(stalled.session_id, f"run {stalled.run_id} halted: {reason}")
     return halted
+
+
+def _stall_open(rdir: Path) -> bool:
+    """True when the run's marker is a `halted` / `staged_stall` one: the only state `clear_recovered`
+    can clear, so a run in any other state never costs a fire-registry read."""
+    marker = halted_run._read(rdir)
+    return (
+        isinstance(marker, dict)
+        and marker.get("status") == halted_run.STATUS_HALTED
+        and marker.get("halted") == HALT_STAGED_STALL
+    )
 
 
 def clear_recovered(
@@ -351,7 +400,7 @@ def clear_recovered(
         except ValueError:
             continue
         marker_at = _mtime(rdir / halted_run.HALTED_FILE)
-        if marker_at is None:
+        if marker_at is None or not _stall_open(rdir):
             continue
         seen = fire_progress_epoch(repo_root, run_id)
         if seen is None or seen <= marker_at:

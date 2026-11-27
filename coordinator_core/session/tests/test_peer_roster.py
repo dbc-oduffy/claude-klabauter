@@ -25,6 +25,56 @@ def _record(
     )
 
 
+_REAL_PROCESS_ALIVE = peer_roster._process_alive
+
+
+@pytest.fixture(autouse=True)
+def _all_pids_alive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(peer_roster, "_process_alive", lambda pid, start_epoch: True)
+
+
+class TestLiveProcessFilter:
+    def test_dead_pid_row_is_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        snap = {
+            "sid-live": _record("live-1", "/sock/a.sock", cwd="/repo", pid=111),
+            "sid-dead": _record("dead-1", "/sock/b.sock", cwd="/repo", pid=222),
+        }
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+        monkeypatch.setattr(peer_roster, "_process_alive", lambda pid, start_epoch: pid == 111)
+
+        assert {r.session_id for r in peer_roster.build_roster("/repo")} == {"sid-live"}
+        assert {r.session_id for r in peer_roster.build_roster(box_wide=True)} == {"sid-live"}
+
+    def test_external_record_for_live_pid_survives_real_helper(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import os
+        import psutil
+
+        born = psutil.Process(os.getpid()).create_time()
+        snap = {
+            "codex:live": hr.ExternalRegistryRecord(
+                pid=os.getpid(), start_epoch=float(int(born)), cwd="/repo", name="cx"
+            ),
+            "codex:dead": hr.ExternalRegistryRecord(
+                pid=2**22 + 12345, start_epoch=float(int(born)), cwd="/repo", name="ghost"
+            ),
+        }
+        monkeypatch.setattr(peer_roster, "_process_alive", _REAL_PROCESS_ALIVE)
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        assert {r.session_id for r in peer_roster.build_roster("/repo")} == {"codex:live"}
+
+    def test_real_process_helper_separates_live_from_dead(self) -> None:
+        import os
+        import psutil
+
+        born = psutil.Process(os.getpid()).create_time()
+        assert _REAL_PROCESS_ALIVE(os.getpid(), born) is True
+        assert _REAL_PROCESS_ALIVE(os.getpid(), born - 3600) is False
+        assert _REAL_PROCESS_ALIVE(2**22 + 12345, born) is False
+
+
 class TestCwdFiltering:
     def test_default_filters_to_current_repo_via_getcwd(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {

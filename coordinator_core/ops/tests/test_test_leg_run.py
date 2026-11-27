@@ -148,6 +148,15 @@ def test_red_scope_spawns_two_pytests_and_one_measure(repo, tmp_path, monkeypatc
     assert len(measured) == 1 and measured[0][:3] == ("b" * 40, None, [FAIL_ID])
     assert measured[0][3] is not None and measured[0][3] <= tlr.TEST_LEG_MINUTES_BUDGET * 60
     assert data["pre_existing"] == [FAIL_ID]
+    assert "unverified_at_base" not in data
+
+
+def test_a_base_whose_runner_never_started_names_the_reds_unverified_not_pre_existing(repo, tmp_path, monkeypatch):
+    monkeypatch.setattr(tlr.reverify_base_measure, "measure", lambda *a, **k: {
+        "red": [], "export": "ok", "runner_exit": None, "passed_at_base": []})
+    _code, data = _main(["--base-sha", "b" * 40, "--", "tests/test_a.py"], tmp_path / "o.json")
+    assert data["unverified_at_base"] == [FAIL_ID]
+    assert data["pre_existing"] == [] and data["passed_at_base"] == []
 
 
 def test_head_sha_is_passed_through_to_the_measure(repo, tmp_path, monkeypatch):
@@ -938,6 +947,59 @@ def test_a_review_scope_module_a_peer_run_declared_stays_out_of_the_mirror(dirty
     _freeze_review_scope(dirty_repo, monkeypatch, ["pkg/newmod.py", "tests/test_new.py"], ["pkg/newmod.py"])
     data = _run_with_untracked_source(dirty_repo, tmp_path, declared=False, run_id="run-mine")
     assert data["own_tree"]["overlaid"] == ["tests/test_new.py"]
+    assert data["tests_run"] == 0
+
+
+def _tracked_source_with_new_symbol(repo: Path) -> None:
+    """A committed test importing `NEWSYM`, which only the worktree version of tracked `pkg/mod.py` defines."""
+    (repo / "tests" / "test_mod.py").write_text(
+        "from pkg.mod import NEWSYM\n\ndef test_newsym():\n    assert NEWSYM == 5\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "importer")
+    (repo / "pkg" / "mod.py").write_text("VALUE = 1\nNEWSYM = 5\n", encoding="utf-8")
+
+
+@pytest.mark.spawns_process
+def test_a_run_record_touched_tracked_source_whose_blob_moved_is_overlaid_so_its_symbol_imports(dirty_repo, tmp_path):
+    from coordinator_core.ops.dispatch_emit import stranded_sibling
+
+    _tracked_source_with_new_symbol(dirty_repo)
+    stranded_sibling.write(dirty_repo / "state" / "warp" / "run-mine", {"pkg/mod.py": {"base": "a" * 40, "run": "b" * 40}})
+    _code, data = _main(["--run-id", "run-mine", "--", "tests/test_mod.py"], tmp_path / "o.json")
+    assert "pkg/mod.py" in data["own_tree"]["overlaid"]
+    assert (data["status_after"], data["tests_run"]) == ("pass", 1)
+
+
+@pytest.mark.spawns_process
+def test_a_withheld_tracked_source_in_the_halt_index_is_overlaid_for_its_run(dirty_repo, tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+    _tracked_source_with_new_symbol(dirty_repo)
+    halted_withheld_index.add_run(dirty_repo, "run-mine", ["pkg/mod.py"])
+    _code, data = _main(["--run-id", "run-mine", "--", "tests/test_mod.py"], tmp_path / "o.json")
+    assert "pkg/mod.py" in data["own_tree"]["overlaid"]
+    assert (data["status_after"], data["tests_run"]) == ("pass", 1)
+
+
+@pytest.mark.spawns_process
+def test_another_runs_recorded_tracked_source_stays_at_head_and_so_does_an_unrecorded_one(dirty_repo, tmp_path):
+    from coordinator_core.ops.dispatch_emit import stranded_sibling
+
+    _tracked_source_with_new_symbol(dirty_repo)
+    stranded_sibling.write(dirty_repo / "state" / "warp" / "run-peer", {"pkg/mod.py": {"base": "a" * 40, "run": "b" * 40}})
+    _code, data = _main(["--run-id", "run-mine", "--", "tests/test_mod.py"], tmp_path / "o.json")
+    assert "pkg/mod.py" not in data["own_tree"]["overlaid"]
+    assert data["tests_run"] == 0
+
+
+@pytest.mark.spawns_process
+def test_a_recorded_source_whose_run_blob_equals_its_base_is_not_overlaid(dirty_repo, tmp_path):
+    from coordinator_core.ops.dispatch_emit import stranded_sibling
+
+    _tracked_source_with_new_symbol(dirty_repo)
+    stranded_sibling.write(dirty_repo / "state" / "warp" / "run-mine", {"pkg/mod.py": {"base": "a" * 40, "run": "a" * 40}})
+    _code, data = _main(["--run-id", "run-mine", "--", "tests/test_mod.py"], tmp_path / "o.json")
+    assert "pkg/mod.py" not in data["own_tree"]["overlaid"]
     assert data["tests_run"] == 0
 
 

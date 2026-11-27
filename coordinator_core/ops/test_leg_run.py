@@ -35,7 +35,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Collection, Optional, Sequence
 
 from coordinator_core.ops import reverify_base_measure, reverify_scope
 from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
@@ -188,7 +188,7 @@ def _pytest(targets: list[str], cwd: str, remaining: float) -> tuple[int, list[s
         raise subprocess.TimeoutExpired("pytest", 0)
     env = pyresolve.with_engine_root(dict(os.environ, PYTHONIOENCODING=_PYTEST_ENCODING))
     if cwd in _MIRRORS:
-        env = cov._mirror_env(env, Path(cwd))
+        env = _mirror_env(env, Path(cwd))
     py = _RAN_PY[0] if _RAN_PY else _python(_LEG_ROOT[0] if _LEG_ROOT else Path(cwd))
     _RAN_PY[:] = [py]
     with tempfile.TemporaryDirectory(prefix="test-leg-ids-") as holder:
@@ -496,6 +496,14 @@ def _tally(result: dict, rc: Optional[int], lines: Sequence[str], stderr: Option
         ]
 
 
+def _mirror_env(env: dict, dest: Path) -> dict:
+    """`cov._mirror_env`, keeping the resolved engine root when the mirror carries no `coordinator_core` (a foreign repo)."""
+    out = cov._mirror_env(env, dest)
+    if not (dest / "coordinator_core").is_dir():
+        out[pyresolve.ENGINE_ROOT_ENV] = env[pyresolve.ENGINE_ROOT_ENV]
+    return out
+
+
 def _argv(root: Path, dest: Path, basetemp: Path, targets: Sequence[str]) -> list:
     """The clone leg's pytest argv with `targets` moved to `basetemp.parent/ids.txt` (the per-run holder, removed
     with the run): `_IDS_RUNNER` takes the flags `cov._pytest_argv` built and reads the ids from that file."""
@@ -586,7 +594,7 @@ def _clone_leg(targets: list[str], touched: list[str], base_sha: Optional[str], 
             return out
         try:
             run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, f"test-leg-{os.getpid()}")
-            env = cov._mirror_env(pyresolve.with_engine_root(scoped_pytest.tmp_env(os.environ, tmp)), dest)
+            env = _mirror_env(pyresolve.with_engine_root(scoped_pytest.tmp_env(os.environ, tmp)), dest)
             if left() <= 0:
                 raise subprocess.TimeoutExpired("pytest", 0)
             ran, overrun = _run_phased(root, dest, basetemp, picked, importers, env, left)
@@ -689,6 +697,9 @@ def _settle(result: dict, reds: list[str], cwd: str, base_sha: Optional[str], he
         raise subprocess.TimeoutExpired("baseline_export", 0)
     result["pre_existing"].extend(measured["red"])
     result["passed_at_base"].extend(measured["passed_at_base"])
+    if measured["export"] != "ok" or measured["runner_exit"] not in (0, 1, 4):
+        unverified = result.setdefault("unverified_at_base", [])
+        unverified.extend(n for n in reds if n not in unverified)
     if base_export_out:
         exported.update(export=measured["export"], runner_exit=measured["runner_exit"],
                         red=[*exported.get("red", []), *measured["red"]],
@@ -696,11 +707,29 @@ def _settle(result: dict, reds: list[str], cwd: str, base_sha: Optional[str], he
         reverify_base_measure.write_export(exported, Path(base_export_out))
 
 
-def _name_foreign_dependency(result: dict, root: Path) -> None:
+def _own_whole_paths(root: Path, run_id: Optional[str]) -> frozenset[str]:
+    """The run's recorded write set minus every path a live peer run also declared: the paths the mirror carries
+    at the run's whole worktree bytes, so no foreign hunk of theirs is withheld from it. A path a peer shares
+    is excluded (its foreign hunks stay out of the mirror). Spawn-free; empty with no `run_id` or an unreadable record."""
+    if not run_id:
+        return frozenset()
+    try:
+        from coordinator_core.ops.dispatch_emit import review_edits
+
+        sibling = {review_edits.norm(p) for p in review_edits.live_sibling_declared(root, run_id)}
+        return frozenset(p for p in map(review_edits.norm, cov._own_write_set(root, run_id)) if p not in sibling)
+    except Exception as exc:  # noqa: BLE001 -- an unknown own set attributes as before
+        print(f"own-whole-paths unreadable: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return frozenset()
+
+
+def _name_foreign_dependency(result: dict, root: Path, own: "Collection[str] | Callable[[], Collection[str]]" = ()) -> None:
     """A zero-run whose ImportError names a symbol defined only in a dirty (uncommitted) worktree file is a
     peer's uncommitted code under this run's committed hunk, not a test failure: restamps the
     `uncommitted-foreign-dependency` cause with `import_error.{symbol,module,source_path}`. Any other
-    zero-run keeps its cause. Advisory: a git or read failure leaves the verdict as tallied."""
+    zero-run keeps its cause. `own` are the run's own whole-overlaid paths (`_own_whole_paths`): a file the
+    mirror carries at the run's bytes is never the foreign source. An untracked module file at the imported
+    module's path counts as dirty (one index read). Advisory: a git or read failure leaves the verdict as tallied."""
     missing = result.pop(_MISSING_KEY, None)
     if not missing or result.get("tests_run"):
         return
@@ -711,7 +740,14 @@ def _name_foreign_dependency(result: dict, root: Path) -> None:
                              capture_output=True, text=True, timeout=10,
                              **no_console_creationflags()).stdout
         mod = module.replace(".", "/")
-        dirty = sorted((p for p in out.splitlines() if p.endswith(".py")),
+        found = [p for p in out.splitlines() if p.endswith(".py")]
+        from coordinator_core.ops.dispatch_emit import test_reach
+
+        tracked = test_reach._tracked(root)
+        found += [p for p in (mod + ".py", mod + "/__init__.py")
+                  if p not in found and p not in tracked and (root / p).is_file()]
+        skip = {p.replace("\\", "/") for p in (own() if callable(own) else own)}
+        dirty = sorted((p for p in found if p.replace("\\", "/") not in skip),
                        key=lambda p: not (p == mod + ".py" or p == mod + "/__init__.py"))
         source = next((p for p in dirty[:50] if defn.search((root / p).read_text(encoding="utf-8", errors="replace"))), None)
     except (subprocess.SubprocessError, OSError):
@@ -859,7 +895,7 @@ def _overlay_fallback(result: dict, targets: Sequence[str], base_sha: Optional[s
             if not present:
                 return
             run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, f"test-leg-{os.getpid()}")
-            env = cov._mirror_env(pyresolve.with_engine_root(scoped_pytest.tmp_env(os.environ, tmp)), dest)
+            env = _mirror_env(pyresolve.with_engine_root(scoped_pytest.tmp_env(os.environ, tmp)), dest)
             ran = cov._tier_empty_as_green(cov._run_pytest_retrying(_argv(root, dest, basetemp, present), dest, env))
     except (cov.ExportError, subprocess.SubprocessError, OSError) as exc:
         result["overlay_rerun_skipped"] = f"{type(exc).__name__}: {exc}"[:300]
@@ -933,7 +969,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
                 result["new_red"] = []
                 _tally(result, 2, ())
             result["over_budget"] = False
-            _name_foreign_dependency(result, Path(cwd))
+            _name_foreign_dependency(result, Path(cwd), lambda: _own_whole_paths(Path(cwd), decl))
             _own_import_error(result, Path(cwd))
             result["elapsed_s"] = round(time.monotonic() - started, 3)
             result["budget_s"] = budget_s
@@ -1047,7 +1083,7 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
     if "own_tree" in result and not _imports_from_overlaid_target(result, targets):
         result.pop(_MISSING_KEY, None)
     else:
-        _name_foreign_dependency(result, Path(cwd))
+        _name_foreign_dependency(result, Path(cwd), lambda: _own_whole_paths(Path(cwd), decl))
     _own_import_error(result, Path(cwd))
     result["elapsed_s"] = round(time.monotonic() - started, 3)
     result["budget_s"] = budget_s
@@ -1211,6 +1247,9 @@ def main(argv: list[str]) -> int:
     if derived:
         result["derived_targets"] = targets
     _flag_fixture_edits(result, prior, root, _run_id(args) or _declared_run(args), measured_at)
+    mirror = result.get("own_tree")
+    mirror_at = mirror.get("at") if isinstance(mirror, dict) else None
+    result.update(test_leg_freshness.stamp({}, measured_at=measured_at, head_sha=mirror_at or head_at_start))
     body = json.dumps(result)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1227,6 +1266,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
-    mirror = result.get("own_tree")
-    mirror_at = mirror.get("at") if isinstance(mirror, dict) else None
-    result.update(test_leg_freshness.stamp({}, measured_at=measured_at, head_sha=mirror_at or head_at_start))

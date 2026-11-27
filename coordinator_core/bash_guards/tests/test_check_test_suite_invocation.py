@@ -341,11 +341,86 @@ def _touch_record(monkeypatch, *paths):
 
 
 @pytest.mark.parametrize("command", _PYTEST_SHAPES)
-@pytest.mark.parametrize("extra", [{"agent_type": "coordinator:code-reviewer"}, {}])
-def test_subagent_pytest_refused_even_when_scoped(repo, free_mutex, real_verdict, command, extra):
-    """Any subagent but the test-runner and the executor is refused pytest, a Workflow agent (no agent_type) included."""
-    result = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID, extra=extra))
+def test_other_typed_subagent_pytest_refused_even_when_scoped(repo, free_mutex, real_verdict, command):
+    result = _enveloped(guard.check)(
+        _payload(command, repo, agent_id=_AGENT_ID, extra={"agent_type": "coordinator:code-reviewer"}))
     assert "only coordinator:test-runner runs pytest" in _reason(result)
+
+
+@pytest.mark.parametrize("command", [c for c in _PYTEST_SHAPES if "-k schema_validate" in c])
+def test_untyped_subagent_unscoped_pytest_refused(repo, free_mutex, real_verdict, command):
+    result = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID))
+    assert "only coordinator:test-runner runs pytest" in _reason(result)
+
+
+@pytest.mark.parametrize("command", [c for c in _PYTEST_SHAPES if "-k schema_validate" not in c])
+def test_untyped_subagent_named_test_files_admitted(repo, free_mutex, real_verdict, monkeypatch, command):
+    """A workflow-phase executor carries no agent_type; its run of named test files is a scoped run."""
+    (repo / ".git").mkdir()
+    _touch_record(monkeypatch, _TOUCHED_TEST)
+    _assert_allowed(_enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID)))
+
+
+_R1_FILES = [
+    "tests/install/test_gpu_sidecar_trellis_clone.py",
+    "tests/gpu_sidecar/test_asset_paths.py",
+    "tests/gpu_sidecar/test_c6_download_disk_gate.py",
+    "tests/weights/test_r2_integrity.py",
+    "tests/install/test_provision_hrn_env.py",
+    "tests/install/test_provision_pixel3dmm.py",
+    "tests/install/test_gnm_head_pin.py",
+    "tests/install/test_doctor_probes_hrn_env.py",
+    "tests/install/test_gpu_sidecar_resolve_python.py",
+]
+_PY = sys.executable.replace("\\", "/")
+_EXPORT_RUN = "%s -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --export-run --" % _PY
+
+
+@pytest.fixture
+def tests_at_root_repo(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n', encoding="utf-8")
+    for rel in _R1_FILES:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("def test_x():\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: str(tmp_path))
+    monkeypatch.delenv(guard._OVERRIDE_ENV_VAR, raising=False)
+    monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (True, None))
+    return tmp_path
+
+
+@pytest.mark.parametrize("extra", [{}, {"agent_type": "coordinator:executor"}, {"agent_type": _TEST_RUNNER}])
+def test_export_run_of_the_nine_r1_files_is_admitted_in_a_tests_at_root_layout(
+    tests_at_root_repo, free_mutex, real_verdict, monkeypatch, extra
+):
+    _touch_record(monkeypatch)
+    command = "%s %s -m pytest %s" % (_EXPORT_RUN, _PY, " ".join(_R1_FILES))
+    out = _enveloped(guard.check)(_payload(command, tests_at_root_repo, agent_id=_AGENT_ID, extra=extra))
+    assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny"
+
+
+@pytest.mark.parametrize("extra", [{}, {"agent_type": "coordinator:executor"}])
+def test_executor_own_scoped_run_of_the_r1_files_is_admitted(
+    tests_at_root_repo, free_mutex, real_verdict, monkeypatch, extra
+):
+    _touch_record(monkeypatch, *_R1_FILES)
+    command = "%s -m pytest %s" % (_PY, " ".join(_R1_FILES))
+    _assert_allowed(_enveloped(guard.check)(_payload(command, tests_at_root_repo, agent_id=_AGENT_ID, extra=extra)))
+
+
+@pytest.mark.parametrize("command", [
+    "%s -m pytest tests/" % _PY,
+    "%s -m pytest tests/install" % _PY,
+    "%s -m pytest" % _PY,
+    "%s -m pytest -n 2 %s" % (_PY, _R1_FILES[0]),
+])
+def test_untyped_subagent_broad_or_worker_run_still_refused(
+    tests_at_root_repo, free_mutex, real_verdict, monkeypatch, command
+):
+    _touch_record(monkeypatch, *_R1_FILES)
+    out = _enveloped(guard.check)(_payload(command, tests_at_root_repo, agent_id=_AGENT_ID))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 @pytest.mark.parametrize("command", [

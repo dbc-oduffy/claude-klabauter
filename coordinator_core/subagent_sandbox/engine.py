@@ -135,13 +135,11 @@ def _empty_policy() -> Policy:
 
 
 def _resolve_default_policy_path() -> Optional[Path]:
-    """Best-effort ``_cc_root``-style default fallback (the Staff Engineer F3).
+    """Locate the policy file: ``CLAUDE_PLUGIN_ROOT``, then the plugin content-root rungs.
 
-    No genuine ``_cc_root`` resolver chain exists in ``coordinator_core`` —
-    this only checks ``CLAUDE_PLUGIN_ROOT`` (the same env var the reference
-    bash hook falls back to) for a co-located policy file. Any failure to
-    resolve is silently absorbed by the caller (``load_policy`` returns an
-    empty, fail-open ``Policy``) — this function never raises.
+    The content-root rungs are ``plugin_root.resolve_plugin_root``'s (config-dir plugin
+    clone, install registry, content-root pointer). A miss returns ``None`` and the
+    caller (``load_policy``) yields an empty, fail-open ``Policy``; never raises.
     """
     for env_var in _DEFAULT_POLICY_ENV_CANDIDATES:
         root = os.environ.get(env_var)
@@ -150,7 +148,22 @@ def _resolve_default_policy_path() -> Optional[Path]:
         candidate = Path(root) / _DEFAULT_POLICY_RELATIVE
         if candidate.is_file():
             return candidate
+    try:
+        from coordinator_core.subagent_sandbox.plugin_root import resolve_plugin_root
+
+        content_root = resolve_plugin_root()
+    except Exception:
+        return None
+    if content_root:
+        candidate = Path(content_root) / _DEFAULT_POLICY_RELATIVE
+        if candidate.is_file():
+            return candidate
     return None
+
+
+def policy_unresolvable() -> bool:
+    """True when no env var and no content-root rung names a policy file."""
+    return not os.environ.get(POLICY_ENV_VAR) and _resolve_default_policy_path() is None
 
 
 def load_policy(policy_path: Optional[str] = None) -> Policy:

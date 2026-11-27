@@ -162,6 +162,13 @@ def _worker_rows(
     return rows
 
 
+def _process_alive(pid: int, start_epoch: float) -> bool:
+    """True iff `pid` is a live process born at `start_epoch`; in-process, no spawn."""
+    from coordinator_core.session import core
+
+    return core.stable_pid_alive(pid, "", str(int(round(start_epoch))))
+
+
 def _normalize_path(path: str) -> str:
     return os.path.normcase(os.path.normpath(os.path.realpath(path)))
 
@@ -181,7 +188,10 @@ def build_roster(
     raise_on_empty_snapshot: bool = False,
     box_wide: bool = False,
 ) -> List[PeerRow]:
-    """Return every live session whose `cwd` is within `repo_root`.
+    """Return every session whose process is alive and whose `cwd` is within `repo_root`.
+
+    A registry record whose pid is dead (or recycled, by birth instant) is dropped via
+    `core.stable_pid_alive`, so the far snapshot published from this roster inherits the filter.
 
     `repo_root` defaults to `os.getcwd()` (the CALLING process's own
     directory) when omitted — never an unfiltered dump of the whole
@@ -357,6 +367,8 @@ def build_roster(
     rows: List[PeerRow] = []
     for sid, record in snapshot.items():
         if not box_wide and not _cwd_within_repo(record.cwd, effective_root):
+            continue
+        if not _process_alive(record.pid, record.start_epoch):
             continue
 
         candidate = candidates_by_sid.get(sid)

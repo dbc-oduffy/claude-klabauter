@@ -3820,15 +3820,40 @@ def _pytest_argvs(segments_argv: Sequence[Sequence[str]]) -> List[List[str]]:
     return [list(argv) for argv in segments_argv if _pytest_args(argv) is not None]
 
 
+_EXECUTOR_TYPE = "coordinator:executor"
+
+
+def _runs_name_only_test_files(pytest_argvs: Sequence[Sequence[str]]) -> bool:
+    """True when every pytest invocation names at least one target and each target is a ``.py`` file
+    or node id. A workflow-phase executor carries no ``agent_type``; this is the shape of its own
+    row-gate run, which the scope leg then bounds like the executor's."""
+    from coordinator_core.bash_guards._heavy_command_class import _pytest_targets
+    from coordinator_core.bash_guards._test_run_admission import _pytest_arg_list, _unquote
+
+    for argv in pytest_argvs:
+        targets = [_unquote(t) for t in _pytest_targets(_pytest_arg_list(argv))]
+        if not targets or not all(t.split("::", 1)[0].lower().endswith(".py") for t in targets):
+            return False
+    return True
+
+
 def _test_run_refusal(
     payload: Dict[str, Any],
     pytest_argvs: Sequence[Sequence[str]],
     cwd: Optional[str],
     is_subagent: bool,
+    cmd: str = "",
 ) -> Optional[Any]:
     """The deny record when the shared test-run verdict refuses this pytest run, else None."""
     from coordinator_core.bash_guards._test_run_admission import test_run_verdict
 
+    if (
+        is_subagent
+        and not payload.get("agent_type")
+        and not re.search(r"\bstart-process\b", cmd, re.IGNORECASE)
+        and _runs_name_only_test_files(pytest_argvs)
+    ):
+        payload = {**payload, "agent_type": _EXECUTOR_TYPE}
     verdict = test_run_verdict(payload, pytest_argvs, cwd or os.getcwd(), is_subagent=is_subagent)
     if verdict.allowed:
         return None
@@ -3954,7 +3979,7 @@ def _check_core(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     pytest_argvs = _pytest_argvs(segments_argv)
     if pytest_argvs and (not is_subagent or detected is None):
-        refusal = _test_run_refusal(payload, pytest_argvs, cwd, is_subagent)
+        refusal = _test_run_refusal(payload, pytest_argvs, cwd, is_subagent, cmd)
         if refusal is not None:
             return refusal
 

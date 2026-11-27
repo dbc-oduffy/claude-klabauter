@@ -55,7 +55,7 @@ def seams(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         staged_stall.live_run_index, "read", lambda root, ms, **kw: {r: frozenset() for r in state["index"]}
     )
-    monkeypatch.setattr(staged_stall, "agent_in_flight", lambda session, cutoff: state["inflight"])
+    monkeypatch.setattr(staged_stall, "agent_in_flight", lambda session, cutoff, run_id=None: state["inflight"])
     monkeypatch.setattr(staged_stall, "_notify", lambda target, text: sent.append((target, text)) or "handed-off")
     state["sent"] = sent
     return state
@@ -263,12 +263,63 @@ def test_other_halt_kinds_are_never_cleared(repo) -> None:
     assert _marker(rdir)["status"] == halted_run.STATUS_HALTED
 
 
+def _epoch_calls(monkeypatch) -> list[str]:
+    calls: list[str] = []
+    real = staged_stall.fire_progress_epoch
+    monkeypatch.setattr(
+        staged_stall, "fire_progress_epoch", lambda root, run_id: calls.append(run_id) or real(root, run_id)
+    )
+    return calls
+
+
+def test_the_idle_tick_reads_fire_records_only_for_open_stalls(repo, seams, monkeypatch) -> None:
+    calls = _epoch_calls(monkeypatch)
+    for run_id, kind in (("run-usage", "usage_limit"), ("run-other", "some_other_halt")):
+        rdir = _run(repo, seams, run_id)
+        halted_run.write_halt_marker(rdir, halted=kind, sizing_rel=None)
+    _run(repo, seams, "run-no-marker")
+    stalled = _run(repo, seams, "run-stalled")
+    halted_run.write_halt_marker(stalled, halted=staged_stall.HALT_STAGED_STALL, sizing_rel=None)
+    staged_stall.clear_recovered(repo, time.time())
+    assert calls == ["run-stalled"]
+
+
+def test_a_cleared_stall_is_no_longer_open(repo, seams, monkeypatch) -> None:
+    rdir = _run(repo, seams, "run-cleared")
+    halted_run.write_halt_marker(rdir, halted=staged_stall.HALT_STAGED_STALL, sizing_rel=None)
+    assert staged_stall._stall_open(rdir)
+    assert halted_run.mark_stall_cleared(rdir, {})
+    assert not staged_stall._stall_open(rdir)
+    assert not staged_stall._stall_open(rdir / "absent")
+
+
+def test_a_fire_record_is_parsed_once_until_it_changes(repo, monkeypatch) -> None:
+    staged_stall._FIRE_RECORD_CACHE.clear()
+    home = _fire(repo, "run-cached", age_s=0)
+    record = home.parent.parent / "fire1.json"
+    old = time.time() - 3600
+    os.utime(record, (old, old))
+    parsed: list[str] = []
+    real = staged_stall.json.loads
+    monkeypatch.setattr(staged_stall.json, "loads", lambda text, *a, **k: parsed.append(text) or real(text, *a, **k))
+    for _ in range(3):
+        assert [r["fire_id"] for _, r in staged_stall.fire_records_for_run(repo, "run-cached")] == ["fire1"]
+    assert len(parsed) == 1
+    record.write_text(json.dumps({"fire_id": "fire1", "run_id": "run-other"}), encoding="utf-8")
+    os.utime(record, (old + 5, old + 5))
+    assert staged_stall.fire_records_for_run(repo, "run-cached") == []
+    assert len(parsed) == 2
+    staged_stall._FIRE_RECORD_CACHE.clear()
+
+
 def _refired_under_new_session(repo, seams, monkeypatch, *, new_session_progress: bool):
     rdir = _run(repo, seams, "run-refired", idle_s=staged_stall.STAGED_STALL_BOUND_SECS + 300, session="sess-old")
     monkeypatch.setattr(
         staged_stall.live_run_index, "_run_records", lambda root, rid, shared: ({}, {"session_id": "sess-new"})
     )
-    monkeypatch.setattr(staged_stall, "agent_in_flight", lambda session, cutoff: new_session_progress and session == "sess-new")
+    monkeypatch.setattr(
+        staged_stall, "agent_in_flight", lambda session, cutoff, run_id=None: new_session_progress and session == "sess-new"
+    )
     return rdir
 
 
@@ -282,3 +333,55 @@ def test_stale_stage_session_without_progress_anywhere_is_still_halted(ctx, repo
     rdir = _refired_under_new_session(repo, seams, monkeypatch, new_session_progress=False)
     ctx._idle_tick()
     assert _marker(rdir)["halted"] == staged_stall.HALT_STAGED_STALL
+
+
+_REAL_AGENT_IN_FLIGHT = staged_stall.agent_in_flight
+_DEAD = "warp-2026-11-26-witness-20261126T141019-d92576"
+_OTHER = "warp-2026-11-26-peer-20261126T150000-aaaaaa"
+
+
+@pytest.fixture
+def session_journals(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch):
+    """The real `agent_in_flight` over a fake session dir; returns `write(name, text, age_s)`."""
+    from coordinator_core.usage import run_locate
+
+    root = tmp_path / "sessions" / "sess-1"
+    monkeypatch.setattr(run_locate, "session_dir_for", lambda sid: root if sid == "sess-1" else None)
+    monkeypatch.setattr(staged_stall, "agent_in_flight", _REAL_AGENT_IN_FLIGHT)
+
+    def write(name: str, text: str, age_s: float) -> None:
+        wf = root / "subagents" / "workflows" / name
+        wf.mkdir(parents=True, exist_ok=True)
+        journal = wf / "journal.jsonl"
+        journal.write_text(text, encoding="utf-8")
+        stamp = time.time() - age_s
+        os.utime(journal, (stamp, stamp))
+
+    return write
+
+
+def test_a_peer_runs_fresh_journal_does_not_keep_a_dead_run_alive(ctx, repo, seams, session_journals) -> None:
+    rdir = _run(repo, seams, _DEAD, idle_s=staged_stall.STAGED_STALL_BOUND_SECS + 300)
+    session_journals("wf_dead", json.dumps({"result": {"run_id": _DEAD}}), staged_stall.STAGED_STALL_BOUND_SECS + 300)
+    session_journals("wf_peer", json.dumps({"result": {"run_id": _OTHER}}), 5)
+    ctx._idle_tick()
+    marker = _marker(rdir)
+    assert marker["halted"] == staged_stall.HALT_STAGED_STALL and "worker gone" in marker["reason"]
+    assert [(target, _DEAD in text) for target, text in seams["sent"]] == [("sess-1", True)]
+
+
+def test_a_fresh_journal_naming_the_run_keeps_it_alive(ctx, repo, seams, session_journals) -> None:
+    rdir = _run(repo, seams, _DEAD, idle_s=staged_stall.STAGED_STALL_BOUND_SECS + 300)
+    session_journals("wf_live", json.dumps({"result": {"run_id": _DEAD}}), 5)
+    session_journals("wf_peer", json.dumps({"result": {"run_id": _OTHER}}), 5)
+    ctx._idle_tick()
+    assert not (rdir / halted_run.HALTED_FILE).exists()
+    assert seams["sent"] == []
+
+
+def test_a_fresh_journal_naming_no_run_still_counts_as_progress(ctx, repo, seams, session_journals) -> None:
+    rdir = _run(repo, seams, _DEAD, idle_s=staged_stall.STAGED_STALL_BOUND_SECS + 300)
+    session_journals("wf_anon", '{"type":"launched"}\n', 5)
+    ctx._idle_tick()
+    assert not (rdir / halted_run.HALTED_FILE).exists()
+    assert seams["sent"] == []
