@@ -42,23 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-try:
-    from coordinator.bin.lib.win_argv import win_safe_shlex_split
-except ImportError:  # pragma: no cover — sys.path bootstrap fallback
-    import sys as _sys
-
-    _lib_dir = str(Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "lib")
-    _lib_dir_already_present = _lib_dir in _sys.path
-    if not _lib_dir_already_present:
-        _sys.path.insert(0, _lib_dir)
-    try:
-        from win_argv import win_safe_shlex_split  # type: ignore
-    finally:
-        if not _lib_dir_already_present:
-            try:
-                _sys.path.remove(_lib_dir)
-            except ValueError:
-                pass
+from coordinator_core.win_argv import win_safe_shlex_split
 
 
 @dataclass

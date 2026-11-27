@@ -17,6 +17,9 @@ whole package back in and every guard keeps working, just slower. That is exactl
 happened while the split was being made — one newly-added guard module held the old
 import and reduced the entire optimization to zero until it was found by tracing.
 Nothing about the guards' behaviour reveals it; only a measurement does. Hence a test.
+The module-level source edge is pinned by ``test_import_layers.py``, which names the
+offending file:line; the probes below catch what that scan cannot (deferred imports on
+the hot path).
 
 Measured at the time of the split (macOS, median of 21 runs):
     before — dispatch import 65.0ms, 58 ``coordinator_core.*`` modules resident
@@ -27,7 +30,6 @@ Measured at the time of the split (macOS, median of 21 runs):
 from __future__ import annotations
 
 import pathlib
-import re
 import subprocess
 import sys
 
@@ -41,49 +43,7 @@ pytestmark = [
     pytest.mark.cadence,
 ]
 
-_GUARDS_DIR = pathlib.Path(__file__).resolve().parents[1] / "bash_guards"
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
-
-#: The import the guards must not use at MODULE level. Anchored at column 0 on
-#: purpose: a function-local (indented) import is deferred and costs nothing at
-#: module-import time, which is the cost this split exists to remove.
-#: ``check_test_suite_invocation`` legitimately does this — it reaches into
-#: ``hooks.track_touched_files`` inside a function, on the rare subagent-identity
-#: path only. Deferred imports on a HOT path would still be a defect, and are
-#: caught by ``test_evaluating_a_benign_command_does_not_load_the_hooks_package``
-#: below rather than by this source scan.
-#: Three shapes, because all three trigger the same eager ``hooks/__init__``:
-#: ``from coordinator_core.hooks... import x``, ``import coordinator_core.hooks...``,
-#: and ``from coordinator_core import hooks`` (which reads as a plain name import but
-#: pulls the package just the same, and which the first two alternatives do not match).
-_FORBIDDEN_IMPORT = re.compile(
-    r"^(?:from\s+coordinator_core\.hooks"
-    r"|import\s+coordinator_core\.hooks"
-    r"|from\s+coordinator_core\s+import\s+(?:[^\n#]*[\s,(])?hooks\b)",
-    re.MULTILINE,
-)
-
-
-def test_no_bash_guard_module_imports_the_hooks_package() -> None:
-    """Source-level check — gives a precise file:line on failure."""
-    offenders = []
-    for path in sorted(_GUARDS_DIR.rglob("*.py")):
-        if "__pycache__" in path.parts or "tests" in path.parts:
-            continue
-        text = path.read_text()
-        for match in _FORBIDDEN_IMPORT.finditer(text):
-            line_no = text.count("\n", 0, match.start()) + 1
-            line = text.splitlines()[line_no - 1].strip()
-            offenders.append(f"{path.relative_to(_REPO_ROOT)}:{line_no}: {line}")
-
-    assert not offenders, (
-        "bash_guards modules must not import coordinator_core.hooks — it eagerly "
-        "imports 13 hook modules the guard chain never uses, on every Bash tool "
-        "call. Import the envelope builders from coordinator_core._hook_envelope "
-        "instead (same five functions, dependency-free leaf).\nOffenders:\n  "
-        + "\n  ".join(offenders)
-    )
-
 
 def test_importing_the_dispatch_chain_does_not_load_the_hooks_package() -> None:
     """Behavioural check — the property that actually matters at runtime.
@@ -111,7 +71,7 @@ def test_importing_the_dispatch_chain_does_not_load_the_hooks_package() -> None:
         "importing coordinator_core.bash_guards.dispatch pulled "
         f"{len(leaked)} coordinator_core.hooks module(s) into sys.modules:\n  "
         + "\n  ".join(leaked)
-        + "\n\nRun the source-level test in this file for the offending import line."
+        + "\n\nRun coordinator_core/tests/test_import_layers.py for the offending import line."
     )
 
 
@@ -151,6 +111,7 @@ def test_evaluating_a_benign_command_does_not_load_the_hooks_package() -> None:
         "evaluating a benign Bash command pulled coordinator_core.hooks module(s) "
         "into sys.modules via a deferred import on the hot path:\n  "
         + "\n  ".join(leaked)
+        + "\n\nRun coordinator_core/tests/test_import_layers.py for the offending import line."
     )
 
 

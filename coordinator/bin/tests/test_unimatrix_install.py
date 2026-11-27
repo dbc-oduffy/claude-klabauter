@@ -49,6 +49,7 @@ def _engine(monkeypatch, tmp_path):
     (package.parent / "host_hooks" / "codex_lifecycle.py").write_text("# capability fixture", encoding="utf-8")
     (package.parent / "codex_status").mkdir(exist_ok=True)
     (package.parent / "codex_status" / "hook.py").write_text("# capability fixture", encoding="utf-8")
+    _write_stubs(_engine_bin(tmp_path))
     monkeypatch.setattr(ui, "resolve_engine_root", lambda: (str(root), "published-target"))
     return root
 
@@ -153,11 +154,18 @@ def _write_stubs(src, router_text="# stub PipeServer\n"):
         (src / n).write_text(router_text if n == ui.ROUTER_SCRIPT else "# stub\n", encoding="utf-8")
 
 
+def _engine_bin(tmp_path, name="engine"):
+    """The scripts directory of the fixture engine root (`tmp_path/<name>`): where --install sources from."""
+    src = tmp_path / name / "coordinator" / "bin"
+    src.mkdir(parents=True, exist_ok=True)
+    return src
+
+
 def _stub_src(monkeypatch, tmp_path):
-    src = tmp_path / "src"
-    src.mkdir()
+    src = _engine_bin(tmp_path)
     _write_stubs(src)
     monkeypatch.setattr(ui, "__file__", str(src / "unimatrix-install.py"))
+    return src
 
 
 def test_range_constant_and_scripts():
@@ -223,9 +231,8 @@ def test_vendored_scripts_cover_real_autolink_closure():
 
 
 def test_install_seeds_closure_script_outside_vendored_list(monkeypatch, tmp_path):
-    _stub_src(monkeypatch, tmp_path)
+    src = _stub_src(monkeypatch, tmp_path)
     _home(monkeypatch, tmp_path)
-    src = tmp_path / "src"
     (src / "unimatrix-autolink.py").write_text("# runs unimatrix-newpiece.py\n", encoding="utf-8")
     assert _run(["--install"], "2.1.316", tmp_path / "d")[0] != 0
     (src / "unimatrix-newpiece.py").write_text("# new\n", encoding="utf-8")
@@ -280,10 +287,7 @@ def test_unparseable_version_refuses():
 @pytest.mark.parametrize("plat", PLATFORMS)
 def test_install_copies_scripts_and_prints_rc_notice(monkeypatch, tmp_path, plat):
     monkeypatch.setattr(sys, "platform", plat)
-    src = tmp_path / "src"
-    src.mkdir()
-    _write_stubs(src)
-    monkeypatch.setattr(ui, "__file__", str(src / "unimatrix-install.py"))
+    _stub_src(monkeypatch, tmp_path)
     dest = tmp_path / "home" / "unimatrix"
     rc, out = _run(["--install"], "2.1.316", dest, tmp_path / "gemini" / "hooks.json")
     assert rc == 0
@@ -337,18 +341,14 @@ def test_install_refuses_outside_range_without_copying(monkeypatch, tmp_path):
 
 
 def test_install_force_outside_range_proceeds(monkeypatch, tmp_path):
-    src = tmp_path / "src"
-    src.mkdir()
-    _write_stubs(src)
-    monkeypatch.setattr(ui, "__file__", str(src / "unimatrix-install.py"))
+    _stub_src(monkeypatch, tmp_path)
     dest = tmp_path / "unimatrix"
     rc, out = _run(["--install", "--force"], "2.2.0", dest, tmp_path / "h" / "hooks.json")
     assert rc == 0 and "WARN" in out and dest.is_dir()
 
 
 def _pipeless_src(monkeypatch, tmp_path):
-    src = tmp_path / "src"
-    src.mkdir()
+    src = _engine_bin(tmp_path)
     _write_stubs(src, router_text="# stub without the transport\n")
     monkeypatch.setattr(ui, "__file__", str(src / "unimatrix-install.py"))
     return src
@@ -395,9 +395,8 @@ def test_posix_pipeless_source_router_copies(monkeypatch, tmp_path, plat):
 
 
 def test_install_missing_sources_fails(monkeypatch, tmp_path):
-    src = tmp_path / "empty"
-    src.mkdir()
-    monkeypatch.setattr(ui, "__file__", str(src / "unimatrix-install.py"))
+    _engine_bin(tmp_path, "empty")
+    monkeypatch.setattr(ui, "resolve_engine_root", lambda: (str(tmp_path / "empty"), "empty-target"))
     rc, out = _run(["--install"], "2.1.316", tmp_path / "d", tmp_path / "h" / "hooks.json")
     assert rc != 0 and "missing" in out
     assert not (tmp_path / "h").exists()
@@ -1274,9 +1273,9 @@ def test_missing_peer_doctrine_template_flags_grok_partial(monkeypatch, tmp_path
 
 
 def test_install_copies_send_script_when_present(monkeypatch, tmp_path):
-    _stub_src(monkeypatch, tmp_path)
+    src = _stub_src(monkeypatch, tmp_path)
     _home(monkeypatch, tmp_path)
-    (tmp_path / "src" / "unimatrix-send.py").write_text("# send\n", encoding="utf-8")
+    (src / "unimatrix-send.py").write_text("# send\n", encoding="utf-8")
     assert _run(["--install"], "2.1.316", tmp_path / "d")[0] == 0
     assert (tmp_path / "d" / "unimatrix-send.py").is_file()
 
@@ -1348,13 +1347,27 @@ def test_default_install_registers_guards_doctrine_and_skills(monkeypatch, tmp_p
     assert "governance scope: Codex local-tool PreToolUse" in out
 
 
-def test_unresolved_engine_root_is_degraded_without_engine_flag(monkeypatch, tmp_path):
+def test_unresolved_engine_root_refuses_the_install_and_copies_nothing(monkeypatch, tmp_path):
     monkeypatch.setattr(ui, "resolve_engine_root", lambda: (None, "unresolved"))
     home, rc, out = _default_install(monkeypatch, tmp_path)
-    assert rc == 7 and "governance DEGRADED: engine root unresolved" in out
-    assert "governance verified" not in out
-    cmd = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-    assert "--engine-root" not in cmd
+    assert rc == 7 and "REFUSE: engine root unresolved (unresolved)" in out
+    assert "installed" not in out and not (tmp_path / "dest").exists()
+    assert not (home / ".codex" / "hooks.json").exists()
+
+
+def test_install_refreshes_a_stale_dest_from_the_engine_root_never_the_script_dir(monkeypatch, tmp_path):
+    own = tmp_path / "settings-home-copy"
+    own.mkdir()
+    _write_stubs(own)
+    (own / "unimatrix-relay.py").write_text("# stale script dir\n", encoding="utf-8")
+    monkeypatch.setattr(ui, "__file__", str(own / "unimatrix-install.py"))
+    dest = own
+    _write_stubs(_engine_bin(tmp_path))
+    (_engine_bin(tmp_path) / "unimatrix-relay.py").write_text("# newer engine root\n", encoding="utf-8")
+    _home(monkeypatch, tmp_path)
+    rc, out = _run(["--install"], "2.1.316", dest)
+    assert rc == 0 and f"installed {len(ui.VENDORED_SCRIPTS)} scripts into {dest}" in out
+    assert (dest / "unimatrix-relay.py").read_text(encoding="utf-8") == "# newer engine root\n"
 
 
 def test_uninstall_removes_everything_and_keeps_foreign(monkeypatch, tmp_path):
@@ -1389,6 +1402,7 @@ def test_reinstall_with_changed_engine_root_updates_guard(monkeypatch, tmp_path)
     (package.parent / "host_hooks" / "codex_lifecycle.py").write_text("# capability fixture", encoding="utf-8")
     (package.parent / "codex_status").mkdir(exist_ok=True)
     (package.parent / "codex_status" / "hook.py").write_text("# capability fixture", encoding="utf-8")
+    _write_stubs(_engine_bin(tmp_path, "engine2"))
     monkeypatch.setattr(ui, "resolve_engine_root", lambda: (str(other), "published-target"))
     buf = io.StringIO()
     assert ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
@@ -1916,6 +1930,7 @@ def test_default_install_resolves_engine_root_through_settings_home_door(monkeyp
     (root / "coordinator_core" / "host_hooks" / "codex_lifecycle.py").write_text("# capability fixture", encoding="utf-8")
     (root / "coordinator_core" / "codex_status").mkdir(exist_ok=True)
     (root / "coordinator_core" / "codex_status" / "hook.py").write_text("# capability fixture", encoding="utf-8")
+    _write_stubs(_engine_bin(tmp_path, "door-root"))
     monkeypatch.setattr(ui, "resolve_engine_root", _REAL_RESOLVE)
     monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
     _registry(monkeypatch, tmp_path, claude_klabauter=root)
@@ -1947,9 +1962,8 @@ def test_degraded_line_names_the_resolver_failure_reason(monkeypatch, tmp_path):
     shutil.copy2(ui._load_host_registry().__file__, bin_dir / "lib" / ui.HOST_REGISTRY_REL[-1])
     monkeypatch.setattr(ui, "_BIN_DIR", bin_dir)
     home, rc, out = _default_install(monkeypatch, tmp_path)
-    assert rc == 7 and "governance DEGRADED: engine root unresolved (resolver failed: no engine root)" in out
-    cmd = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-    assert "--engine-root" not in cmd
+    assert rc == 7 and "REFUSE: engine root unresolved (resolver failed: no engine root)" in out
+    assert not (home / ".codex" / "hooks.json").exists()
 
 
 class _Proc:
@@ -2316,8 +2330,7 @@ def test_reap_is_skipped_on_windows(monkeypatch, tmp_path):
 
 
 def test_an_unchanged_script_is_not_recopied_so_its_ctime_marks_the_last_code_change(monkeypatch, tmp_path):
-    _stub_src(monkeypatch, tmp_path)
-    src, dest = tmp_path / "src", tmp_path / "dest"
+    src, dest = _stub_src(monkeypatch, tmp_path), tmp_path / "dest"
     ui.install_scripts(src, dest)
     copies = []
     real = ui.shutil.copy2
@@ -3103,6 +3116,7 @@ def _fake_engine(tmp_path):
     (pkg.parent / "__init__.py").write_text("")
     (pkg / "__init__.py").write_text("")
     (pkg / "__main__.py").write_text("import sys\nprint('host=' + ' '.join(sys.argv[1:]))\n")
+    _write_stubs(_engine_bin(tmp_path, "eng"))
     return tmp_path / "eng"
 
 
@@ -3253,7 +3267,7 @@ def _handoff_install(monkeypatch, tmp_path, *, live=True, change=False, pid_json
     dest = tmp_path / "d"
     assert _run(["--install"], "2.1.316", dest)[0] == 0
     if change:
-        (tmp_path / "src" / ui.ROUTER_SCRIPT).write_text("# stub PipeServer v2\n", encoding="utf-8")
+        (_engine_bin(tmp_path) / ui.ROUTER_SCRIPT).write_text("# stub PipeServer v2\n", encoding="utf-8")
     if pid_json:
         (dest / "router").mkdir(exist_ok=True)
         recorded = "0" * 64 if pid_json == "stale" else ui.router_closure_digest(dest)
@@ -3634,9 +3648,9 @@ def test_default_install_prints_a_control_key_line_after_the_relay_and_file_line
 
 
 def test_install_vendors_session_detach_beside_the_launch_chain(monkeypatch, tmp_path):
-    _stub_src(monkeypatch, tmp_path)
-    (tmp_path / "src" / "lib").mkdir()
-    (tmp_path / "src" / "lib" / "session_detach.py").write_text("# stub\n", encoding="utf-8")
+    src = _stub_src(monkeypatch, tmp_path)
+    (src / "lib").mkdir()
+    (src / "lib" / "session_detach.py").write_text("# stub\n", encoding="utf-8")
     dest = tmp_path / "home" / "unimatrix"
     rc, _ = _run(["--install"], "2.1.316", dest, tmp_path / "gemini" / "hooks.json")
     assert rc == 0 and (dest / "lib" / "session_detach.py").is_file()
@@ -4021,11 +4035,11 @@ posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits
 
 @posix_only
 def test_install_scripts_dest_is_0755_under_umask_077(monkeypatch, tmp_path):
-    _stub_src(monkeypatch, tmp_path)
+    src = _stub_src(monkeypatch, tmp_path)
     dest = tmp_path / "newhome" / "unimatrix"
     old = os.umask(0o077)
     try:
-        ui.install_scripts(tmp_path / "src", dest)
+        ui.install_scripts(src, dest)
     finally:
         os.umask(old)
     assert oct(dest.stat().st_mode & 0o777) == "0o755"
@@ -4034,11 +4048,11 @@ def test_install_scripts_dest_is_0755_under_umask_077(monkeypatch, tmp_path):
 
 @posix_only
 def test_install_scripts_leaves_an_existing_dest_mode_alone(monkeypatch, tmp_path):
-    _stub_src(monkeypatch, tmp_path)
+    src = _stub_src(monkeypatch, tmp_path)
     dest = tmp_path / "unimatrix"
     dest.mkdir()
     dest.chmod(0o700)
-    ui.install_scripts(tmp_path / "src", dest)
+    ui.install_scripts(src, dest)
     assert oct(dest.stat().st_mode & 0o777) == "0o700"
 
 

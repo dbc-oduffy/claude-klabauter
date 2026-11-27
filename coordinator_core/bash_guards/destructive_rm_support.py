@@ -2,8 +2,8 @@
 batched-status attribution and touch-record helpers behind
 ``_dc_rm.check_destructive_rm`` and ``stale_write_guard.check_stale_write``.
 
-Imports only ``_dc_shell_text``; never the ``dispatch_checks`` facade or a guard
-module.
+Imports only ``_dc_shell_text`` at module level (``machine_resolver`` lazily, for
+``paths.scratch_root``); never the ``dispatch_checks`` facade or a guard module.
 """
 
 from __future__ import annotations
@@ -157,17 +157,38 @@ def _is_within(path: str, root: str) -> bool:
     return p == r or p.startswith(r.rstrip(os.sep) + os.sep)
 
 
+def _resolves_under_machine_scratch_root(resolved: str) -> bool:
+    """True when `resolved` lies strictly below the machine-local `paths.scratch_root`.
+    In-process registry read, no spawn. An unset or unreadable key, or a root that is
+    a filesystem root, never matches; the root itself is not exempt."""
+    try:
+        from coordinator_core import machine_resolver
+
+        raw = machine_resolver.registry_get("paths.scratch_root")
+        if not raw:
+            return False
+        root = os.path.realpath(raw)
+    except Exception:  # noqa: BLE001 -- a guard that cannot resolve the root withholds the exemption
+        return False
+    if os.path.dirname(root) == root:
+        return False
+    target = os.path.normcase(os.path.normpath(resolved.replace("/", os.sep)))
+    base = os.path.normcase(os.path.normpath(root))
+    return target != base and target.startswith(base.rstrip(os.sep) + os.sep)
+
+
 def _resolves_under_repo_scratch(resolved: str) -> bool:
     """True when `resolved` (already symlink/junction/`..`-resolved) lies strictly
     below a `<repo>/scratch` directory, `<repo>` being a directory holding a `.git`
-    entry. Filesystem stats only, no spawn. A scratch dir that is itself a link
-    resolves elsewhere and never matches. A nested repo root or clone below scratch
-    is exempt like any other path there."""
+    entry, or strictly below the machine-local `paths.scratch_root`. Filesystem
+    stats and an in-process registry read only, no spawn. A scratch dir that is
+    itself a link resolves elsewhere and never matches. A nested repo root or clone
+    below scratch is exempt like any other path there."""
     cur = os.path.dirname(resolved.replace("/", os.sep))
     while True:
         parent = os.path.dirname(cur)
         if parent == cur:
-            return False
+            return _resolves_under_machine_scratch_root(resolved)
         if os.path.normcase(os.path.basename(cur)) == "scratch" and os.path.exists(
             os.path.join(parent, ".git")
         ):

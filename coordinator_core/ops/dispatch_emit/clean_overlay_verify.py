@@ -1379,6 +1379,50 @@ def _printed_writes(root: Path, run_id: str) -> list:
     return [p for p in (run_write_prints.read(root, run_id) or {}) if p and not p.startswith("scratch/")]
 
 
+_OVERLAID_NOTE_CAP = 8
+
+
+def own_untracked_writes(root: Path, run_id: str, sha: str) -> list:
+    """The run's own write-set paths (`_own_write_set`, `_printed_writes`) that are files in the worktree,
+    tracked nowhere and absent from `sha`'s tree: new modules and tests the candidate commit does not carry,
+    which reach the mirror only as overlay. A tracked path is never named (a peer's dirty hunks stay at HEAD),
+    nor a peer's untracked file the run did not write. [] with no run id or no readable write set."""
+    from coordinator_core.ops.dispatch_emit import test_reach
+
+    try:
+        owned = dict.fromkeys([*_own_write_set(root, run_id), *_printed_writes(root, run_id)])
+    except (OSError, ValueError):  # an unreadable write record overlays nothing; any other error is a bug and surfaces
+        return []
+    wanted = []
+    tracked = None
+    for rel in owned:
+        parts = PurePosixPath(rel).parts
+        if rel.startswith(_SPARSE_EXCLUDE) or ".." in parts or rel.startswith("/") or PureWindowsPath(rel).drive:
+            continue
+        if not (root / rel).is_file():
+            continue
+        if tracked is None:
+            tracked = test_reach._tracked(root)
+        if rel not in tracked:
+            wanted.append(rel)
+    if not wanted:
+        return []
+    try:
+        carried = {p for p, _, _ in _ls_tree(root, sha, wanted)}
+    except (_MirrorStale, OSError, subprocess.SubprocessError):
+        carried = set()
+    return [rel for rel in wanted if rel not in carried]
+
+
+def _overlaid_note(paths: Sequence[str]) -> str:
+    """`overlaid own path(s): ...` for a verdict note; `""` with no paths."""
+    if not paths:
+        return ""
+    shown = ", ".join(paths[:_OVERLAID_NOTE_CAP])
+    more = f" (+{len(paths) - _OVERLAID_NOTE_CAP} more)" if len(paths) > _OVERLAID_NOTE_CAP else ""
+    return f"overlaid own path(s): {shown}{more}"
+
+
 def _check_overlay_imports(root: Path, overlay: Sequence[str], *, run_id: str = "") -> None:
     """The export holds a peer's dirty module at its HEAD bytes, so a declared dirty Python file is refused only
     when it needs a name (or a whole module) that HEAD's copy of that peer module lacks: the run would test
@@ -1872,7 +1916,10 @@ def verify(
     try:
         with _mirror_lock(root, f"clean-overlay {run_id}") as mroot:
             sha = _commit_sha(root, candidate_sha)
-            dest = _prepare_guarded(root, mroot, sha, leg, (), _closure_for(root, touched, seeds))
+            own_new = own_untracked_writes(root, run_id, sha) if run_id else []
+            dest = _prepare_guarded(
+                root, mroot, sha, leg, own_new, _closure_for(root, [*touched, *own_new], seeds), run_id=run_id,
+            )
             picked, scan_note = _with_importers(dest, seeds, touched, sha)
             extras = picked[len(seeds):]
             if extras:
@@ -1921,7 +1968,7 @@ def verify(
                 runs = [ran]
                 full = ran.stdout + ran.stderr
                 tail = full.strip()[-_OUTPUT_TAIL:]
-            notes = "; ".join(n for n in (scan_note, shard_note) if n)
+            notes = "; ".join(n for n in (_overlaid_note(own_new), scan_note, shard_note) if n)
             bad = [r for r in runs if r.returncode != 0 and not hygiene_only_exit(r.returncode, r.stdout + r.stderr)]
             if pin.source != SOURCE_KEY and any(_MODULE_MISSING in r.stdout + r.stderr for r in bad):
                 notes = "; ".join(n for n in (f"ModuleNotFoundError under an undeclared interpreter: {REMEDY}", notes) if n)

@@ -51,9 +51,10 @@ def is_subagent_payload(payload: Any) -> bool:
     """
     if not isinstance(payload, dict):
         return False
-    from coordinator_core.hooks._payload import present
-
-    return present(payload, "agent_id")
+    value = payload.get("agent_id", "")
+    if value is None:
+        return False
+    return isinstance(value, bool) or bool(str(value))
 
 
 def deny_reason(name: str) -> str:

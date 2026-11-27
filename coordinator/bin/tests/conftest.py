@@ -11,6 +11,9 @@ from pathlib import Path
 import pytest
 from typing import TYPE_CHECKING
 
+# Captured at import: tests monkeypatch sys.platform, and the reaper must kill by the real host.
+_REAL_WIN = sys.platform == "win32"
+
 if TYPE_CHECKING:
     from subprocess import CompletedProcess
 
@@ -209,13 +212,13 @@ class _ChildReaper:
 
     def adopt(self, proc) -> None:
         self._procs.append(proc)
-        if sys.platform == "win32":
+        if _REAL_WIN:
             job = self._windows_job()
             if job is not None:
                 job[0].AssignProcessToJobObject(job[1], int(proc._handle))
 
     def reap(self) -> None:
-        if sys.platform == "win32":
+        if _REAL_WIN:
             if self._job is not None:
                 k32, handle = self._job
                 k32.TerminateJobObject(handle, 1)
@@ -243,7 +246,7 @@ class _ChildReaper:
         class _Reaped(real_popen):
             def __init__(self, *args, **kwargs) -> None:
                 # `is not None`: an explicit start_new_session=False is the caller's choice and is kept.
-                if sys.platform != "win32" and not any(
+                if not _REAL_WIN and not any(
                     kwargs.get(k) is not None for k in ("start_new_session", "process_group", "preexec_fn")
                 ):
                     kwargs["start_new_session"] = True

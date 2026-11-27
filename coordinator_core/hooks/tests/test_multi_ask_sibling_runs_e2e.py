@@ -214,6 +214,54 @@ def test_a_sequenced_slice_is_denied_until_the_predecessor_close_names_its_fire_
     assert _status(repo, parent.runs[1].run_id) == "running"
 
 
+def test_a_label_after_with_no_writes_holds_the_successor_until_the_predecessor_lands(repo) -> None:
+    asks = [{"ask": "interrogate", "label": "interrogate"}, {"ask": "re-add", "label": "re-add", "after": ["interrogate"]}]
+    env = _submit(repo, {"asks": asks})
+    assert _hso(env)["permissionDecision"] == "allow", env
+    reply = _reply_json(env)
+    first, second = reply["runs"]
+    assert second["after"] == [first["run_id"]] and "after" not in first
+    parent = _parent(repo, reply["parent_id"])
+    assert [r.status for r in parent.runs] == ["ready", "after"]
+    assert _status(repo, first["run_id"]) == "running"
+    assert not (repo / c.status_rel(second["run_id"])).exists()
+    assert _submission(repo, second["run_id"]) is None
+
+    denied = _fire_slice(repo, parent.runs[1].slice_sizing)
+    assert _hso(denied)["permissionDecision"] == "deny"
+    assert first["run_id"] in _hso(denied)["permissionDecisionReason"]
+    assert not (repo / c.status_rel(second["run_id"])).exists()
+
+    close = run_close.sibling_release(repo, first["run_id"], "abc1234")
+    assert close["released"] == [warp_fire.fire_command(parent.runs[1].slice_sizing)] and close["blocked"] == []
+    allowed = _fire_slice(repo, parent.runs[1].slice_sizing)
+    assert _hso(allowed)["permissionDecision"] == "allow", allowed
+    assert _status(repo, second["run_id"]) == "running"
+
+
+def test_a_label_after_unions_with_the_write_overlap_after(repo) -> None:
+    asks = [
+        {"ask": "one", "label": "one", "writes": ["a"]},
+        {"ask": "two", "label": "two", "writes": ["b"]},
+        {"ask": "three", "label": "three", "writes": ["a/x.py"], "after": ["two"]},
+    ]
+    reply = _reply_json(_submit(repo, {"asks": asks}))
+    one, two, three = reply["runs"]
+    assert sorted(three["after"]) == sorted([one["run_id"], two["run_id"]])
+    assert "after" not in one and "after" not in two
+
+
+@pytest.mark.parametrize("after", [["nope"], ["later"], ["me"]], ids=["unknown", "later-sibling", "itself"])
+def test_an_unknown_or_non_earlier_after_label_is_denied_naming_it_and_writes_nothing(repo, after) -> None:
+    asks = [{"ask": "one", "label": "first"}, {"ask": "two", "label": "me", "after": after}, {"ask": "three", "label": "later"}]
+    env = _submit(repo, {"asks": asks})
+
+    assert _hso(env)["permissionDecision"] == "deny"
+    assert after[0] in _hso(env)["permissionDecisionReason"] and "after" in _hso(env)["permissionDecisionReason"]
+    assert not (repo / "scratch" / "warp").exists()
+    assert list((repo / "state" / "sizings").iterdir()) == []
+
+
 def test_unhinted_siblings_run_in_parallel_with_no_after(repo) -> None:
     env = _submit(repo, {"asks": [{"ask": "one", "writes": ["a.py"]}, {"ask": "two"}]})
     reply = _reply_json(env)

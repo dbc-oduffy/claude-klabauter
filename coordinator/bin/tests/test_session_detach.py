@@ -25,6 +25,7 @@ BREAKAWAY = 0x01000000
 def _clean_env(monkeypatch):
     monkeypatch.delenv(sd.DETACHED_ENV, raising=False)
     monkeypatch.delenv(sd.FAKE_SESSION_ENV, raising=False)
+    monkeypatch.delenv(sd.AGY_SESSION_ENV, raising=False)
 
 
 class FakeProc:
@@ -210,6 +211,54 @@ def test_strict_failure_refuses_with_exit_5_and_one_line(tmp_path, monkeypatch):
     assert rc == sd._host().CANNOT_DETACH_EXIT == 5
     assert out == "" and len(err.splitlines()) == 1
     assert err.startswith("guard: cannot leave the Claude Code session's job; launch it detached: Start-Process -WindowStyle Hidden ")
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_agy_refusal_names_persistent_background_task_not_start_process(tmp_path, monkeypatch, platform):
+    _patch_pid(monkeypatch)
+    rc, out, err = _ensure(
+        tmp_path, _SESSION, FakePopen(fail=1), env={sd.AGY_SESSION_ENV: "conv-1"}, platform=platform
+    )
+    assert rc == 5 and out == "" and len(err.splitlines()) == 1
+    assert "persistent background task" in err
+    assert "Start-Process" not in err and "setsid" not in err
+
+
+_AGY_SHELL = _chain("python.exe", "powershell.exe", "agy.exe", "explorer.exe")
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_agy_ancestor_without_claude_refuses_with_persistent_task_remedy(tmp_path, monkeypatch, platform):
+    _patch_pid(monkeypatch)
+    rc, out, err = _ensure(tmp_path, _AGY_SHELL, FakePopen(fail=1), platform=platform)
+    assert rc == 5 and out == "" and len(err.splitlines()) == 1
+    assert "persistent background task" in err
+    assert "Start-Process" not in err and "setsid" not in err
+
+
+def test_agy_ancestor_relaunches_detached_when_breakaway_allowed(tmp_path, monkeypatch):
+    _patch_pid(monkeypatch)
+    popen = FakePopen()
+    rc, out, _ = _ensure(tmp_path, _AGY_SHELL, popen)
+    assert rc == 0 and popen.calls and out.startswith("DETACHED guard pid=777")
+
+
+def test_agy_env_alone_marks_an_agy_session_at_default_arguments(tmp_path, monkeypatch):
+    _patch_pid(monkeypatch)
+    monkeypatch.setenv(sd.AGY_SESSION_ENV, "conv-2")
+    out, err = io.StringIO(), io.StringIO()
+    rc = sd.ensure_detached(
+        "guard", ["--log", "g.log"], tmp_path / "g.log", script=str(tmp_path / "guard.py"),
+        popen=FakePopen(fail=1), platform="win32", proc_table=lambda: _NO_SESSION, out=out, err=err,
+    )
+    assert rc == 5 and "persistent background task" in err.getvalue()
+
+
+def test_no_agy_or_claude_signal_still_runs_inline(tmp_path, monkeypatch):
+    _patch_pid(monkeypatch)
+    popen = FakePopen(fail=1)
+    rc, _, err = _ensure(tmp_path, _NO_SESSION, popen)
+    assert rc is None and not popen.calls and err == ""
 
 
 def test_posix_refusal_names_setsid(tmp_path, monkeypatch):

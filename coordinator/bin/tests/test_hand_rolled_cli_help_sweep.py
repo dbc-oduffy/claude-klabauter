@@ -121,6 +121,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "unimatrix-host-guard.py",
     "coordinator-external-session.py",
     "unimatrix-agy-leg.py",
+    "unimatrix-agy-sidecar.py",
     "unimatrix-autolink.py",
     "unimatrix-codex-launch.py",
     "unimatrix-codex-em-proof.py",

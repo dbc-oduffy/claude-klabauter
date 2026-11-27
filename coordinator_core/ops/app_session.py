@@ -25,7 +25,7 @@ produces when only one path is updated).
 
 Reuse, never re-implement (Hard constraint 2 — this is the finding that
 shrank the whole plan):
-  - `win_argv.win_safe_shlex_split` (coordinator/bin/lib/win_argv.py) for all
+  - `win_argv.win_safe_shlex_split` (coordinator_core/win_argv.py) for all
     argv parsing. Never bare `shlex.split`, never `shell=True`, no `VAR=`
     prefix shim (PM ruling 2026-08-06).
   - `redact_for_diag` / `metachar_warn` (coordinator_core.resolve_validation_cmd)

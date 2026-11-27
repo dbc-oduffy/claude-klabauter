@@ -71,6 +71,7 @@ from coordinator_core.git.repo_root import git_common_dir
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_resolver import compute_machine
 from coordinator_core.ops._path_guard import safe_id
+from coordinator_core.ops._week_summary import write_week_summary
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.ops.fleet._common import main_worktree_root, parse_frontmatter_status
 from coordinator_core.ops.records_query import (
@@ -853,17 +854,18 @@ def _is_monday(value: object) -> bool:
 
 
 def _collect_week_commits(
-    worktree: Path, week: str, last_day: str
+    worktree: Path, first_day: str, last_day: str
 ) -> Dict[str, List[Tuple[str, str]]]:
-    """Bucket the week's all-refs, non-merge commits by local committer day.
+    """Bucket all-refs, non-merge commits from first_day to last_day by local committer day.
 
-    ONE `git log --all` over week 00:00 .. last_day 23:59:59 (changelog.backfill_gaps
-    spawn pin is 2); never a per-day loop. Records are newest-first per day.
+    ONE `git log --all` over first_day 00:00 .. last_day 23:59:59, however long the
+    range (changelog.backfill_gaps spawn pin is 2); never a per-day or per-week loop.
+    Records are newest-first per day.
     """
     args = [
         "--format=%cd%x09%H%x09%s%x1f%N%x1e",
         "--date=format-local:%Y-%m-%d",
-        f"--after={_yesterday(week)}T23:59:59",
+        f"--after={_yesterday(first_day)}T23:59:59",
         f"--before={last_day}T23:59:59",
         "--no-merges",
         "--all",
@@ -887,24 +889,35 @@ def _collect_week_commits(
 
 
 def compose_week_gaps(
-    worktree: Path, week: str, *, today: str, through: Optional[str]
+    worktree: Path,
+    week: str,
+    *,
+    today: str,
+    through: Optional[str],
+    since: Optional[str] = None,
+    by_day: Optional[Dict[str, List[Tuple[str, str]]]] = None,
 ) -> List[Tuple[Path, str]]:
     """Compose `(path, text)` for each commit-bearing gap day of `week`; writes nothing.
 
     Paths are `archive/week-changelogs/<week>/<day>.md`. A day with a
     `<day>*.md` already in the week dir, or with no commits on any ref, is omitted.
+    `since` drops days before it; `by_day` is a commit bucket already read for a
+    wider range, so a multi-week caller pays one git spawn, not one per week.
     """
     week_dir = worktree / "archive" / "week-changelogs" / week
     last_day = min(today, through) if through else today
     if week > last_day:
         return []
-    by_day = _collect_week_commits(worktree, week, last_day)
+    if by_day is None:
+        by_day = _collect_week_commits(worktree, week, last_day)
     composed: List[Tuple[Path, str]] = []
     d = week
     for _ in range(7):
         if d > last_day:
             break
         commits = by_day.get(d)
+        if since is not None and d < since:
+            commits = None
         if commits and not _dir_has_day_file(str(week_dir), d):
             _, block = compose_day_block(
                 worktree=worktree,
@@ -929,6 +942,89 @@ def compose_week_gaps(
     return composed
 
 
+#: A range call spans at most this many days: one git log covers it, but each
+#: day is still a file-existence check and a possible write.
+MAX_RANGE_DAYS = 3660
+
+
+def _write_new(path: Path, text: str) -> bool:
+    """Publish `text` at `path` only if nothing is there; False when it already exists."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        os.link(tmp, path)
+    except FileExistsError:
+        return False
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return True
+
+
+def backfill_range(
+    worktree: Path, *, since: str, through: str, today: str, dry_run: bool = False
+) -> dict:
+    """Backfill every missing daily archive file from `since` to `through`, then
+    write or refresh each touched week's WEEK-SUMMARY.md. Idempotent; `dry_run`
+    reports the same paths and writes nothing.
+
+    One `git log --all` covers the whole range. Days land in
+    `archive/week-changelogs/<monday>/<day>.md`; a day with any `<day>*.md`
+    already in its week dir, or with no commits, is skipped.
+    """
+    last_day = min(today, through)
+    result: dict = {"backfilled": [], "skipped": [], "week_summaries": [], "dry_run": dry_run}
+    if since > last_day:
+        return result
+    by_day = _collect_week_commits(worktree, since, last_day)
+    start = datetime.date.fromisoformat(since)
+    monday = start - datetime.timedelta(days=start.weekday())
+    end = datetime.date.fromisoformat(last_day)
+    archive_root = worktree / "archive" / "week-changelogs"
+    while monday <= end:
+        week = monday.isoformat()
+        composed = compose_week_gaps(
+            worktree, week, today=today, through=last_day, since=since, by_day=by_day
+        )
+        planned: List[str] = []
+        for path, text in composed:
+            if dry_run:
+                planned.append(path.name)
+                result["backfilled"].append(str(path))
+            elif _write_new(path, text):
+                declare_write(path)
+                result["backfilled"].append(str(path))
+            else:
+                result["skipped"].append(str(path))
+        week_dir = archive_root / week
+        if week_dir.is_dir() or planned:
+            summary = write_week_summary(
+                week_dir, week, planned=tuple(planned), dry_run=dry_run
+            )
+            if summary is not None:
+                if not dry_run:
+                    declare_write(summary)
+                result["week_summaries"].append(str(summary))
+        monday += datetime.timedelta(days=7)
+    return result
+
+
+def _resolve_repo_param(repo: str) -> Optional[Path]:
+    """`repo` is a path to a git checkout or a `repos.<key>` registry key; None when neither resolves."""
+    candidate = Path(repo).expanduser()
+    if not candidate.is_dir():
+        from coordinator_core.machine_resolver import registry_get
+
+        registered = registry_get(f"repos.{repo}") if safe_id(repo) else None
+        if not registered:
+            return None
+        candidate = Path(registered).expanduser()
+    common = git_common_dir(str(candidate))
+    return Path(common) if common else None
+
+
 @register_op("changelog.backfill_gaps")
 async def _backfill_gaps_handler(
     params: dict, repo_root: Optional[Path] = None
@@ -943,14 +1039,26 @@ async def _backfill_gaps_handler(
                      Must be the calling session's machine (preserve legacy attribution).
         today (str, YYYY-MM-DD) — override for 'today'; defaults to the coordinator local day.
         through (str, YYYY-MM-DD) — last day the backfill may write; default: today.
+        from (str, YYYY-MM-DD) / to (str, YYYY-MM-DD; alias of `through`) — RANGE: writes
+                     every missing archive/week-changelogs/<monday>/<day>.md in [from, to]
+                     and each touched week's WEEK-SUMMARY.md; `dry_run` lists the paths and
+                     writes nothing; idempotent; `repo` selects the target repo.
         week (str, YYYY-MM-DD, a Monday) — COMPOSE ONLY: returns
                      {composed: [{path, text}]} for archive/week-changelogs/<week>/<day>.md
                      from all refs, header-free, and writes nothing; see `backfill_gaps`.
+        from (str, YYYY-MM-DD; alias `since`) — RANGE: backfills every missing
+                     archive/week-changelogs/<monday>/<day>.md from `from` to
+                     through (alias `to`; default today) and writes or refreshes each touched
+                     week's WEEK-SUMMARY.md; host not required. Idempotent.
+        dry_run (bool) — range mode: report the same paths, write nothing.
+        repo (str) — a git checkout path or a repos.<key> registry key to backfill
+                     instead of the calling repo.
 
     Returns:
-        {backfilled: [str, ...], skipped: [str, ...]}
+        {backfilled: [str, ...], skipped: [str, ...]}; range mode adds
+        week_summaries: [str, ...] and dry_run.
     """
-    if repo_root is None:
+    if repo_root is None and not params.get("repo"):
         return {"backfilled": [], "skipped": [], "error": "backfill_gaps: repo_root required"}
 
     host = params.get("host") or os.environ.get("COORDINATOR_MACHINE", "").strip() or None
@@ -969,9 +1077,12 @@ async def _backfill_gaps_handler(
     # datetime.date.max, spawning a git-log subprocess per iteration, before
     # _next_day finally raises. Calendar-validate via date.fromisoformat to reject
     # this before it ever reaches the loop.
-    through = params.get("through")
+    through = params.get("through", params.get("to"))
     week = params.get("week")
-    for label, value in (("today", today_override), ("through", through), ("week", week)):
+    since = params.get("from", params.get("since"))
+    for label, value in (
+        ("today", today_override), ("through", through), ("week", week), ("from", since),
+    ):
         if value is not None and not _is_iso_date(value):
             return {
                 "backfilled": [],
@@ -984,6 +1095,43 @@ async def _backfill_gaps_handler(
             "skipped": [],
             "error": f"backfill_gaps: 'week' param is not a Monday: {week!r}",
         }
+
+    repo = params.get("repo")
+    if repo is not None:
+        resolved = _resolve_repo_param(str(repo)) if isinstance(repo, str) and repo else None
+        if resolved is None:
+            return {
+                "backfilled": [],
+                "skipped": [],
+                "error": f"backfill_gaps: 'repo' is neither a git checkout nor a repos.<key>: {repo!r}",
+            }
+        repo_root = resolved
+    if repo_root is None:
+        return {"backfilled": [], "skipped": [], "error": "backfill_gaps: repo_root required"}
+
+    if since is not None:
+        worktree = main_worktree_root(repo_root)
+        today = today_override or local_day(str(worktree))
+        last = min(today, through) if through else today
+        span = (datetime.date.fromisoformat(last) - datetime.date.fromisoformat(since)).days
+        if span > MAX_RANGE_DAYS:
+            return {
+                "backfilled": [],
+                "skipped": [],
+                "error": f"backfill_gaps: range {since}..{last} exceeds {MAX_RANGE_DAYS} days",
+            }
+        try:
+            return await asyncio.to_thread(
+                backfill_range,
+                worktree,
+                since=since,
+                through=last,
+                today=today,
+                dry_run=bool(params.get("dry_run", False)),
+            )
+        except Exception as exc:  # advisory — never abort the caller
+            logger.warning("changelog.backfill_gaps: advisory error (non-fatal): %s", exc)
+            return {"backfilled": [], "skipped": [], "error": str(exc)}
 
     # Require explicit host to prevent silent attribution flip to
     #   daemon hostname when caller omits host and COORDINATOR_MACHINE is unset. Matches

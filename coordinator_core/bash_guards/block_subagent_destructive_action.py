@@ -4419,9 +4419,12 @@ def _operand_is_private_temp_index(operand: str) -> bool:
 def _operand_is_in_repo_scratch(operand: str) -> bool:
     """`operand`, resolved through `..`, symlinks and junctions against the payload cwd, lies
     strictly below a `<repo>/scratch` directory. A glob is accepted in the last component only,
-    judged by the directory it expands in. A `cd`, `$`, backtick or `~` leaves it unresolvable."""
+    judged by the directory it expands in. A `cd`, `$`, backtick or `~` leaves it unresolvable.
+    With no payload cwd only an absolute operand is judged, against the machine scratch root."""
     cwd = _RM_CWD.get()
-    if not cwd or operand.startswith("-") or any(c in operand for c in "$`~"):
+    if operand.startswith("-") or any(c in operand for c in "$`~"):
+        return False
+    if not cwd and not os.path.isabs(operand):
         return False
     if any(c in operand for c in "*?[]"):
         head, tail = os.path.split(operand.replace("\\", "/").rstrip("/"))
@@ -4431,11 +4434,17 @@ def _operand_is_in_repo_scratch(operand: str) -> bool:
     if _cd_precedes_delete(_RAW_CMD.get()):
         return False
     try:
-        from coordinator_core.bash_guards.destructive_rm_support import _resolves_under_repo_scratch
+        from coordinator_core.bash_guards.destructive_rm_support import (
+            _resolves_under_machine_scratch_root,
+            _resolves_under_repo_scratch,
+        )
     except ImportError:
         return False
     full = operand if os.path.isabs(operand) else os.path.join(cwd, operand)
-    return _resolves_under_repo_scratch(os.path.realpath(full))
+    resolved = os.path.realpath(full)
+    if not cwd:
+        return _resolves_under_machine_scratch_root(resolved)
+    return _resolves_under_repo_scratch(resolved) or _resolves_under_machine_scratch_root(resolved)
 
 
 def _rm_only_regenerable(cmd: str) -> bool:

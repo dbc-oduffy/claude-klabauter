@@ -120,6 +120,7 @@ VENDORED_SCRIPTS = (
     "unimatrix-peer-agy.py",
     "unimatrix-peer-grok.py",
     "unimatrix-agy-leg.py",
+    "unimatrix-agy-doorbell.py",
     "unimatrix-agy-sidecar.py",
     "unimatrix-peer-router.py",
     "unimatrix-agy-hook-pretool.py",
@@ -3820,8 +3821,13 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         openssh_receive_report(out, openssh_run or subprocess.run)
     dest = Path(dest_dir) if dest_dir else settings_home() / "unimatrix"
     digest_before = router_closure_digest(dest)
+    engine_root, provenance = resolve_engine_root()
+    if not engine_root:
+        print(f"REFUSE: engine root unresolved ({provenance}); the install source is the engine checkout's "
+              f"coordinator/bin, never this script's own directory", file=out)
+        return 7
     try:
-        copied = install_scripts(Path(__file__).resolve().parent, dest)
+        copied = install_scripts(Path(engine_root) / "coordinator" / "bin", dest)
     except FileNotFoundError as exc:
         print(f"REFUSE: {exc}", file=out)
         return 3
@@ -3865,7 +3871,6 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
           f"{authorized_keys_line(dest, file_peer='<box>')}", file=out)
     print(f"authorized_keys line for the far side's control key (full admin; fill <key-body> and {FROM_CIDRS_PLACEHOLDER}): "
           f"{control_authorized_keys_line('<key-body>', [FROM_CIDRS_PLACEHOLDER])}", file=out)
-    engine_root, provenance = resolve_engine_root()
     hp = Path(hooks_path) if hooks_path else agy_hooks_path()
     if want_agy:
         try:

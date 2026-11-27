@@ -19,12 +19,14 @@ from pathlib import Path
 
 DETACHED_ENV = "COORDINATOR_GUARD_DETACHED"
 FAKE_SESSION_ENV = "COORDINATOR_GUARD_FAKE_SESSION"
+AGY_SESSION_ENV = "ANTIGRAVITY_CONVERSATION_ID"
 
 _NO_CONSOLE_WINDOW = 0x08000000
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 _CLAUDE_IMAGES = frozenset({"claude", "claude.exe"})
 _NODE_IMAGES = frozenset({"node", "node.exe"})
+_AGY_IMAGES = frozenset({"agy", "agy.exe"})
 _MAX_DEPTH = 64
 
 
@@ -62,7 +64,15 @@ def _is_claude(image: str, cmdline) -> bool:
     return name in _NODE_IMAGES and "claude" in cmdline().lower()
 
 
-def _win_ancestors_hit(rows, pid: int, cmdline) -> bool:
+def _is_agy(image: str, cmdline) -> bool:
+    return Path(image.replace("\\", "/")).name.lower() in _AGY_IMAGES
+
+
+def _is_session(image: str, cmdline) -> bool:
+    return _is_claude(image, cmdline) or _is_agy(image, cmdline)
+
+
+def _win_ancestors_hit(rows, pid: int, cmdline, match=_is_session) -> bool:
     by_pid = {r.pid: r for r in rows}
     cur = by_pid.get(pid)
     seen = {pid}
@@ -75,7 +85,7 @@ def _win_ancestors_hit(rows, pid: int, cmdline) -> bool:
         # A reused pid is a younger process than its supposed child.
         if parent.create_time and cur.create_time and parent.create_time > cur.create_time:
             return False
-        if _is_claude(parent.image, lambda p=parent.pid: cmdline(p)):
+        if match(parent.image, lambda p=parent.pid: cmdline(p)):
             return True
         seen.add(parent.pid)
         cur = parent
@@ -89,24 +99,38 @@ def _cmdline_of(pid: int, reader=None) -> str:
         return ""
 
 
-def session_parented(*, proc_table=None, platform=None, pid=None, cmdline=None) -> bool:
-    """True when a Claude Code process (claude, or node running claude) is an ancestor.
+def agy_session(*, proc_table=None, platform=None, pid=None, cmdline=None, env=None) -> bool:
+    """True when the agy env marker is set or an agy process is an ancestor."""
+    if (os.environ if env is None else env).get(AGY_SESSION_ENV):
+        return True
+    return session_parented(
+        proc_table=proc_table, platform=platform, pid=pid, cmdline=cmdline, env={}, match=_is_agy, fake=False
+    )
+
+
+def session_parented(
+    *, proc_table=None, platform=None, pid=None, cmdline=None, env=None, match=_is_session, fake=True
+) -> bool:
+    """True when an agent session owns this process: agy env set, or a Claude Code process
+    (claude, or node running claude) or agy process is an ancestor (`match` narrows the image test).
 
     Windows walks the ppid chain over one process-table read; elsewhere psutil parents. Any read
     failure returns False: a guard runs inline rather than refuse on doubt.
     """
-    if os.environ.get(FAKE_SESSION_ENV) == "1":
+    if fake and os.environ.get(FAKE_SESSION_ENV) == "1":
+        return True
+    if (os.environ if env is None else env).get(AGY_SESSION_ENV):
         return True
     plat = sys.platform if platform is None else platform
     me = os.getpid() if pid is None else pid
     try:
         if plat == "win32" or proc_table is not None:
             rows = (proc_table or _host().proc_table)()
-            return _win_ancestors_hit(rows, me, lambda p: _cmdline_of(p, cmdline))
+            return _win_ancestors_hit(rows, me, lambda p: _cmdline_of(p, cmdline), match)
         import psutil
 
         for parent in psutil.Process(me).parents():
-            if _is_claude(parent.name(), lambda p=parent: " ".join(p.cmdline())):
+            if match(parent.name(), lambda p=parent: " ".join(p.cmdline())):
                 return True
         return False
     except Exception:
@@ -175,8 +199,10 @@ def spawn_detached(cmd, log, *, cwd=None, strict, popen=None, platform=None, env
             return spawn().pid
 
 
-def _remedy(prog: str, plat: str, py: str, script: str, argv) -> str:
+def _remedy(prog: str, plat: str, py: str, script: str, argv, agy: bool) -> str:
     args = " ".join(argv)
+    if agy:
+        return f"{prog}: launch it as agy's persistent background task:{py} {script} {args}".rstrip()
     if plat == "win32":
         launch = f"Start-Process -WindowStyle Hidden {py} {script} {args}"
     else:
@@ -196,10 +222,10 @@ def ensure_detached(
     proc_table=None,
     out=None,
     err=None,
-):
+) -> int | None:
     """Return None to run inline, 0 after relaunching detached, or CANNOT_DETACH_EXIT.
 
-    Inline when the marker is set or no Claude Code ancestor exists. Otherwise relaunch
+    Inline when the marker is set or no Claude Code or agy session owns the process. Otherwise relaunch
     `[sys.executable, script, *argv]` with the marker, print `DETACHED <prog> pid=N log=PATH`,
     and return 0; the caller must exit promptly. A failed strict spawn prints one remedy line.
     """
@@ -207,7 +233,7 @@ def ensure_detached(
     if env.get(DETACHED_ENV):
         return None
     plat = sys.platform if platform is None else platform
-    if not session_parented(proc_table=proc_table, platform=plat):
+    if not session_parented(proc_table=proc_table, platform=plat, env=env):
         return None
     script = str(Path(sys.argv[0] if script is None else script).resolve())
     argv = list(argv)
@@ -222,7 +248,8 @@ def ensure_detached(
         env=child_env,
     )
     if pid is None:
-        print(_remedy(prog, plat, py, script, argv), file=err or sys.stderr)
+        agy = agy_session(proc_table=proc_table, platform=plat, env=env)
+        print(_remedy(prog, plat, py, script, argv, agy), file=err or sys.stderr)
         return _host().CANNOT_DETACH_EXIT
     print(f"DETACHED {prog} pid={pid} log={log}", file=out or sys.stdout)
     return 0
