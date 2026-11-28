@@ -802,6 +802,17 @@ def halted_run_named(repo_root: Path, run_id: object, sizing_rel: str) -> Option
     return run_id
 
 
+def own_halt_named(repo_root: Path, run_id: object, sizing_rel: str) -> bool:
+    """True when `run_id` is a halted run bound to a sizing of `sizing_rel`'s stem; rebinds a moved path."""
+    if not isinstance(run_id, str) or not run_id.startswith(("warp-", "ask-")) or not safe_id(run_id):
+        return False
+    marker = _read(Path(repo_root) / RECORD_DIR_ROOT / run_id)
+    bound = marker.get("sizing_rel") if marker else None
+    if not isinstance(bound, str) or PurePosixPath(_norm(bound)).stem != PurePosixPath(_norm(sizing_rel)).stem:
+        return False
+    return halted_run_named(repo_root, run_id, sizing_rel) is not None
+
+
 class AmbiguousHaltedRuns(ValueError):
     """Several halted runs of one sizing and none is the caller's: `candidates` names every one."""
 
@@ -1220,6 +1231,15 @@ def record_released(record_dir: Path, sha: str, reason: str) -> bool:
         return False
     _write(Path(record_dir), {**marker, HALT_RELEASED_FIELD: {"reason": reason, "sha": sha}})
     return True
+
+
+def mark_halted(record_dir: Path, sizing_rel: str, marker: Optional[dict] = None) -> None:
+    """Write `marker` (or a fresh one) as `halted` and index the run under `sizing_rel`; OSError propagates."""
+    record_dir = Path(record_dir)
+    norm = _norm(sizing_rel)
+    payload = {**marker, "status": STATUS_HALTED} if marker is not None else {"status": STATUS_HALTED, "sizing_rel": norm}
+    _write(record_dir, payload)
+    _index_call("add_run", record_dir, halted_withheld(record_dir), sizing_rel=norm)
 
 
 def mark_resumed(record_dir: Path) -> bool:

@@ -567,6 +567,20 @@ def _staged_worker_binding(result, owner):
     return {"depth": 1, "script_path": str(Path(owner["repo_root"]) / path), "script_sha256": digest}
 
 
+def _pending_staged_twin(result, staged_binding, repo_root: Path, run_id: str) -> str | None:
+    """The host-issued twin digest a `stage_pending` result hands to, else None (unbound: the fire halts)."""
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
+
+    pending = result.get("stage_pending") if isinstance(result, dict) else None
+    handle = pending.get("handle") if isinstance(pending, dict) else None
+    if staged_binding is None or not isinstance(handle, dict) or not isinstance(handle.get("sha256"), str):
+        return None
+    rel = staged_twin_rel(run_id, handle["sha256"])
+    if pending.get("twin_path", rel) != rel or staged_binding["script_path"] != str(repo_root / rel):
+        return None
+    return staged_binding["script_sha256"]
+
+
 def _is_staged_commit_binding(binding, staged_binding, root_binding=None) -> bool:
     """A commit worker names the gate-issued staged script, or the depth-0 root that issued it."""
     if binding == staged_binding:
@@ -1115,7 +1129,7 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
             process = subprocess.Popen([shutil.which('node'), str(Path(__file__).with_name('runtime.mjs')), str(script), str(args_path)],
                                        cwd=record['repo_root'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                        stderr=stderr, text=True, encoding='utf-8', **kwargs)
-            timer = threading.Timer(max(.1, deadline-time.monotonic()), process.kill)
+            timer = threading.Timer(max(.1, deadline-time.monotonic()), lambda: process.kill())
             timer.daemon = True
             timer.start()
             gate_lock = threading.Lock()
@@ -1335,32 +1349,50 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                     if process.poll() is None:
                         process.stdin.write(json.dumps(reply) + '\n')
                         process.stdin.flush()
-            journal({'type': 'started', 'pid': process.pid, 'script_path': str(script)})
             child_workflows = record.setdefault('child_workflows', [])
-            with ThreadPoolExecutor(max_workers=8) as workers:
-                pending_agents = []
-                try:
-                    for line in process.stdout:
-                        event = json.loads(line)
-                        journal(event)
-                        if event.get('event') == 'workflow-start':
-                            child_path = event.get('script_path')
-                            if isinstance(child_path, str) and child_path not in child_workflows:
-                                child_workflows.append(child_path)
-                        if event['type'] in ('agent', 'invoke'):
-                            pending_agents.append(workers.submit(respond, event))
-                        elif event['type'] == 'result':
-                            result, terminal = event.get('result'), True
-                        elif event['type'] == 'error':
-                            error = event.get('error', 'runtime failed')
-                    code = process.wait()
-                finally:
-                    # A timeout or malformed runtime event must not drain the
-                    # entire queued fan-out after the workflow has already died.
-                    for future in pending_agents:
-                        future.cancel()
-            if code or error or not terminal:
-                raise RuntimeError(error or f'runtime exited {code} without a completed result')
+
+            def pump() -> None:
+                nonlocal result, terminal, error
+                journal({'type': 'started', 'pid': process.pid, 'script_path': str(script)})
+                with ThreadPoolExecutor(max_workers=8) as workers:
+                    pending_agents = []
+                    try:
+                        for line in process.stdout:
+                            event = json.loads(line)
+                            journal(event)
+                            if event.get('event') == 'workflow-start':
+                                child_path = event.get('script_path')
+                                if isinstance(child_path, str) and child_path not in child_workflows:
+                                    child_workflows.append(child_path)
+                            if event['type'] in ('agent', 'invoke'):
+                                pending_agents.append(workers.submit(respond, event))
+                            elif event['type'] == 'result':
+                                result, terminal = event.get('result'), True
+                            elif event['type'] == 'error':
+                                error = event.get('error', 'runtime failed')
+                        code = process.wait()
+                    finally:
+                        # A timeout or malformed runtime event must not drain the
+                        # entire queued fan-out after the workflow has already died.
+                        for future in pending_agents:
+                            future.cancel()
+                if code or error or not terminal:
+                    raise RuntimeError(error or f'runtime exited {code} without a completed result')
+
+            pump()
+            from coordinator_core.ops.dispatch_emit.fan_launcher import MAX_STAGE_ROUNDS
+            for _ in range(MAX_STAGE_ROUNDS):
+                twin_sha = _pending_staged_twin(result, staged_binding, Path(record['repo_root']),
+                                                {**record, **record.get('emitted_root', {})}.get('run_id'))
+                if twin_sha is None:
+                    break
+                terminal, error = False, None
+                process = subprocess.Popen(
+                    [shutil.which('node'), str(Path(__file__).with_name('runtime.mjs')),
+                     staged_binding['script_path'], str(args_path), '--staged-sha', twin_sha],
+                    cwd=record['repo_root'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=stderr, text=True, encoding='utf-8', **kwargs)
+                pump()
         record.update(result=result)
         # A wake digest may still ask the terminal handler to record halt
         # artifacts. Preserve that authored action before classifying its outcome.

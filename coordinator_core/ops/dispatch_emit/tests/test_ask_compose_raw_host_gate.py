@@ -422,7 +422,7 @@ def test_native_deferred_chain_uses_host_adoption_only_for_initial_root(emitted,
     child = tmp_path / "chained.workflow.mjs"
     child.write_text("export const meta = {}; return {done: true};", encoding="utf-8")
     source = "export const meta = {}; return " + json.dumps({
-        CHAIN_HANDOFF_KEY: {"path": str(child), "run_id": "chained"},
+        CHAIN_HANDOFF_KEY: {"path": str(child), "run_id": "chained", "chain_hop": True},
     }) + ";"
     runtime = Path(headless.__file__).with_name("runtime.mjs")
     program = tmp_path / "chain.mjs"

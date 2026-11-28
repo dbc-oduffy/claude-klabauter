@@ -14,6 +14,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -572,6 +576,103 @@ def test_main_exits_zero_even_on_unexpected_exception(tool, monkeypatch, tmp_pat
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "unexpected error" in out
+
+
+def _plugin_cache_copy(tmp_path):
+    """The sequencer laid out as a versioned plugin-cache copy: its bin/lib and lib siblings, no engine."""
+    coordinator = Path(__file__).resolve().parents[2]
+    cache = tmp_path / "plugin-cache" / "coordinator" / "9.9.9"
+    shutil.copytree(coordinator / "bin" / "lib", cache / "bin" / "lib", ignore=shutil.ignore_patterns("__pycache__"))
+    (cache / "lib").mkdir(parents=True)
+    shutil.copy2(coordinator / "lib" / "win_portability.py", cache / "lib" / "win_portability.py")
+    shutil.copy2(_TOOL, cache / "bin" / _TOOL.name)
+    assert not (cache.parent / "coordinator_core").exists() and not (cache / "coordinator_core").exists()
+    return cache / "bin" / _TOOL.name
+
+
+def _recording_cli(directory, verdict):
+    body = json.dumps({"land": {"verdict": verdict}})
+    if os.name == "nt":
+        exe = directory / "example-retrieval-repo-cli.cmd"
+        exe.write_text(f'@echo off\r\necho %*>>"%~dp0calls.log"\r\necho {body}\r\n', encoding="utf-8")
+    else:
+        exe = directory / "example-retrieval-repo-cli"
+        exe.write_text(f"#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/calls.log\"\necho '{body}'\n", encoding="utf-8")
+        exe.chmod(0o755)
+    return exe
+
+
+def test_plugin_cache_copy_resolves_the_engine_and_reaches_pull_repo_bundle(tmp_path):
+    script = _plugin_cache_copy(tmp_path)
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    exe = _recording_cli(tmp_path, "landed")
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["COORDINATOR_ENGINE_ROOT"] = str(Path(__file__).resolve().parents[3])
+
+    proc = subprocess.run(
+        [sys.executable, str(script), "--ceremony", "handoff", "--repo-root", str(repo), "--cli", str(exe)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+        cwd=str(tmp_path),
+    )
+
+    assert "No module named" not in proc.stdout + proc.stderr
+    assert proc.stdout.strip().startswith("publish-repo-bundle: landed"), proc.stdout + proc.stderr
+    logged = (tmp_path / "calls.log").read_text(encoding="utf-8")
+    assert "pull-repo-bundle" in logged and "scip-rebuild" not in logged
+    assert (hub_for_common(repo / ".git") / "publish-repo-bundle-last.json").is_file()
+
+
+def test_plugin_cache_copy_without_an_engine_fails_loud_not_with_a_bare_import_error(tmp_path):
+    script = _plugin_cache_copy(tmp_path)
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    exe = _recording_cli(tmp_path, "landed")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "COORDINATOR_ENGINE_ROOT")}
+    env["COORDINATOR_SETTINGS_HOME"] = str(tmp_path / "empty-settings-home")
+
+    proc = subprocess.run(
+        [sys.executable, str(script), "--ceremony", "handoff", "--repo-root", str(repo), "--cli", str(exe)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+        cwd=str(tmp_path),
+    )
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "No module named 'coordinator_core'" not in proc.stdout + proc.stderr
+    assert proc.stdout.strip().startswith("publish-repo-bundle: engine-unresolved -- ")
+    assert len(proc.stdout.strip().splitlines()) == 1
+
+
+def test_main_exits_one_with_a_named_line_when_the_engine_does_not_resolve(tool, monkeypatch, tmp_path, capsys):
+    def _no_engine():
+        raise tool.EngineUnresolved("no engine on any rung")
+
+    monkeypatch.setattr(tool, "_engine", _no_engine)
+    monkeypatch.setattr(tool, "_git_common_dir", lambda root: None)
+    cli = tmp_path / "cli"
+    cli.write_text("", encoding="utf-8")
+    exit_code = tool.main(["--ceremony", "handoff", "--repo-root", str(tmp_path), "--cli", str(cli)])
+    assert exit_code == 1
+    assert capsys.readouterr().out.strip() == "publish-repo-bundle: engine-unresolved -- no engine on any rung"
+
+
+def test_engine_raises_unresolved_when_the_ladder_misses(tool, monkeypatch):
+    monkeypatch.syspath_prepend(str(_TOOL.parent / "lib"))
+    import cc_invoke
+
+    def _miss(script_file):
+        raise RuntimeError("every rung missed")
+
+    monkeypatch.setattr(tool, "_ENGINE_READY", False)
+    monkeypatch.setattr(cc_invoke, "require_engine_on_path", _miss)
+    with pytest.raises(tool.EngineUnresolved, match="every rung missed"):
+        tool._engine()
 
 
 def test_main_passes_cli_and_repo_through(tool, monkeypatch, tmp_path):

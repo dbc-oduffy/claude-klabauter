@@ -3060,7 +3060,7 @@ def _wg_oss_mirror_memo_delivery_fire(
 ) -> Dict[str, Any]:
     from coordinator_core.write_guards import block_oss_mirror_memo_delivery as guard_mod
 
-    mp.setattr(guard_mod, "read_publish_mirrors", lambda: {"m": {"path": str(scratch_dir)}})
+    mp.setattr(guard_mod.publish_round, "live_round_mirrors", lambda: [scratch_dir])
     return {
         "tool_name": "Write",
         "tool_input": {

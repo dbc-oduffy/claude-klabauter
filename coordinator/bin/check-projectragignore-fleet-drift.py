@@ -110,29 +110,27 @@ def _registry_paths() -> list[Path]:
 
 
 def _load_repo_roots() -> dict[str, Path]:
-    """Flat `"repos.<slug>" = "<path>"` keys, overlay winning. Empty values are declarations
-    with no per-machine value and are skipped, not reported as missing repos.
-
-    A nested `[repos]` table raises rather than silently yielding nothing: a registry written
-    that way would drop every repo and be indistinguishable from a registry with no repos at
-    all, which is the same read-as-empty-and-report-success trap this whole workstream was about.
-    """
+    """Repo roots from the nested `[repos]` table and flat `"repos.<slug>"` keys, overlay
+    winning, matching `machine-local get`. Empty values are declarations with no per-machine
+    value and are skipped, not reported as missing repos."""
     merged: dict[str, str] = {}
     for path in _registry_paths():
         if not path.is_file():
             continue
         with path.open("rb") as handle:
             data = tomllib.load(handle)
-        if isinstance(data.get("repos"), dict):
-            raise ValueError(
-                f"{path} declares a nested [repos] table; this reader expects flat "
-                f'"{_REPO_KEY_PREFIX}<slug>" keys and would silently see no repos'
-            )
-        for key, value in data.items():
-            if not isinstance(key, str) or not key.startswith(_REPO_KEY_PREFIX):
-                continue
+        entries: list[tuple[str, object]] = []
+        nested = data.get("repos")
+        if isinstance(nested, dict):
+            entries.extend((str(slug), value) for slug, value in nested.items())
+        entries.extend(
+            (key[len(_REPO_KEY_PREFIX):], value)
+            for key, value in data.items()
+            if isinstance(key, str) and key.startswith(_REPO_KEY_PREFIX)
+        )
+        for slug, value in entries:
             if isinstance(value, str) and value.strip():
-                merged[key[len(_REPO_KEY_PREFIX):]] = value.strip()
+                merged[slug] = value.strip()
     return {slug: Path(raw) for slug, raw in sorted(merged.items())}
 
 

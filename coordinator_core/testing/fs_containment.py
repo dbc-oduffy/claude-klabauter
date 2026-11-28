@@ -380,6 +380,15 @@ def _rmtree(path: Path) -> None:
         print(f"fs_containment: {path} left for the sweep", file=sys.stderr)
 
 
+def remove_or_tombstone(path: Path) -> None:
+    if path.exists():
+        _rmtree(path)
+    if path.exists():
+        from coordinator_core.ops.fleet.pytest_basetemp_sweep import tombstone_one
+
+        tombstone_one(path)
+
+
 def _prune_kept(parent: Path) -> None:
     from coordinator_core.temp_layout import retain_latest
 
@@ -401,12 +410,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus) -> None:
         if hasattr(session.config, "workerinput") or minted is None:
             return
         if exitstatus in (0, 5):
-            if minted.exists():
-                _rmtree(minted)
-            if minted.exists():
-                from coordinator_core.ops.fleet.pytest_basetemp_sweep import tombstone_one
-
-                tombstone_one(minted)
+            remove_or_tombstone(minted)
         elif minted.is_dir():
             (minted / _KEPT_MARKER).touch()
             _prune_kept(minted.parent)

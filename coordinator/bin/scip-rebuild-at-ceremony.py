@@ -13,18 +13,19 @@ rewritten. A missing key skips only on a box without example-retrieval-repo (`re
 with example-retrieval-repo registered, it -- like a key naming a file that no longer exists -- prints a `defect -- <reason>`
 line instead, still exiting 0.
 
-Detached, best-effort, ALWAYS exits 0. The detached child is now
+Detached, best-effort, exits 0 except when no engine resolves (one
+`scip-rebuild: engine-unresolved -- <reason>` line, exit 1). The detached child is now
 `publish-repo-bundle-at-ceremony.py` (docs/plans/2026-09-26-wire-repo-index-bundle-verbs.md
 Design SS Ceremony, row C3), a sequencer that runs the rebuild itself, waits on it, and
 publishes the freshly-rebuilt structural index via example-retrieval-repo's `publish-repo-bundle`
 verb only after that rebuild exits 0 -- so the chain now publishes what it rebuilt, still
 detached from this process, still best-effort, and still never a ceremony gate: this
 script's own job ends at a successful spawn, not at the child's exit, exactly as before.
-Never fails a ceremony: every reachable error path prints one `skipped -- <reason>` (or,
+Never fails a ceremony beyond that one case: every other reachable error path prints one `skipped -- <reason>` (or,
 for a broken registry, `defect -- <reason>`) line and exits 0, including a resolution failure, a bad ceremony name, or a spawn failure.
 It also skips when available memory is below the rebuild's floor (default 8 GB; a nan,
 infinite or negative env floor falls back to the default); a host that cannot report
-available memory spawns as before, but an absent engine prints a `defect` line and does not spawn.
+available memory spawns as before, but an engine without the sampler prints a `defect` line and does not spawn.
 
 `run()` additionally prints, as a second line, the `line` field of the PRIOR publish
 attempt's record (`<git-common-dir>/coordinator-sessions/publish-repo-bundle-last.json`,
@@ -61,7 +62,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _THIS = Path(__file__).resolve()
-_REPO_ROOT = _THIS.parent.parent.parent
 #: Sibling lib/: coordinator/lib in this tree, lib/ in the published plugin layout.
 _LIB_DIR = _THIS.parent.parent / "lib"
 
@@ -97,21 +97,20 @@ _MIN_AVAILABLE_GB_ENV = "COORDINATOR_SCIP_REBUILD_MIN_AVAILABLE_GB"
 
 
 class EngineUnavailable(RuntimeError):
-    """The coordinator engine that supplies the memory sampler did not resolve."""
+    """The resolved engine does not supply the memory sampler."""
+
+
+class EngineUnresolved(RuntimeError):
+    """Every rung of the engine resolve ladder missed."""
 
 
 def available_memory_gb() -> float | None:
     """Physical memory available to a new process, in GB; None when this host can't say.
 
-    Raises EngineUnavailable when the engine itself is absent -- the gate cannot run, which
-    is a defect, not "can't say"."""
+    Raises EngineUnresolved when no engine resolves, EngineUnavailable when the resolved
+    engine lacks the sampler -- the gate cannot run, which is a defect, not "can't say"."""
+    _engine()
     try:
-        bin_lib = str(Path(__file__).resolve().parent / "lib")
-        if bin_lib not in sys.path:
-            sys.path.insert(0, bin_lib)
-        from cc_invoke import require_engine_on_path
-
-        require_engine_on_path(__file__)
         from coordinator_core.telemetry import host_sampler
     except Exception as exc:  # noqa: BLE001
         raise EngineUnavailable(str(exc) or type(exc).__name__) from exc
@@ -239,10 +238,29 @@ def _spawn_detached(argv: list[str], cwd: Path, log_path: Path) -> bool:
         log_handle.close()
 
 
+_ENGINE_READY = False
+
+
+def _engine() -> None:
+    """Put the engine on `sys.path` via `cc_invoke.require_engine_on_path`, once per process."""
+    global _ENGINE_READY
+    if _ENGINE_READY:
+        return
+    bin_lib = str(_THIS.parent / "lib")
+    if bin_lib not in sys.path:
+        sys.path.insert(0, bin_lib)
+    from cc_invoke import require_engine_on_path
+
+    try:
+        require_engine_on_path(__file__)
+    except (RuntimeError, OSError) as exc:
+        raise EngineUnresolved(str(exc) or type(exc).__name__) from exc
+    _ENGINE_READY = True
+
+
 def _hub(common: Path) -> Path:
     """The session hub for a git common dir, via the one shared resolver."""
-    if str(_REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(_REPO_ROOT))
+    _engine()
     from coordinator_core.session_hub_path import hub_for_common
 
     return hub_for_common(common)
@@ -287,6 +305,8 @@ def _running_rebuild_pid(common_dir: Path) -> int | None:
         import psutil
 
         return owner if psutil.pid_exists(owner) else None
+    except EngineUnresolved:
+        raise
     except Exception:  # noqa: BLE001
         return None
 
@@ -323,8 +343,8 @@ def _default_repo_root() -> Path:
 
 
 def run(ceremony: str, repo_root: Path) -> str:
-    """Resolve, validate, and spawn. Returns the one line to print -- never
-    raises; every failure path is a `skipped -- <reason>` string."""
+    """Resolve, validate, and spawn. Returns the one line to print; every failure path
+    is a `skipped -- <reason>` string, except that EngineUnresolved propagates to `main`."""
     if not _CEREMONY_NAME_RE.match(ceremony):
         return f"scip-rebuild: skipped -- invalid --ceremony name {ceremony!r} (must match [a-z0-9][a-z0-9_-]*)"
 
@@ -392,6 +412,10 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = Path(args.repo_root).resolve() if args.repo_root else _default_repo_root()
     try:
         print(run(args.ceremony, repo_root))
+    except EngineUnresolved as exc:
+        reason = next((s for s in (ln.strip() for ln in str(exc).splitlines()) if s), "")
+        print(f"scip-rebuild: engine-unresolved -- {reason or exc}")
+        return 1
     except Exception as exc:  # best-effort: never fail the ceremony that called this
         print(f"scip-rebuild: skipped -- unexpected error: {exc}")
     return 0

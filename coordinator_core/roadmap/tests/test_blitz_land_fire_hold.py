@@ -135,6 +135,13 @@ def test_repoint_fire_hold_cites_the_canonical_emission(tmp_path):
     assert not bl.repoint_fire_hold(root, rel, "scratch/warp/ask-1.workflow.mjs.emitted.json")
 
 
+def test_repoint_fire_hold_skips_an_archived_baton_without_creating_it(tmp_path):
+    root = _repo(tmp_path)
+    rel = "state/handoffs/2026-11/gone.md"
+    assert not bl.repoint_fire_hold(root, rel, "x.json")
+    assert not (root / rel).exists()
+
+
 def test_repoint_fire_hold_leaves_a_human_hold_and_no_hold_alone(tmp_path):
     root = _repo(tmp_path)
     human = _baton(root, "s2", HUMAN)

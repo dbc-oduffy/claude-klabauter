@@ -309,7 +309,8 @@ def repoint_fire_hold(worktree_root: Path, baton_path: str, cite: str) -> bool:
     """Re-cite an existing fire hold at `cite`, the emission that is now canonical. True iff it wrote.
 
     A later emission over the same baton supersedes the one the hold cites; without this
-    the hold names a script nothing will fire. A human's hold, or no hold, is left alone.
+    the hold names a script nothing will fire. A human's hold, no hold, or a baton that
+    is gone (archived) is left alone.
     """
 
     def _repoint(old: str) -> str:
@@ -328,7 +329,7 @@ def repoint_fire_hold(worktree_root: Path, baton_path: str, cite: str) -> bool:
 
     try:
         locked_rmw(worktree_root / baton_path, _repoint, repo_root=worktree_root)
-    except MutateAbort:
+    except (MutateAbort, FileNotFoundError):
         return False
     return True
 

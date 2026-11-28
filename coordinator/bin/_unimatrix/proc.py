@@ -630,7 +630,19 @@ def codex_holder_live(row, pid_alive_fn=None, proc_start_fn=None, presence_held_
     if not (presence_held_fn or agy_presence_held)(target, presence_dir=lock_dir):
         return False
     holders = (lock_pids_fn or lock_holder_pids)(lock_dir / f"{target}.lock")
-    return any((cli_fn or codex_cli_process)(p) for p in holders or ())
+    return any((cli_fn or codex_cli_process)(p)
+               or (p == pid and _argv_is_codex_app_server((argv_fn or _process_argv)(p))) for p in holders or ())
+
+
+def _argv_is_codex_app_server(argv) -> bool:
+    """True for a `codex app-server` image: the managed daemon a Codex 0.172+ CLI starts, which writes its sessions' threads.
+
+    invariant: an app-server backs a face only as its own recorded holder AND the thread's writer-lock holder; an
+    app-server that picked up a dead CLI face's thread lock does not (60e427217a)."""
+    if not argv or "app-server" not in argv[1:]:
+        return False
+    image = os.path.basename(argv[0].replace("\\", "/")).lower()
+    return image in ("codex", "codex.exe")
 
 
 def _codex_peer_rows(home=None) -> "list | None":

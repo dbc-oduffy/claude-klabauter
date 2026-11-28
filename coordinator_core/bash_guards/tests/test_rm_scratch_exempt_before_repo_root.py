@@ -70,3 +70,58 @@ def test_same_repo_root_outside_scratch_is_denied_with_move_remedy(repo, tmp_pat
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "ROOT of a git repository" in reason
     assert "move it under <repo>/scratch, then delete it there" in reason
+
+
+@pytest.fixture()
+def machine_scratch(tmp_path: Path, monkeypatch) -> Path:
+    from coordinator_core import machine_resolver
+
+    root = tmp_path / "machine-scratch"
+    root.mkdir()
+    monkeypatch.setattr(
+        machine_resolver,
+        "registry_get",
+        lambda key: str(root) if key == "paths.scratch_root" else None,
+    )
+    return root
+
+
+@pytest.mark.parametrize(
+    "verb",
+    ["rm -rf {p}", "Remove-Item -Recurse -Force {p}"],
+    ids=["rm", "remove-item"],
+)
+def test_clone_root_under_machine_scratch_root_passes_in_place(repo, machine_scratch, verb) -> None:
+    clone = machine_scratch / "project-rag" / "w4-clone"
+    _init_with_commit(clone)
+    (clone / "dirty.txt").write_text("uncommitted\n")
+    assert _check(verb.format(p=clone.as_posix())) is None
+
+
+@pytest.mark.parametrize(
+    "verb",
+    ["rm -rf {p}", "Remove-Item -Recurse -Force {p}"],
+    ids=["rm", "remove-item"],
+)
+def test_clone_root_outside_machine_scratch_root_stays_denied(repo, machine_scratch, tmp_path, verb) -> None:
+    other = tmp_path / "elsewhere" / "w4-clone"
+    _init_with_commit(other)
+    out = _check(verb.format(p=other.as_posix()))
+    assert out is not None
+    assert "ROOT of a git repository" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_machine_scratch_root_itself_stays_denied(repo, machine_scratch) -> None:
+    _init_with_commit(machine_scratch)
+    out = _check(f"rm -rf {machine_scratch.as_posix()}")
+    assert out is not None
+    assert "ROOT of a git repository" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_unset_machine_scratch_root_denies_clone(repo, tmp_path, monkeypatch) -> None:
+    from coordinator_core import machine_resolver
+
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: None)
+    clone = tmp_path / "machine-scratch" / "project-rag" / "w4-clone"
+    _init_with_commit(clone)
+    assert _check(f"rm -rf {clone.as_posix()}") is not None

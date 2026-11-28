@@ -170,6 +170,23 @@ def test_happy_path_spawns_with_right_argv_and_cwd(tool, monkeypatch, tmp_path):
     assert str(captured["log_path"]) in result
 
 
+def test_main_with_ceremony_flag_spawns_exactly_one_detached_child_and_exits_zero(tool, monkeypatch, tmp_path):
+    """The pull-first step lives inside the one detached sequencer: the hook still spawns a
+    single child with the unchanged `--ceremony` argv and returns 0."""
+    fake_exe = tmp_path / "example-retrieval-repo-cli.exe"
+    fake_exe.write_text("", encoding="utf-8")
+    monkeypatch.setattr(tool, "_resolve_registry_key", lambda key: (str(fake_exe), None))
+    spawned = []
+    monkeypatch.setattr(tool, "_spawn_detached", lambda argv, cwd, log_path: spawned.append(argv) or True)
+    monkeypatch.setattr(tool, "_git_common_dir", lambda repo_root: None)
+
+    repo_root = tmp_path / "target-repo"
+    repo_root.mkdir()
+    assert tool.main(["--ceremony", "merging-to-main", "--repo-root", str(repo_root)]) == 0
+    assert len(spawned) == 1
+    assert spawned[0][2:4] == ["--ceremony", "merging-to-main"]
+
+
 def test_happy_path_never_waits_on_the_spawned_child(tool, monkeypatch, tmp_path):
     """`run()` returns immediately once `_spawn_detached` reports success --
     it never calls `.wait()`/`.communicate()` on anything, since `_spawn_detached`
@@ -371,6 +388,91 @@ def test_available_memory_gb_raises_when_engine_does_not_resolve(monkeypatch):
         mod.available_memory_gb()
 
 
+def test_available_memory_gb_raises_unresolved_when_no_engine_resolves(monkeypatch):
+    mod = _load()
+    monkeypatch.syspath_prepend(str(_TOOL.parent / "lib"))
+    import cc_invoke
+
+    def _miss(script_file):
+        raise RuntimeError("every rung missed")
+
+    monkeypatch.setattr(mod, "_ENGINE_READY", False)
+    monkeypatch.setattr(cc_invoke, "require_engine_on_path", _miss)
+    with pytest.raises(mod.EngineUnresolved, match="every rung missed"):
+        mod.available_memory_gb()
+
+
+def test_main_exits_one_with_a_named_line_when_the_engine_does_not_resolve(tool, monkeypatch, tmp_path, capsys):
+    spawned: list = []
+    _spawnable(tool, monkeypatch, tmp_path, spawned)
+
+    def _unresolved():
+        raise tool.EngineUnresolved("no engine on any rung")
+
+    monkeypatch.setattr(tool, "available_memory_gb", _unresolved)
+    exit_code = tool.main(["--ceremony", "handoff", "--repo-root", str(tmp_path)])
+    assert exit_code == 1
+    assert capsys.readouterr().out.strip() == "scip-rebuild: engine-unresolved -- no engine on any rung"
+    assert spawned == []
+
+
+def test_main_keeps_exit_zero_for_an_unexpected_error(tool, monkeypatch, tmp_path, capsys):
+    def _boom(ceremony, repo_root):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(tool, "run", _boom)
+    assert tool.main(["--ceremony", "handoff", "--repo-root", str(tmp_path)]) == 0
+    assert "skipped -- unexpected error" in capsys.readouterr().out
+
+
+def _plugin_cache_script(tmp_path: Path) -> Path:
+    import shutil
+
+    coordinator = _TOOL.parents[1]
+    cache = tmp_path / "plugin-cache" / "coordinator" / "9.9.9"
+    shutil.copytree(coordinator / "bin" / "lib", cache / "bin" / "lib", ignore=shutil.ignore_patterns("__pycache__"))
+    (cache / "lib").mkdir(parents=True)
+    shutil.copy2(coordinator / "lib" / "win_portability.py", cache / "lib" / "win_portability.py")
+    script = cache / "bin" / _TOOL.name
+    shutil.copy2(_TOOL, script)
+    assert not (cache.parent / "coordinator_core").exists() and not (cache / "coordinator_core").exists()
+    return script
+
+
+def test_plugin_cache_copy_without_an_engine_exits_nonzero_with_a_named_line(tmp_path):
+    import os
+    import subprocess
+
+    script = _plugin_cache_script(tmp_path)
+
+    exe = tmp_path / ("example-retrieval-repo-cli.exe" if sys.platform == "win32" else "example-retrieval-repo-cli")
+    exe.write_text("", encoding="utf-8")
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    code = (
+        "import importlib.util, sys\n"
+        "spec = importlib.util.spec_from_file_location('_scip_cache_copy', sys.argv[1])\n"
+        "m = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(m)\n"
+        "m._resolve_registry_key = lambda key: (sys.argv[3], None)\n"
+        "sys.exit(m.main(['--ceremony', 'handoff', '--repo-root', sys.argv[2]]))\n"
+    )
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "COORDINATOR_ENGINE_ROOT")}
+    env["COORDINATOR_SETTINGS_HOME"] = str(tmp_path / "empty-settings-home")
+    proc = subprocess.run(
+        [sys.executable, "-c", code, str(script), str(repo), str(exe)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+        cwd=str(tmp_path),
+    )
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout.strip().startswith("scip-rebuild: engine-unresolved -- ")
+    assert len(proc.stdout.strip().splitlines()) == 1
+
+
 def test_available_memory_gb_reads_the_fleet_avail_mb_helper(monkeypatch):
     from coordinator_core.telemetry import host_sampler
 
@@ -388,3 +490,74 @@ def test_available_memory_gb_none_when_helper_cannot_say(monkeypatch):
 def test_available_memory_reads_this_host():
     value = _load().available_memory_gb()
     assert value is None or value > 0
+
+
+def test_plugin_cache_copy_hub_resolves_the_engine_without_a_repo_sibling(tmp_path):
+    import os
+    import subprocess
+
+    script = _plugin_cache_script(tmp_path)
+
+    common = tmp_path / "common"
+    code = (
+        "import importlib.util, sys\n"
+        "spec = importlib.util.spec_from_file_location('_scip_cache_copy', sys.argv[1])\n"
+        "m = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(m)\n"
+        "from pathlib import Path\n"
+        "print(m._hub(Path(sys.argv[2])))\n"
+        "print(m._hub(Path(sys.argv[2])))\n"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["COORDINATOR_ENGINE_ROOT"] = str(_TOOL.parents[2])
+    proc = subprocess.run(
+        [sys.executable, "-c", code, str(script), str(common)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+        cwd=str(tmp_path),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    lines = proc.stdout.strip().splitlines()
+    assert lines == [str(hub_for_common(common))] * 2
+
+
+def _sequencer(tool):
+    spec = importlib.util.spec_from_file_location("_publish_repo_bundle_seq", tool._PUBLISH_SEQUENCER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _sequencer_calls(tool, monkeypatch, tmp_path, pull):
+    """Drives the sequencer the ceremony spawns, recording each CLI verb in call order."""
+    seq = _sequencer(tool)
+    cli = tmp_path / "example-retrieval-repo-cli.exe"
+    cli.write_text("", encoding="utf-8")
+    verbs: list[str] = []
+
+    def fake(argv, cwd, timeout):
+        verbs.append(argv[1])
+        return pull if argv[1] == "pull-repo-bundle" else (0, "", "")
+
+    monkeypatch.setattr(seq, "_run_and_wait", fake)
+    monkeypatch.setattr(seq, "_git_common_dir", lambda root: tmp_path / "common")
+    monkeypatch.setattr(seq, "_current_head", lambda root: "deadbeef")
+    seq.run("handoff", tmp_path, cli_override=str(cli))
+    return verbs
+
+
+def test_ceremony_child_pulls_first_and_a_landed_pull_skips_rebuild(tool, monkeypatch, tmp_path):
+    landed = (0, json.dumps({"land": {"verdict": "landed"}}), "")
+    assert _sequencer_calls(tool, monkeypatch, tmp_path, landed) == ["pull-repo-bundle"]
+
+
+def test_ceremony_child_rebuilds_after_a_pull_that_did_not_land(tool, monkeypatch, tmp_path):
+    kept = (0, json.dumps({"land": {"verdict": "local_index_present"}}), "")
+    assert _sequencer_calls(tool, monkeypatch, tmp_path, kept) == [
+        "pull-repo-bundle",
+        "scip-rebuild",
+        "publish-repo-bundle",
+    ]

@@ -24,6 +24,8 @@ REFUSE_CANCELLED = "resume-cancelled"
 REFUSE_SUPERSEDED = "resume-superseded"
 REFUSE_CLOSED = "resume-closed"
 REFUSE_FOREIGN_DRIVER = "resume-foreign-driver"
+REFUSE_BATON_UNRESOLVED = "resume-baton-unresolved"
+BATON_CHAIN_MAX = 8
 
 
 class ResumeRefused(ValueError):
@@ -99,6 +101,72 @@ def record_takeover(rd: Path, from_session: str, to_session: str, reason: str) -
         fh.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def _continued_into_rel(root: Path, rel: str) -> Optional[str]:
+    """Repo-relative path of the record `rel`'s `continued_into` names, or None when it names nothing that resolves."""
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+    from coordinator_core.ops.dispatch_emit.run_baton_cascade import resolve_run_baton
+    from coordinator_core.ops.handoff_stamp import _resolve_continued_into
+    from coordinator_core.ops.resolve_swept_baton import _find_first_match
+
+    try:
+        split = split_frontmatter((root / rel).read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return None
+    value = read_fm_field_unquoted(split.fm_text, "continued_into") if split is not None else None
+    value = value.strip().replace("\\", "/") if isinstance(value, str) else ""
+    if not value or value in ("null", "~") or not _resolve_continued_into(root, value):
+        return None
+    state = resolve_run_baton(root, value)
+    if state is not None:
+        return state.rel
+    hit = _find_first_match(root, value.rsplit("/", 1)[-1])
+    return hit.relative_to(root).as_posix() if hit is not None else None
+
+
+def resolve_baton_record(root: Path, rel: str) -> Optional[str]:
+    """The live-or-terminal record at the end of `rel`'s `continued_into` chain, else None when `rel` resolves nowhere."""
+    from coordinator_core.ops.dispatch_emit.run_baton_cascade import resolve_run_baton
+
+    root = Path(root)
+    state = resolve_run_baton(root, rel)
+    if state is None:
+        return None
+    seen = {state.rel}
+    for _ in range(BATON_CHAIN_MAX):
+        nxt = _continued_into_rel(root, state.rel)
+        successor = resolve_run_baton(root, nxt) if nxt else None
+        if successor is None or successor.rel in seen:
+            break
+        state = successor
+        seen.add(state.rel)
+    return state.rel
+
+
+def _rebind_baton(root: Path, run_id: str) -> None:
+    """Point the run's recorded baton at its live-or-terminal record; refuse when it resolves nowhere or the rewrite fails."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_baton, write_run_baton
+
+    recorded = read_run_baton(root, run_id)
+    if recorded is None:
+        return
+    resolved = resolve_baton_record(root, recorded)
+    if resolved is None:
+        raise ResumeRefused(
+            REFUSE_BATON_UNRESOLVED,
+            f"Run {run_id}'s baton {recorded} resolves to no live or archived record. "
+            "Fire the sizing fresh (`args.fresh: true`); that drops the run's kept work (landed rows and kept chunks).",
+        )
+    if resolved != recorded:
+        try:
+            write_run_baton(root, run_id, resolved)
+        except (OSError, ValueError) as exc:
+            raise ResumeRefused(
+                REFUSE_BATON_UNRESOLVED,
+                f"Run {run_id}'s baton {recorded} could not be rebound to {resolved} ({exc}). "
+                "Fire the sizing fresh (`args.fresh: true`); that drops the run's kept work (landed rows and kept chunks).",
+            ) from exc
+
+
 def gate_resume(root: Path, run_id: str, caller_session: Optional[str], args: object, sizing_rel: Optional[str]) -> None:
     """The one gate every resume of `run_id` under its existing id passes: `check_resume`, then, on a takeover,
     the log row and a live escrowed run token for the caller. `args` is the refire's `args` or the op's params
@@ -107,6 +175,7 @@ def gate_resume(root: Path, run_id: str, caller_session: Optional[str], args: ob
     prior = check_resume(root, run_id, caller_session, reason)
     if not (prior and reason and caller_session):
         return
+    _rebind_baton(Path(root), run_id)
     from coordinator_core.ops.dispatch_emit import run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
 

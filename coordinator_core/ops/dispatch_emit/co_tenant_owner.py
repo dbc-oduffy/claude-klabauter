@@ -11,9 +11,9 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path, PurePosixPath
-from typing import Mapping, Optional
+from typing import Callable, Mapping, Optional
 
-from coordinator_core.ops.dispatch_emit import ask_contract, co_tenant_cycle, co_tenant_kept, halted_run, halted_withheld_index, live_run_index, live_run_writes, run_lineage, run_token, stage_wait
+from coordinator_core.ops.dispatch_emit import ask_contract, co_tenant_cycle, co_tenant_kept, halted_run, halted_withheld_index, live_run_index, live_run_writes, run_lineage, run_token, stage_wait, staged_stall
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
 PARKED = "co-tenant-wait"
@@ -42,9 +42,15 @@ def _halted_marker(root: Path, run_id: str) -> Optional[dict]:
 
 
 def _launcherless_halted(root: Path, run_id: str) -> bool:
-    """A run whose token is live but whose halt marker is written and which holds no launcher escrow: nothing
-    will end it, so a wait behind it never wakes."""
-    return run_token.escrowed(root, run_id) is None and _halted_marker(root, run_id) is not None
+    """A run with a live token and a written halt marker that nothing resumes (no launcher escrow, or a `superseded` or `staged_stall` marker): a wait behind it never wakes."""
+    marker = _halted_marker(root, run_id)
+    if marker is None:
+        return False
+    return (
+        run_token.escrowed(root, run_id) is None
+        or marker.get("status") == halted_run.STATUS_SUPERSEDED
+        or marker.get("halted") == staged_stall.HALT_STAGED_STALL
+    )
 
 
 def _proceeded_without(root: Path, run_id: str) -> frozenset:
@@ -192,6 +198,26 @@ def _park_behind(root: Path, run_id: str, owner: str, exc) -> bool:
         stage_wait.clear(root, run_id)
         return False
     return True
+
+
+def settle_waiters(root: Path, owner: str, now: float, notify: Callable[[str, str], object]) -> list:
+    """After `owner` halts: run one `stranded_wait.sweep` and tell the session of each waiter parked behind `owner` what the engine did; the actions on `owner`."""
+    from coordinator_core.ops.dispatch_emit import stranded_wait
+
+    acts = [a for a in stranded_wait.sweep(Path(root), now) if a.get("owner") == owner]
+    for act in acts:
+        session = (stage_wait.read(Path(root), act["waiter"]) or {}).get("session_id")
+        if isinstance(session, str) and session:
+            notify(session, f"run {act['waiter']} waited behind {owner}, which halted: {_ACTION_TEXT.get(act['action'], act['action'])}")
+    return acts
+
+
+_ACTION_TEXT = {
+    "owner-refire": "the engine spooled a refire of the owner and resumes this run after it (stranded-wait sweep)",
+    "proceed-without-owner": "the engine released this run to proceed without the owner",
+    "wake": "the owner no longer holds the path; the engine resumes this run",
+    "attention": "the wait is held for a PM flag; remove the flag to proceed without the owner",
+}
 
 
 def resolve(root: Path, run_id: str, exc) -> dict:

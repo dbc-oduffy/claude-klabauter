@@ -67,3 +67,15 @@ def test_refusal_is_one_line_with_template():
     msg = wiring_clause_refusal("it works")
     assert "\n" not in msg
     assert msg.split(REMEDIATION_MARKER, 1)[1].startswith("name the entry point and the check")
+
+
+def test_an_interpreter_running_a_script_at_any_repo_path_is_entry_point_and_check():
+    text = (
+        "Run python Tools/verify_prebuild.py from the repository root. It names both launcher "
+        "entry points and checks all eight tracked descriptors."
+    )
+    assert wiring_clause_refusal(text) is None
+
+
+def test_a_bare_script_name_without_an_interpreter_is_still_refused():
+    assert wiring_clause_refusal("Tools/verify_prebuild.py checks the descriptors") is not None

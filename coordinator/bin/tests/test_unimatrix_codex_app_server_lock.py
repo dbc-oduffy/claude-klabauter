@@ -140,8 +140,9 @@ def _holder_live(argv, lock_held, lock_cli):
         lock_pids_fn=lambda path: [4242], cli_fn=lambda pid: lock_cli, argv_fn=lambda pid: argv)
 
 
-def test_a_live_recorded_app_server_holder_does_not_keep_the_face_live() -> None:
-    assert _holder_live(["codex", "app-server", "--listen", "unix://"], True, False) is False
+def test_a_live_recorded_app_server_holder_keeps_the_face_live_only_while_it_holds_the_thread_lock() -> None:
+    assert _holder_live(["codex", "app-server", "--listen", "unix://"], False, False) is False
+    assert _holder_live(["codex", "app-server", "--listen", "unix://"], True, False) is True
 
 
 def test_a_live_recorded_cli_holder_keeps_the_face_live() -> None:

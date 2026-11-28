@@ -1542,8 +1542,8 @@ const START_SCHEMA = {
   type: 'object',
   required: ['ok', 'script_path'],
   properties: {
-    ok: { type: 'boolean' }, script_path: { type: 'string' }, run_script: { type: 'string' },
-    fire_args: { type: ['object', 'null'] }, refusal: { type: 'string' },
+    ok: { type: 'boolean' }, script_path: { type: 'string' }, run_script: { type: ['string', 'null'] },
+    fire_args: { type: ['object', 'null'] }, refusal: { type: ['string', 'null'] },
   },
 };
 """ + _STAGE_LOOP_JS + r"""const results = [];

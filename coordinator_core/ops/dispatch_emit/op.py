@@ -662,19 +662,25 @@ class FiredDriftError(ValueError):
     """
 
 
-def _is_halt_resume_hint(root: Path, reserved: object, sizing_doc: Optional[dict], sizing_rel: Optional[str]) -> bool:
-    """True when `reserved` is the submit hook's halt-resume hint for a plain sizing, not a fan-out
-    slice's reservation: the sizing has no `em_analysis.ask_parent` and `reserved` is its own halted
-    run. The hook sends the hint when its sizing read stalls; refusing it stranded the refire, so it
-    takes the ordinary halted-run path instead. Any other id on a plain sizing still refuses."""
+def _is_halt_resume_hint(
+    root: Path, reserved: object, sizing_doc: Optional[dict], sizing_rel: Optional[str],
+    caller_session: Optional[str] = None,
+) -> bool:
+    """True when `reserved` is the halted run (`warp-` or `ask-`) the hook's lookup resumes for the sizing.
+
+    invariant: a slice's own reservation (`ask_parent` run) is never a hint; it settles in `_reserved_run`."""
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import parse_ask_parent
-    from coordinator_core.ops.dispatch_emit.halted_run import halted_run_for
+    from coordinator_core.ops.dispatch_emit.halted_run import AmbiguousHaltedRuns, halted_run_to_resume
 
     if not sizing_rel or sizing_doc is None:
         return False
-    if parse_ask_parent((sizing_doc.get("em_analysis") or {}).get("ask_parent")) is not None:
+    marker = parse_ask_parent((sizing_doc.get("em_analysis") or {}).get("ask_parent"))
+    if marker is not None and marker[1] == reserved:
         return False
-    return reserved == halted_run_for(root, sizing_rel)
+    try:
+        return reserved == halted_run_to_resume(root, sizing_rel, caller_session=caller_session)
+    except AmbiguousHaltedRuns as exc:
+        return reserved in exc.candidates
 
 
 def _terminal_under_fresh(root: Path, run_id: Optional[str], params: dict) -> bool:
@@ -3032,9 +3038,10 @@ def _dispatch_emit_body(
             )
             else None
         )
-        if retired_reserved is None and reserved_param is not None and not _is_halt_resume_hint(
-            ask_root, reserved_param, sizing_doc, sizing_rel
-        ):
+        hinted = retired_reserved is None and reserved_param is not None and _is_halt_resume_hint(
+            ask_root, reserved_param, sizing_doc, sizing_rel, _receipt_session_id(params) or None
+        )
+        if retired_reserved is None and reserved_param is not None and not hinted:
             run_id, reserved_parent = _reserved_run(ask_root, reserved_param, sizing_doc, sizing_rel)
             from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume, notes_predecessor
 
@@ -3053,7 +3060,10 @@ def _dispatch_emit_body(
             )
 
             preferred_ask = None
-            preferred = preferred_halted_run(ask_root, sizing_rel, caller_session=_receipt_session_id(params) or None)
+            if hinted:
+                preferred = reserved_param
+            else:
+                preferred = preferred_halted_run(ask_root, sizing_rel, caller_session=_receipt_session_id(params) or None)
             if preferred is None:
                 halted_id = halted_run_for(ask_root, sizing_rel)
             else:

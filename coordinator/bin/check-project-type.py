@@ -2,8 +2,8 @@
 """check-project-type — compare a repo's declared project_type with its Unreal Engine markers.
 
 Verdicts: ok | missing | seedable | conflict (fleet adds norepo). `--apply` seeds seedable and
-missing repos and never rewrites a declared value. `--fleet` walks the machine-local repos.<slug>
-registry through `check-projectragignore-fleet-drift.py::_load_repo_roots`.
+missing repos only; a conflict is reported with a hint and never rewritten. `--fleet` walks the
+machine-local repos.<slug> registry through `check-projectragignore-fleet-drift.py::_load_repo_roots`.
 
 Exit codes: 0 = every checked repo is ok (or norepo). 1 = a repo is missing, seedable or conflict
 after the run. 2 = usage or environment error.
@@ -65,7 +65,11 @@ def main(argv: list[str] | None = None) -> int:
         description="Compare a repo's declared project_type with its UE markers.",
     )
     parser.add_argument("root", nargs="?", type=Path, help="one repo root (omit only with --fleet)")
-    parser.add_argument("--apply", action="store_true", help="seed seedable and missing repos")
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="seed seedable and missing repos; conflicts are reported with a hint, never rewritten",
+    )
     parser.add_argument("--fleet", action="store_true", help="walk every registry repos.<slug> root")
     parser.add_argument("--json", action="store_true", help="emit JSON on stdout")
     args = parser.parse_args(argv)

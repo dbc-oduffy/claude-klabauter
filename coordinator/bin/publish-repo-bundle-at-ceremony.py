@@ -5,7 +5,8 @@ freshly-rebuilt structural index via example-retrieval-repo's `publish-repo-bund
 
 Spawned (never invoked directly by a ceremony) as the detached argv of
 `scip-rebuild-at-ceremony.py::run`, so its own contract is the mirror of that
-script's: best-effort, ALWAYS exits 0, every reachable error path is one
+script's: best-effort, exits 0 except when no engine resolves (one
+`publish-repo-bundle: engine-unresolved -- <reason>` line, exit 1); every other reachable error path is one
 `publish-repo-bundle: skipped -- <reason>`, `publish-repo-bundle: refused --
 <fix>`, or (for a broken registry, as in that script) `publish-repo-bundle: defect --
 <reason>` line, never an exception surfaced to the caller.
@@ -51,7 +52,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _THIS = Path(__file__).resolve()
-_REPO_ROOT = _THIS.parent.parent.parent
+_ENGINE_READY = False
 # bin/ and lib/ are siblings in both the claude-klabauter tree (coordinator/) and the OSS mirror (root).
 _LIB_DIR = _THIS.parent.parent / "lib"
 
@@ -166,10 +167,30 @@ def _unresolved_cli_line(prefix: str, reason: str | None) -> str:
     return f"{prefix}: skipped -- {reason}"
 
 
+class EngineUnresolved(RuntimeError):
+    """Every rung of the engine resolve ladder missed."""
+
+
+def _engine() -> None:
+    """Put the engine on `sys.path` via `cc_invoke.require_engine_on_path`, once per process."""
+    global _ENGINE_READY
+    if _ENGINE_READY:
+        return
+    bin_lib = str(_THIS.parent / "lib")
+    if bin_lib not in sys.path:
+        sys.path.insert(0, bin_lib)
+    from cc_invoke import require_engine_on_path
+
+    try:
+        require_engine_on_path(__file__)
+    except (RuntimeError, OSError) as exc:
+        raise EngineUnresolved(str(exc) or type(exc).__name__) from exc
+    _ENGINE_READY = True
+
+
 def _hub(common: Path) -> Path:
     """The session hub for a git common dir, via the one shared resolver."""
-    if str(_REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(_REPO_ROOT))
+    _engine()
     from coordinator_core.session_hub_path import hub_for_common
 
     return hub_for_common(common)
@@ -204,8 +225,7 @@ def _git_common_dir(repo_root: Path) -> Path | None:
 def _current_head(repo_root: Path) -> str | None:
     """`git rev-parse HEAD`, bounded and console-hidden. None on any failure --
     a repo with no commits yet, or no git at all, never raises here."""
-    if str(_REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(_REPO_ROOT))
+    _engine()
     from coordinator_core.git.run import run_git
 
     result = run_git(["rev-parse", "HEAD"], cwd=str(repo_root))
@@ -436,8 +456,7 @@ def _run_and_wait(
         duplicate = _claim_lease(lease)
         if duplicate:
             return None, "", f"{_DEDUPE_PREFIX}{duplicate}"
-        if str(_REPO_ROOT) not in sys.path:
-            sys.path.insert(0, str(_REPO_ROOT))
+        _engine()
         from coordinator_core.bash_guards._heavy_command_class import admit_before_spawn
 
         admission = admit_before_spawn(_REBUILD_ADMIT_KEY, _REBUILD_PEAK_GIB)
@@ -655,6 +674,9 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = Path(args.repo_root).resolve() if args.repo_root else _default_repo_root()
     try:
         print(run(args.ceremony, repo_root, cli_override=args.cli, repo_slug=args.repo))
+    except EngineUnresolved as exc:
+        print(f"publish-repo-bundle: engine-unresolved -- {_first_stderr_line(str(exc)) or exc}")
+        return 1
     except Exception as exc:
         print(f"publish-repo-bundle: skipped -- unexpected error: {exc}")
     return 0

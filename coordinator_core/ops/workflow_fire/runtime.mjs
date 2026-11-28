@@ -173,8 +173,18 @@ export async function executeWorkflow(source, requestAgent, emit = () => {}, arg
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  if (argv.length < 1 || argv.length > 2) throw new Error('usage: node runtime.mjs SCRIPT [ARGS_JSON_FILE]');
-  const source = readFileSync(argv[0], 'utf8');
+  const flag = argv.indexOf('--staged-sha');
+  const stagedSha = flag < 0 ? null : argv[flag + 1];
+  if (flag >= 0) argv = argv.filter((_, i) => i !== flag && i !== flag + 1);
+  if (argv.length < 1 || argv.length > 2) throw new Error('usage: node runtime.mjs SCRIPT [ARGS_JSON_FILE] [--staged-sha SHA256]');
+  const target = resolve(argv[0]);
+  const stagedDigests = new Map();
+  let source = readFileSync(argv[0], 'utf8');
+  if (flag >= 0) {
+    if (!/^[0-9a-f]{64}$/.test(stagedSha ?? '')) throw new Error('--staged-sha requires 64 lowercase hex');
+    stagedDigests.set(target, stagedSha);
+    source = `export const meta = {};\nreturn await workflow({ scriptPath: ${JSON.stringify(target)}, args });`;
+  }
   const args = argv[1] ? JSON.parse(readFileSync(argv[1], 'utf8')) : {};
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new TypeError('Workflow args must be an object');
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -222,7 +232,7 @@ export async function main(argv = process.argv.slice(2)) {
   const requestAgent = (prompt, options, binding) => request('agent', { prompt, options, binding });
   try {
     const result = await executeWorkflow(source, requestAgent, event => write({ type: 'event', ...event }), args,
-      { scriptPath: resolve(argv[0]), cwd: process.cwd(),
+      { scriptPath: target, cwd: process.cwd(), stagedDigests,
         hostWorkflow: true,
         engineOp: (op, params, binding) => request('invoke', { op, params, binding }) });
     if (protocolError) throw protocolError;

@@ -674,6 +674,35 @@ def test_class_without_path_globs_keeps_keyword_routing_for_any_writes(env) -> N
     assert out[0].agent_type == UE and routes["C1"].work_class == "ue-editor"
 
 
+_C2_WRITES = ("example_retrieval_repo_ue_addon_scripts/tag_references.py", "tests/addons/test_tag_references.py")
+
+
+_C2_TEXT = dict(title="Blueprint tag reader", body="offline blueprint reference reader")
+_BLUEPRINT_GLOBS = ["**/*.uasset", "**/*.umap", "Content/**"]
+
+
+def _blueprint_class(env, **match) -> None:
+    cls = {**_table()["work_classes"][0], "id": "ue-asset-blueprint", "match": {"keywords": ["blueprint"], **match}}
+    _write(env, _table(work_classes=[cls]))
+
+
+def test_c2_python_row_with_explicit_executor_stays_on_executor_under_keyword_only_class(env) -> None:
+    _blueprint_class(env)
+    row = _row(writes=_C2_WRITES, agent_type=EXECUTOR, **_C2_TEXT)
+    out, routes, notes = ar.route_rows([row], env)
+    assert out[0] is row and routes == {} and notes == []
+
+
+def test_c2_python_row_is_declined_once_the_class_declares_content_globs(env) -> None:
+    _blueprint_class(env, paths=_BLUEPRINT_GLOBS)
+    out, routes, notes = ar.route_rows([_row(writes=_C2_WRITES, **_C2_TEXT)], env)
+    assert out[0].agent_type is None and routes == {} and notes == []
+    out, routes, notes = ar.route_rows([_row(writes=_C2_WRITES, agent_type=UE, agent_model="opus", **_C2_TEXT)], env)
+    assert out[0].agent_type == EXECUTOR and routes == {} and "outside" in notes[0]
+    out, routes, _ = ar.route_rows([_row(writes=(*_C2_WRITES, "Content/Hero.uasset"), **_C2_TEXT)], env)
+    assert out[0].agent_type == UE and routes["C1"].work_class == "ue-asset-blueprint"
+
+
 def test_footprint_backslash_writes_classify_like_posix(env) -> None:
     _write(env, _table())
     inside = _row(writes=("Content\\A.uasset",), **_UE_TEXT)

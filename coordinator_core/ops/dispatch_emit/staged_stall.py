@@ -366,6 +366,12 @@ def halt_stalled(
         halted.append(stalled.run_id)
         if stalled.session_id:
             (notify or _notify)(stalled.session_id, f"run {stalled.run_id} halted: {reason}")
+        try:
+            from coordinator_core.ops.dispatch_emit import co_tenant_owner  # trap: co_tenant_owner imports this module
+
+            co_tenant_owner.settle_waiters(repo_root, stalled.run_id, now, notify or _notify)
+        except Exception:  # noqa: BLE001 -- the marker is the truth; the next idle tick's sweep still acts
+            _log.warning("staged-stall waiter settle of %s failed", stalled.run_id, exc_info=True)
     return halted
 
 

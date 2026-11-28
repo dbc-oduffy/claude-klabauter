@@ -250,7 +250,7 @@ def test_gate_placement_precedes_every_write(tmp_path, monkeypatch):
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
 
     def _fake_run_pre_sync_gates(target, *_args, **_kwargs):
-        return publish.GateResult(proceed=True, source_dir=target.source_dir)
+        raise AssertionError("the pre-sync gates must not run after C8 refuses the row")
 
     monkeypatch.setattr(publish, "run_pre_sync_gates", _fake_run_pre_sync_gates)
 

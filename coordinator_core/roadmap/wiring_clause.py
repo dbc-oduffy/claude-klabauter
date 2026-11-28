@@ -24,6 +24,11 @@ _FILE_EXTS = frozenset({
 _DOTTED_OP = re.compile(r"(?<![\w./\-])([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)(?![\w/\-])")
 # A CLI script under a bin/ or scripts/ directory.
 _CLI_PATH = re.compile(r"(?<![\w.\-])(?:[\w.\-]+/)*(?:bin|scripts)/[\w.\-]+\.(?:py|sh)\b")
+# An interpreter running a script at any repo path (`python Tools/verify_prebuild.py`) is both.
+_SCRIPT_RUN = re.compile(
+    r"\b(?:python3?|py|node|pwsh|powershell|bash|sh)(?:\s+-[\w\-]+)*\s+[\w.\-/\\]+\.(?:py|mjs|js|ps1|sh)\b",
+    re.IGNORECASE,
+)
 
 _BACKTICKED = re.compile(r"`([^`]+)`")
 _PYTEST = re.compile(r"\b(?:python3?\s+-m\s+)?pytest\b|\bpython3?\s+-m\s+pytest\b", re.IGNORECASE)
@@ -36,13 +41,13 @@ _TEMPLATE = (
 
 
 def _entry_point(text: str) -> bool:
-    if _INVOKE.search(text) or _CLI_PATH.search(text):
+    if _INVOKE.search(text) or _CLI_PATH.search(text) or _SCRIPT_RUN.search(text):
         return True
     return any(m.group(1).rsplit(".", 1)[-1] not in _FILE_EXTS for m in _DOTTED_OP.finditer(text))
 
 
 def _runnable_check(text: str) -> bool:
-    if _PYTEST.search(text) or _TEST_PATH.search(text):
+    if _PYTEST.search(text) or _TEST_PATH.search(text) or _SCRIPT_RUN.search(text):
         return True
     return any(len(m.group(1).split()) > 1 for m in _BACKTICKED.finditer(text))
 

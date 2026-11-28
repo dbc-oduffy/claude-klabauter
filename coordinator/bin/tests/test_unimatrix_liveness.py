@@ -695,6 +695,17 @@ def test_codex_face_check_never_claims_what_it_cannot_prove(tmp_path: Path) -> N
     assert lv.codex_face_unbacked(_codex_face(), tmp_path / "no-peers-file") is False
 
 
+def test_a_managed_app_server_daemon_that_is_the_recorded_holder_and_holds_the_thread_lock_backs_the_face() -> None:
+    app = ["/Users/x/.codex/packages/app-server-daemon/bin/codex", "app-server", "--listen", "unix://"]
+    row = {"vendor": "codex", "target": "t1", "codexPid": 2624}
+    kw = dict(pid_alive_fn=lambda p: True, proc_start_fn=lambda p: None, presence_held_fn=lambda *a, **k: True,
+              lock_pids_fn=lambda p: [2624], cli_fn=lambda p: False, argv_fn=lambda p: app)
+    pm = lv._proc()
+    assert pm.codex_holder_live(row, **kw) is True
+    assert pm.codex_holder_live(row, **{**kw, "lock_pids_fn": lambda p: [999]}) is False
+    assert pm.codex_holder_live({**row, "codexPid": None}, **kw) is False
+
+
 def _far_codex(**extra):
     return {"vendor": "codex", "macSocketPath": "/tmp/f.sock", "unimatrixRemote": "me@box",
             "startedAt": int(time.time() * 1000) - 2 * lv.CODEX_FACE_GRACE_SECONDS * 1000, **extra}
