@@ -1122,11 +1122,28 @@ def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None
     """
     try:
         if backend == "grok":
-            allow = (_RELAY_ALLOW,) if agent_type in _INVOKE_ONLY_AGENT_TYPES else (*_SHELL_ALLOW, _EXAMPLE_RETRIEVAL_REPO_ALLOW)
+            # acceptEdits still prompts for a shell command, and a headless run cannot
+            # ask. Auto mode then blocks dispatch.ask_stage. A general POSIX stage
+            # uses bypassPermissions. An invoke-only child keeps one coordinator-invoke
+            # rule: the absolute launcher on POSIX, because a bare-name rule does not
+            # match the expanded settings-home path.
+            if agent_type in _INVOKE_ONLY_AGENT_TYPES:
+                permission_mode = "acceptEdits"
+                if os.name == "nt":
+                    allows = (_RELAY_ALLOW,)
+                else:
+                    launcher = (settings_home() / "bin" / "coordinator-invoke").as_posix()
+                    allows = (f"Bash({launcher}:*)",)
+            elif os.name == "nt":
+                permission_mode = "acceptEdits"
+                allows = (*_SHELL_ALLOW, _EXAMPLE_RETRIEVAL_REPO_ALLOW)
+            else:
+                permission_mode = "bypassPermissions"
+                allows = (*_SHELL_ALLOW, _EXAMPLE_RETRIEVAL_REPO_ALLOW)
             output_format = "streaming-json" if agent_type == "coordinator:sizing-scout" else "json"
             argv = [*resolve_grok(), "--prompt-file", str(artifact_dir / "prompt.txt"),
-                    "--output-format", output_format, "--permission-mode", "acceptEdits",
-                    *[flag for rule in allow for flag in ("--allow", rule)],
+                    "--output-format", output_format, "--permission-mode", permission_mode,
+                    *[flag for rule in allows for flag in ("--allow", rule)],
                     "--no-subagents", "--no-auto-update"]
             if model:
                 argv += ["--model", model]
