@@ -485,7 +485,7 @@ def test_grok_stage_spawns_resolved_binary_and_parses_envelope(tmp_path: Path, m
     assert _run(tmp_path, 'grok') == {'a': 1}
     argv, stdin = calls[0]
     assert argv[0] == '/bin/grok-x' and stdin == ''
-    assert argv[argv.index('--permission-mode') + 1] == ('bypassPermissions' if os.name != 'nt' else 'acceptEdits')
+    assert argv[argv.index('--permission-mode') + 1] == 'bypassPermissions'
     assert not {'--always-approve', '--dangerously-skip-permissions', '--yolo'} & set(argv)
     assert '"a"' in (tmp_path / 'art' / 'prompt.txt').read_text() and 'JSON Schema' in (tmp_path / 'art' / 'prompt.txt').read_text()
 

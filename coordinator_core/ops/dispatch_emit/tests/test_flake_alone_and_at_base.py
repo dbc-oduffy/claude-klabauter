@@ -1,4 +1,4 @@
-"""Pins classify_flakes: a red is a flake only when it passes alone AND at base; absent evidence blocks."""
+"""Pins classify_flakes: a red is a flake iff it passes alone in a fresh process and is not red at base."""
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ _CASES = [
         },
         "run": "r3",
     },
+    {"test": {"failing": [_A, _B], "passed_alone": [_A, _B], "pre_existing": [_A]}, "run": "r4"},
 ]
 
 
@@ -44,15 +45,30 @@ def test_alone_and_at_base_is_a_flake_with_evidence():
     remaining, flakes = sc.classify_flakes(test, "run9")
     assert remaining == []
     assert flakes == [
-        {"node_id": _A, "run": "run9", "evidence": "AssertionError: x; passed alone; passed at base"}
+        {
+            "node_id": _A,
+            "run": "run9",
+            "evidence": "AssertionError: x; passed alone in a fresh process; passed at base",
+        }
     ]
 
 
-def test_missing_alone_or_missing_at_base_still_blocks():
+def test_alone_without_base_evidence_is_a_flake():
     for test in (
         {"failing": [_A], "passed_alone": [_A], "passed_at_base": []},
-        {"failing": [_A], "passed_alone": [], "passed_at_base": [_A]},
         {"failing": [_A], "passed_alone": [_A]},
+    ):
+        assert sc.classify_flakes(test, "r") == (
+            [],
+            [{"node_id": _A, "run": "r", "evidence": "passed alone in a fresh process"}],
+        )
+
+
+def test_red_at_base_or_not_alone_still_blocks():
+    for test in (
+        {"failing": [_A], "passed_alone": [_A], "pre_existing": [_A]},
+        {"failing": [_A], "passed_alone": [_A], "passed_at_base": [_A], "pre_existing": [_A]},
+        {"failing": [_A], "passed_alone": [], "passed_at_base": [_A]},
         {"failing": [_A], "passed_at_base": [_A]},
     ):
         assert sc.classify_flakes(test, "r") == ([_A], [])
@@ -64,7 +80,7 @@ def test_non_list_fields_mean_no_flakes():
 
 
 def test_only_the_proven_id_is_split_out():
-    remaining, flakes = sc.classify_flakes(_CASES[3]["test"], "r2")
+    remaining, flakes = sc.classify_flakes(_CASES[-1]["test"], "r4")
     assert remaining == [_A]
     assert [f["node_id"] for f in flakes] == [_B]
 

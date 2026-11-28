@@ -145,26 +145,33 @@ def test_a_red_that_still_fails_after_a_blocked_no_write_leg_halts():
     assert out["halted"]["self_correction"]["status"] == "no-progress"
 
 
-def test_a_red_that_passes_alone_and_at_base_is_recorded_flaky_without_a_fix_leg():
+def test_a_red_that_passes_alone_in_a_fresh_process_is_recorded_flaky_without_a_fix_leg():
     out = _drive(reverify=_red(_OWNED, passed_alone=[_OWNED], passed_at_base=[_OWNED]), replies={})
 
     assert out["halted"] is None
     assert HALT_FIX_LABEL not in _labels(out)
     assert out["reverify"]["flaky"] == [
-        {"node_id": _OWNED, "run": "r1", "evidence": f"AssertionError in {_OWNED}; passed alone; passed at base"}
+        {"node_id": _OWNED, "run": "r1", "evidence": f"AssertionError in {_OWNED}; passed alone in a fresh process; passed at base"}
     ]
+
+
+def test_a_red_that_passes_in_a_fresh_process_rerun_without_base_evidence_is_flaky_and_does_not_halt():
+    out = _drive(reverify=_red(_OWNED, passed_alone=[_OWNED]), replies={})
+
+    assert out["halted"] is None
+    assert HALT_FIX_LABEL not in _labels(out)
+    assert [f["node_id"] for f in out["reverify"]["flaky"]] == [_OWNED]
 
 
 @pytest.mark.parametrize(
     "evidence",
     [
         {"passed_alone": [], "passed_at_base": [_OWNED]},
-        {"passed_alone": [_OWNED], "passed_at_base": []},
         {},
     ],
-    ids=["fails-alone", "fails-at-base", "no-evidence"],
+    ids=["fails-alone", "no-evidence"],
 )
-def test_a_red_without_both_passes_still_halts_review_blocked(evidence):
+def test_a_red_without_a_fresh_process_pass_still_halts_review_blocked(evidence):
     out = _drive(reverify=_red(_OWNED, **evidence), replies={})
 
     assert out["halted"]["halted"] == "review_blocked"

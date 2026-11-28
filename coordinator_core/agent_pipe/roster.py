@@ -84,6 +84,10 @@ def _external_binding(name: str) -> Optional[dict]:
     from coordinator_core.session import external_registry
     row = external_registry.lookup(name)
     if row is None:
+        row = next(
+            (r for _, r in sorted(external_registry.snapshot().items()) if r.get("name") == name), None
+        )
+    if row is None:
         return None
     return _owned_binding(row)
 

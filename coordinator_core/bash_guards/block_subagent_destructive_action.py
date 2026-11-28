@@ -2072,6 +2072,20 @@ _IRREVERSIBLE_UNRECOGNIZED_VERBS = frozenset(
         "update-index", "send-email", "imap-send", "http-push", "svn", "p4",
     }
 )
+_READONLY_SECOND_LEVEL = {"submodule": "status", "sparse-checkout": "list", "bisect": "log"}
+_SYMBOLIC_REF_READ_FLAGS = frozenset({"-q", "--quiet", "--short", "--no-recurse"})
+
+
+def _is_readonly_form_of_guarded_verb(subcmd: str, remaining: Optional[List[str]]) -> bool:
+    """True for the read-only spelling of a verb that is otherwise default-denied: `submodule status`,
+    `sparse-checkout list`, `bisect log`, and `symbolic-ref <name>` (one operand, no write flag)."""
+    toks = _strip_redirections(list(remaining or ()))
+    if subcmd == "symbolic-ref":
+        operands = [t for t in toks if not t.startswith("-")]
+        return len(operands) == 1 and all(t in _SYMBOLIC_REF_READ_FLAGS for t in toks if t.startswith("-"))
+    return bool(toks) and toks[0] == _READONLY_SECOND_LEVEL.get(subcmd)
+
+
 _IRREVERSIBLE_UNRECOGNIZED_RE = re.compile(
     r"\bgit\b.*?(?<![\w-])(?:" + "|".join(sorted(_IRREVERSIBLE_UNRECOGNIZED_VERBS, key=len, reverse=True)) + r")(?![\w-])"
 )
@@ -3027,6 +3041,8 @@ def _scratchpad_repo_verdict(seg: str, subcmd: str, remaining: List[str]) -> Opt
         if not os.path.exists(os.path.join(target[0], ".git")):
             return _NO_VERDICT
         if subcmd == "config":
+            if "--get" in remaining:
+                return _NO_VERDICT
             args = [t for t in remaining if not t.startswith("-")]
             if len(args) == 2 and args[0].lower() in _SP_CONFIG_KEYS:
                 return None
@@ -3608,6 +3624,8 @@ def _evaluate_git_segment_anchored(
         return "git mv (index-mutating rename)"
 
     if subcmd in _IRREVERSIBLE_UNRECOGNIZED_VERBS:
+        if _is_readonly_form_of_guarded_verb(subcmd, remaining):
+            return None
         return "unrecognized git verb (default-deny)"
     note = _UNRECOGNIZED_VERBS.get()
     if note is not None and subcmd and subcmd not in note:
@@ -4346,8 +4364,8 @@ _SCRATCH_DELETE_ROUTE_LINE = (
 )
 
 _TRASH_ROUTE_LINE = (
-    "  - A chunk's declared delete anywhere in the repo goes through\n"
-    "    `coordinator-invoke run.paths_trash` (params run_id, chunk_id, paths).\n"
+    "  - A delete of an untracked path anywhere in the repo goes through\n"
+    "    `coordinator-invoke run.paths_trash` (params paths; a chunk's declared delete adds run_id, chunk_id).\n"
 )
 
 #: Regenerable build/cache directories, as trailing path components: a recursive rm of one loses

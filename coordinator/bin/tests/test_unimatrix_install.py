@@ -1279,6 +1279,47 @@ def test_default_install_seeds_grok_peer_doctrine_under_home_grok(monkeypatch, t
     assert "engine_ask.submit" in (home / ".grok" / "rules" / "unimatrix-peer-doctrine.md").read_text(encoding="utf-8")
 
 
+def test_grok_install_seeds_core_skills_into_grok_home_skills_and_uninstall_removes_them(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "grokhome"))
+    skills = ui.SKILLS_ROOT
+    for name in ("pickup", "sizing", "not-core"):
+        (skills / name).mkdir()
+        (skills / name / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
+    (skills / "codex-core-skills.txt").write_text("pickup\nsizing\n", encoding="utf-8")
+    dest = tmp_path / "grokhome" / "skills"
+    buf = io.StringIO()
+    assert ui.main(["--install", "--hosts", "grok"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
+    assert f"grok skills available 2 in {dest}" in buf.getvalue()
+    assert (dest / "pickup" / "SKILL.md").is_file() and (dest / "sizing" / "SKILL.md").is_file()
+    assert not (dest / "not-core").exists()
+    buf = io.StringIO()
+    assert ui.main(["--uninstall", "--hosts", "grok"], dest_dir=tmp_path / "dest", out=buf) == 0
+    assert "grok skills" in buf.getvalue()
+    assert not (dest / "pickup").exists() and not (dest / "sizing").exists()
+
+
+def test_install_without_grok_host_seeds_no_grok_skills(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "grokhome"))
+    buf = io.StringIO()
+    assert ui.main(["--install", "--hosts", "codex"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
+    assert "grok skills" not in buf.getvalue() and not (tmp_path / "grokhome" / "skills").exists()
+
+
+def test_grok_install_without_a_skills_source_flags_host_skills_partial(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "grokhome"))
+    monkeypatch.setattr(ui, "resolve_skills_root", lambda plugin_root=None: (None, "absent"))
+    buf = io.StringIO()
+    rc = ui.main(["--install", "--hosts", "grok"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf)
+    assert rc == 7 and "not installed: host skills" in buf.getvalue()
+    assert not (tmp_path / "grokhome" / "skills").exists()
+
+
 def test_missing_peer_doctrine_template_flags_grok_partial(monkeypatch, tmp_path):
     monkeypatch.setattr(ui, "PEER_DOCTRINE_TEMPLATE", tmp_path / "absent-peer-doctrine.md")
     _home(monkeypatch, tmp_path)

@@ -39,6 +39,10 @@ Claude-klabauter is one of three parts of my setup, and it deliberately lacks op
 Claude-klabauter is a **hard prerequisite** of coordinator-claude — most mutating coordinator operations
 fail without it present. The reverse edge is soft: the engine runs standalone.
 
+For how the coordinator-claude doctrine performs against a bare model on a measured benchmark, see
+the "A measured comparison" section of the
+[coordinator-claude README](https://github.com/dbc-oduffy/coordinator-claude#a-measured-comparison).
+
 The split is not tidiness. A harness config directory is a guarded surface — an agent
 accumulating resident executing code inside its own instruction directory is exactly the shape
 that trips vendor safety guards, and it did, repeatedly. Moving the executing half into a

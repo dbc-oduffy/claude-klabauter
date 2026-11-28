@@ -356,3 +356,53 @@ def test_real_cold_describe_exposes_typed_ceremony_contract(name):
     else:
         assert schema["properties"]["phase"]["enum"] == list(ops.CEREMONIES[name])
         assert "notify_to" in schema["properties"]
+
+
+def _register_live_grok(settings_home, name):
+    import os
+    import psutil
+    sid = "0b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a40"
+    folder = Path(settings_home) / "host-sessions" / "grok"
+    folder.mkdir(parents=True)
+    row = {"schema_version": 1, "session_id": sid, "provider": "grok", "pid": os.getpid(),
+           "start_epoch": int(psutil.Process(os.getpid()).create_time()), "cwd": str(Path(settings_home).resolve()),
+           "role": "em", "name": name, "observed_at": 1.0}
+    (folder / f"{sid}.json").write_text(json.dumps(row), encoding="utf-8")
+    return sid
+
+
+@pytest.mark.parametrize("by_name", [True, False])
+def test_registered_grok_em_completion_notice_selects_grok_leg(tmp_path, monkeypatch, by_name):
+    from coordinator_core.agent_pipe import bridge
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    name = "repo-grok-box-3"
+    sid = _register_live_grok(tmp_path / "home", name)
+    seen = []
+
+    def grok_leg(binding, msg):
+        seen.append(binding)
+        return bridge.Delivery("handed-off", None, msg)
+
+    monkeypatch.setitem(bridge._LEGS, "grok", grok_leg)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "result.json").write_text(json.dumps({"state": "phase-done"}), encoding="utf-8")
+    marker = tmp_path / "marker"
+    marker.write_text("{}", encoding="utf-8")
+    worker._notify_claimed(run_dir, name if by_name else sid, marker)
+    result = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+    assert result["notify_status"] == "handed-off"
+    assert "notify_error" not in result and result["notified_at"]
+    assert [(b["kind"], b["id"]) for b in seen] == [("grok", sid)]
+
+
+def test_unregistered_grok_name_stays_unroutable(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    _register_live_grok(tmp_path / "home", "repo-grok-box-3")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "result.json").write_text(json.dumps({"state": "phase-done"}), encoding="utf-8")
+    worker._notify_claimed(run_dir, "other-grok-box-9", tmp_path / "marker")
+    result = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+    assert result["notify_status"] == "unroutable"
+    assert "notified_at" not in result

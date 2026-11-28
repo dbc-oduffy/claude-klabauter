@@ -260,14 +260,15 @@ def classify_reds(
 def classify_flakes(test: Mapping[str, Any], run_id: str) -> tuple[list[str], list[dict]]:
     """Split `test["failing"]` into (remaining_failing, flakes).
 
-    A flake is a failing id present in both `passed_alone` and `passed_at_base`; absent or
-    non-list evidence never makes one. Ids are normalised as classify_reds does.
+    A flake is a failing id in `passed_alone` (green in a fresh-process rerun) and not in
+    `pre_existing` (red at base); `passed_at_base` only adds evidence. Absent or non-list
+    `passed_alone` never makes one. Ids are normalised as classify_reds does.
     """
     def ids(key: str) -> list[str]:
         v = test.get(key)
         return [_posix(i) for i in v] if isinstance(v, list) else []
 
-    alone, base = set(ids("passed_alone")), set(ids("passed_at_base"))
+    alone, base, pre = set(ids("passed_alone")), set(ids("passed_at_base")), set(ids("pre_existing"))
     detail = test.get("failing_detail")
     first: dict[str, str] = {}
     for d in detail if isinstance(detail, list) else []:
@@ -276,12 +277,14 @@ def classify_flakes(test: Mapping[str, Any], run_id: str) -> tuple[list[str], li
     remaining: list[str] = []
     flakes: list[dict] = []
     for nid in ids("failing"):
-        if nid in alone and nid in base:
+        if nid in alone and nid not in pre:
             head = first.get(nid, "")
             flakes.append({
                 "node_id": nid,
                 "run": run_id,
-                "evidence": (head + "; " if head else "") + "passed alone; passed at base",
+                "evidence": (head + "; " if head else "")
+                + "passed alone in a fresh process"
+                + ("; passed at base" if nid in base else ""),
             })
         else:
             remaining.append(nid)
@@ -358,7 +361,7 @@ const classifyFlakes = (rv, runId) => {
   const t = rv || {};
   const px = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
   const ids = (k) => (Array.isArray(t[k]) ? t[k].map(px) : []);
-  const alone = new Set(ids('passed_alone')), base = new Set(ids('passed_at_base'));
+  const alone = new Set(ids('passed_alone')), base = new Set(ids('passed_at_base')), pre = new Set(ids('pre_existing'));
   const first = new Map();
   for (const d of Array.isArray(t.failing_detail) ? t.failing_detail : []) {
     if (d && typeof d === 'object' && d.node_id != null && !first.has(px(d.node_id))) {
@@ -367,9 +370,9 @@ const classifyFlakes = (rv, runId) => {
   }
   const remaining = [], flakes = [];
   for (const id of ids('failing')) {
-    if (alone.has(id) && base.has(id)) {
+    if (alone.has(id) && !pre.has(id)) {
       const head = first.get(id) || '';
-      flakes.push({ node_id: id, run: runId, evidence: (head ? head + '; ' : '') + 'passed alone; passed at base' });
+      flakes.push({ node_id: id, run: runId, evidence: (head ? head + '; ' : '') + 'passed alone in a fresh process' + (base.has(id) ? '; passed at base' : '') });
     } else remaining.push(id);
   }
   return [remaining, flakes];

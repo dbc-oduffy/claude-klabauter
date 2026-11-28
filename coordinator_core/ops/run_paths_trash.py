@@ -22,8 +22,8 @@ OP_KEY = "run.paths_trash"
 _PROTECTED_FIRST = (".git", "state", "docs")
 
 
-def _static_refusal(rel: str, writes: Sequence[str]) -> str:
-    """Refusal reason from the path text alone; '' when clean."""
+def _static_refusal(rel: str, writes: Sequence[str] | None) -> str:
+    """Refusal reason from the path text alone; '' when clean. `writes` None is the runless form."""
     if not isinstance(rel, str) or not rel:
         return "path is not a non-empty string"
     norm = rel.replace("\\", "/")
@@ -32,7 +32,7 @@ def _static_refusal(rel: str, writes: Sequence[str]) -> str:
     parts = [p for p in norm.split("/") if p not in ("", ".")]
     if ".." in parts:
         return "path has a '..' segment"
-    if norm not in writes and rel not in writes:
+    if writes is not None and norm not in writes and rel not in writes:
         return "path is not in the chunk's declared writes"
     if not parts:
         return "path is the repo root"
@@ -51,15 +51,18 @@ def _static_refusal(rel: str, writes: Sequence[str]) -> str:
 
 
 def admit(
-    repo_root: Path, run_id: str, chunk_id: str, paths: Sequence[str]
+    repo_root: Path, run_id: str | None, chunk_id: str | None, paths: Sequence[str]
 ) -> tuple[list[str], list[dict]]:
     """Split `paths` into (admitted repo-relative posix paths, refusals `{path, reason}`)."""
     from coordinator_core.ops import prune_claude_temp as _p
 
     root = Path(repo_root)
-    writes = _sd._manifest_writes(root, run_id, chunk_id)
-    if isinstance(writes, str):
-        return [], [{"path": p, "reason": writes} for p in paths]
+    writes: Sequence[str] | None = None
+    if run_id is not None or chunk_id is not None:
+        manifest = _sd._manifest_writes(root, run_id or "", chunk_id or "")
+        if isinstance(manifest, str):
+            return [], [{"path": p, "reason": manifest} for p in paths]
+        writes = manifest
 
     refused: list[dict] = []
     candidates: list[str] = []
@@ -97,7 +100,7 @@ def admit(
     return admitted, refused
 
 
-def trash_declared(repo_root, run_id: str, chunk_id: str, paths: Sequence[str]) -> dict:
+def trash_declared(repo_root, run_id: str | None, chunk_id: str | None, paths: Sequence[str]) -> dict:
     """Move each admitted path into the tombstone dir. Absent paths are reported, not refused."""
     root = Path(repo_root)
     admitted, refused = admit(root, run_id, chunk_id, paths)
@@ -125,13 +128,20 @@ def _handler(params: dict, repo_root=None) -> dict:
     run_id = params.get("run_id")
     chunk_id = params.get("chunk_id")
     paths = params.get("paths")
-    if not isinstance(run_id, str) or not run_id:
-        return {"error": f"{OP_KEY}: run_id must be a non-empty string"}
-    if not isinstance(chunk_id, str) or not chunk_id:
-        return {"error": f"{OP_KEY}: chunk_id must be a non-empty string"}
+    runless = run_id is None and chunk_id is None
+    if not runless:
+        if not isinstance(run_id, str) or not run_id:
+            return {"error": f"{OP_KEY}: run_id must be a non-empty string"}
+        if not isinstance(chunk_id, str) or not chunk_id:
+            return {"error": f"{OP_KEY}: chunk_id must be a non-empty string"}
     if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
         return {"error": f"{OP_KEY}: paths must be a list of strings"}
-    root = _sd._resolve_root(params.get("repo_root"), repo_root, run_id)
+    if runless:
+        from coordinator_core.ops import prune_claude_temp as _p
+
+        root = params.get("repo_root") or repo_root or _p.find_repo_root(os.getcwd())
+    else:
+        root = _sd._resolve_root(params.get("repo_root"), repo_root, str(run_id))
     if not root:
         return {"error": f"{OP_KEY}: no repo root"}
     return trash_declared(Path(root), run_id, chunk_id, paths)

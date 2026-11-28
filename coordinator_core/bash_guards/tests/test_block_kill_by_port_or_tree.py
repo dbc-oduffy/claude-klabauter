@@ -419,6 +419,11 @@ def test_a_real_taskkill_by_image_name_still_denies_beside_the_revise_command(tm
     assert denied(_REVISE + " && taskkill /IM python.exe /F", tmp_path)
 
 
+def test_pgrep_found_pid_kill_is_routed_to_stop_own_child(tmp_path):
+    reason = denied("pgrep -f sleep | xargs kill", tmp_path)
+    assert "coordinator-invoke proc.stop_own_child" in reason
+
+
 def test_denial_remedy_names_the_own_tree_route(tmp_path):
     reason = denied("kill $(pgrep -f pytest)", tmp_path)
     assert "coordinator-invoke proc.stop_own_child" in reason

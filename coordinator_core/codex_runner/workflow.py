@@ -1230,9 +1230,6 @@ def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None
                 else:
                     launcher = (settings_home() / "bin" / "coordinator-invoke").as_posix()
                     allows = (f"Bash({launcher}:*)",)
-            elif os.name == "nt":
-                permission_mode = "acceptEdits"
-                allows = (*_SHELL_ALLOW, _EXAMPLE_RETRIEVAL_REPO_ALLOW)
             else:
                 permission_mode = "bypassPermissions"
                 allows = (*_SHELL_ALLOW, _EXAMPLE_RETRIEVAL_REPO_ALLOW)

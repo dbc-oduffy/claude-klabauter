@@ -1822,6 +1822,11 @@ def grok_rules_path():
     return grok_config_path().parent / "rules" / "unimatrix-peer-doctrine.md"
 
 
+def grok_skills_path() -> Path:
+    """Grok's user skills directory: $GROK_HOME/skills, default ~/.grok/skills (one <name>/SKILL.md per skill)."""
+    return grok_config_path().parent / "skills"
+
+
 def grok_present():
     """True when grok is on PATH; a leftover $GROK_HOME (default ~/.grok) alone is not presence."""
     # Trap: Path.is_file() swallows only not-found errors; an unreadable PATH entry (EACCES on /usr/local/bin/grok
@@ -3568,6 +3573,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     grok_status = grok_config_path() if hooks_path is None else Path(hooks_path).with_name("grok-config.toml")
     grok_rp = grok_rules_path() if hooks_path is None else Path(hooks_path).with_name("grok-peer-doctrine.md")
     grok_hp = grok_hooks_path() if hooks_path is None else Path(hooks_path).with_name("grok-hooks.json")
+    grok_sd = grok_skills_path() if hooks_path is None else Path(hooks_path).with_name("grok-skills")
     if codex_trust is None and codex_default:
         codex_trust = lambda hp: trust_codex_hook(hp, dest_dir=dest_dir)
     agy_sj = Path(agy_skills_json) if agy_skills_json else (
@@ -3760,6 +3766,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             steps.append(("grok status line", grok_status, lambda: seed_host_status_line(grok_status, "grok", uninstall=True)))
             steps.append(("grok peer doctrine", grok_rp, lambda: unseed_peer_doctrine(grok_rp)))
             steps.append(("grok hook", grok_hp, lambda: unseed_grok_hook(grok_hp)))
+            steps.append(("grok skills", grok_sd, lambda: ",".join(_seed().unseed_codex_skills(grok_sd)) or "absent"))
         if want_agy:
             steps.append(("agy allow rule", agy_status, lambda: seed_agy_allow_rule(agy_status, uninstall=True)))
             steps.append(("agy status line", agy_status, lambda: seed_host_status_line(agy_status, "agy", uninstall=True)))
@@ -4004,7 +4011,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             missing.append("codex send rule")
             print(f"WARN: codex send rule not installed: {exc}", file=out)
     missing += _seed_standing_doctrine(out, want_codex, want_agy, codex_rp, agy_rp, codex_sd, agy_sj,
-                                       args.plugin_root, None)
+                                       args.plugin_root, None, want_grok, grok_sd)
     if missing:
         print(f"PARTIAL INSTALL: not installed: {', '.join(missing)}", file=out)
         rc = rc or 7
@@ -4046,7 +4053,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
 
 
 def _seed_standing_doctrine(out, want_codex, want_agy, codex_rp, agy_rp, codex_sd, agy_sj,
-                            plugin_root=None, skills_root=None):
+                            plugin_root=None, skills_root=None, want_grok=False, grok_sd=None) -> list:
     """Seed wanted doctrine and skills, returning every incomplete required surface.
 
     Returns required doctrine or skill surfaces left incomplete.
@@ -4074,10 +4081,13 @@ def _seed_standing_doctrine(out, want_codex, want_agy, codex_rp, agy_rp, codex_s
             missing.append(f"{label} coordinator doctrine")
             print(f"WARN: {label} coordinator doctrine not installed: {exc}", file=out)
     try:
-        if skills_root is None and (want_codex or want_agy):
+        if skills_root is None and (want_codex or want_agy or want_grok):
             raise OSError(f"required skills source not found: {skills_detail}")
         if want_agy:
             print(f"agy skills {seed.seed_agy_skills(agy_sj, skills_root)} in {agy_sj}", file=out)
+        if want_grok:
+            names = seed.seed_codex_skills(grok_sd, skills_root)
+            print(f"grok skills available {len(names)} in {grok_sd}", file=out)
         if want_codex:
             names = seed.seed_codex_skills(codex_sd, skills_root)
             print(f"codex skills available {len(names)} in {codex_sd}", file=out)

@@ -117,6 +117,31 @@ def test_registered_session_resolves_to_its_provider_kind(provider, monkeypatch:
     assert roster.list()["sid-1"]["kind"] == provider
 
 
+@pytest.mark.parametrize("provider", ["agy", "grok"])
+def test_registered_session_resolves_by_its_roster_name(provider, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.session import external_registry
+
+    name = f"repo-{provider}-box-3"
+    live = {"provider": provider, "session_id": "11111111-1111-4111-8111-111111111111", "name": name}
+    other = {"provider": provider, "session_id": "22222222-2222-4222-8222-222222222222", "name": "other"}
+    monkeypatch.setattr(external_registry, "lookup", lambda key: None)
+    monkeypatch.setattr(external_registry, "snapshot", lambda: {r["session_id"]: r for r in (other, live)})
+    b = roster.resolve(name)
+    assert b["kind"] == provider and b["id"] == live["session_id"]
+    assert roster.resolve("nobody-grok-box-9") is None
+
+
+def test_duplicate_roster_name_resolves_to_lowest_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.session import external_registry
+
+    hi = {"provider": "grok", "session_id": "bbbbbbbb-1111-4111-8111-111111111111", "name": "dup"}
+    lo = {"provider": "agy", "session_id": "aaaaaaaa-1111-4111-8111-111111111111", "name": "dup"}
+    monkeypatch.setattr(external_registry, "lookup", lambda key: None)
+    monkeypatch.setattr(external_registry, "snapshot", lambda: {r["session_id"]: r for r in (hi, lo)})
+    b = roster.resolve("dup")
+    assert b["id"] == lo["session_id"] and b["kind"] == "agy"
+
+
 def test_registered_session_without_known_provider_stays_codex(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import external_registry
 

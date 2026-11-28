@@ -260,7 +260,7 @@ def test_other_grok_stages_lead_with_the_incumbent_bash_allow(tmp_path: Path, st
     assert _run(tmp_path, "coordinator:executor") == {"a": 1}
     assert _allow(seen[0]) == "Bash"
     mode = seen[0][seen[0].index("--permission-mode") + 1]
-    assert mode == ("bypassPermissions" if os.name != "nt" else "acceptEdits")
+    assert mode == "bypassPermissions"
 
 
 def _allows(argv):

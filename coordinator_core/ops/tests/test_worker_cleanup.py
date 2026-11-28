@@ -63,6 +63,20 @@ def test_stop_own_child_refuses_non_descendant_and_ancestor():
         sibling.kill()
 
 
+def test_stop_own_child_at_default_params_stops_a_launched_python_child():
+    child = _child()
+    try:
+        assert wc.stop_own_child(child.pid, os.getpid()) == {"stopped": child.pid}
+        assert child.wait(5) is not None
+    finally:
+        child.kill()
+
+
+def test_stop_own_child_at_default_params_refuses_the_callers_ancestor():
+    parent = psutil.Process().parent().pid
+    assert "ancestors" in wc.stop_own_child(parent, os.getpid())["refused"]
+
+
 def test_stop_own_child_rejects_bad_pid():
     assert wc.stop_own_child(1, os.getpid())["refused"]
     assert wc.stop_own_child("9", os.getpid())["refused"]
