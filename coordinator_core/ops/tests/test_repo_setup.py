@@ -229,6 +229,7 @@ def test_failing_step_is_reported_and_the_rest_still_run(tmp_path, sandbox, monk
 def test_register_repo_is_an_open_item_with_the_command_on_author_box(tmp_path, sandbox, monkeypatch):
     repo = _git_init(tmp_path / "my-repo")
     monkeypatch.setattr(mod, "_machine_profile", lambda: "author")
+    monkeypatch.setattr(mod, "_repo_registered", lambda key: False)
     monkeypatch.setattr("coordinator_core.install.scaffold_structure.scaffold_canonical_structure",
                         lambda *a, **k: type("R", (), {"created_dirs": 0, "created_files": 0,
                                                         "created_readmes": 0, "created_gitkeeps": 0})())
@@ -236,3 +237,106 @@ def test_register_repo_is_an_open_item_with_the_command_on_author_box(tmp_path, 
     verdict = mod.handle({"root": str(repo), "answers": {"register_repo": True}})
     item = next(i for i in verdict["open"] if i["step"] == "register-repo")
     assert "register-repo --path" in item["detail"] and "repos.my_repo" in item["detail"]
+
+
+def test_registered_repo_gets_no_register_repo_open_item(tmp_path, sandbox, monkeypatch):
+    repo = _git_init(tmp_path / "my-repo")
+    monkeypatch.setattr(mod, "_machine_profile", lambda: "author")
+    monkeypatch.setattr(mod, "_repo_registered", lambda key: key == "my_repo")
+    monkeypatch.setattr("coordinator_core.ops.setup_rag_decision.setup_rag_decision", lambda argv: 0)
+    verdict = mod.handle({"root": str(repo), "answers": {"register_repo": True}})
+    assert "register-repo" not in {i["step"] for i in verdict["open"]}
+    assert any(i["step"] == "register-repo" for i in verdict["already_existed"])
+
+
+def test_metric_register_is_scaffolded_then_existed(tmp_path, sandbox):
+    repo = _git_init(tmp_path / "my-repo")
+    reg = repo / "state" / "metrics" / "my_repo" / "register.jsonl"
+    first = mod.handle({"root": str(repo)})
+    assert reg.is_file() and reg.read_text(encoding="utf-8") == ""
+    assert any(i["step"] == "metric-register" for i in first["created"])
+    second = mod.handle({"root": str(repo)})
+    assert any(i["step"] == "metric-register" for i in second["already_existed"])
+    assert not any(i["step"] == "metric-register" for i in second["created"])
+
+
+def test_metric_register_dry_run_reports_and_writes_nothing(tmp_path, sandbox):
+    repo = _git_init(tmp_path / "my-repo")
+    verdict = mod.handle({"root": str(repo), "dry_run": True})
+    assert any(i["step"] == "metric-register" for i in verdict["created"])
+    assert not (repo / "state" / "metrics").exists()
+
+
+def test_metric_register_write_failure_is_needs_attention(tmp_path, sandbox, monkeypatch):
+    repo = _git_init(tmp_path / "my-repo")
+    real = mod._write_new
+
+    def _fail(path, text, executable=False):
+        if path.name == "register.jsonl":
+            raise OSError("denied")
+        return real(path, text, executable)
+
+    monkeypatch.setattr(mod, "_write_new", _fail)
+    verdict = mod.handle({"root": str(repo)})
+    assert any(i["step"] == "metric-register" for i in verdict["needs_attention"])
+    assert not any(i["step"] == "metric-register" for i in verdict["created"])
+
+
+def test_git_config_open_item_names_global_config(tmp_path, sandbox):
+    repo = _git_init(tmp_path / "my-repo")
+    verdict = mod.handle({"root": str(repo)})
+    item = next(i for i in verdict["open"] if i["step"] == "git-config")
+    assert "GLOBAL git config" in item["detail"] and "help.format" in item["detail"]
+
+
+def _steps(verdict: dict, key: str) -> list:
+    return [i for i in verdict[key] if i["step"] == "project-type"]
+
+
+def test_seedable_repo_is_seeded_and_rerun_reports_ok(tmp_path, sandbox):
+    repo = _git_init(tmp_path / "repo")
+    (repo / "coordinator.local.md").write_text("---\ncross_platform: false\n---\n", encoding="utf-8")
+    (repo / "Game.uproject").write_text("{}", encoding="utf-8")
+    verdict = mod.handle({"root": str(repo)})
+    text = (repo / "coordinator.local.md").read_text(encoding="utf-8")
+    assert "project_type: game-dev" in text and "project_subtypes: [unreal]" in text
+    assert _steps(verdict, "created") and not _steps(verdict, "needs_attention")
+    second = mod.handle({"root": str(repo)})
+    assert _steps(second, "already_existed") and not _steps(second, "created")
+
+
+def test_seedable_dry_run_reports_and_writes_nothing(tmp_path, sandbox):
+    repo = _git_init(tmp_path / "repo")
+    (repo / "coordinator.local.md").write_text("---\ncross_platform: false\n---\n", encoding="utf-8")
+    (repo / "Game.uproject").write_text("{}", encoding="utf-8")
+    before = (repo / "coordinator.local.md").read_bytes()
+    verdict = mod.handle({"root": str(repo), "dry_run": True})
+    assert (repo / "coordinator.local.md").read_bytes() == before
+    assert "dry-run" in _steps(verdict, "created")[0]["detail"]
+
+
+def test_conflict_repo_is_needs_attention_and_not_rewritten(tmp_path, sandbox):
+    repo = _git_init(tmp_path / "repo")
+    body = "---\nproject_type: web-dev\n---\n"
+    (repo / "coordinator.local.md").write_text(body, encoding="utf-8")
+    (repo / "Game.uproject").write_text("{}", encoding="utf-8")
+    verdict = mod.handle({"root": str(repo)})
+    item = _steps(verdict, "needs_attention")[0]
+    assert "conflict" in item["detail"]
+    assert (repo / "coordinator.local.md").read_text(encoding="utf-8") == body
+
+
+def test_legacy_value_conflict_carries_migration_hint(tmp_path, sandbox):
+    repo = _git_init(tmp_path / "repo")
+    (repo / "coordinator.local.md").write_text("---\nproject_type: meta\n---\n", encoding="utf-8")
+    verdict = mod.handle({"root": str(repo)})
+    assert "legacy-value" in _steps(verdict, "needs_attention")[0]["detail"]
+    assert "game-dev" in _steps(verdict, "needs_attention")[0]["detail"]
+
+
+def test_undeclared_local_md_without_markers_is_an_open_item(tmp_path, sandbox):
+    repo = _git_init(tmp_path / "repo")
+    (repo / "coordinator.local.md").write_text("---\ncross_platform: false\n---\n", encoding="utf-8")
+    verdict = mod.handle({"root": str(repo)})
+    assert "check-project-type" in _steps(verdict, "open")[0]["detail"]
+    assert "project_type" not in (repo / "coordinator.local.md").read_text(encoding="utf-8")

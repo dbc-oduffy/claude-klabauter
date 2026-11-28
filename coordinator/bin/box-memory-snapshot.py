@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""box-memory-snapshot.py [--top N] [--admit-peak GIB] -- one-screen box memory snapshot (Windows, macOS and Linux).
+"""box-memory-snapshot.py [--top N] [--admit-peak GIB] [--local] -- one-screen box memory snapshot (Windows, macOS and Linux).
+
+Fleet-wide by default: after this box's section, one section per far Unimatrix box (live Available,
+commit, VRAM, sessions, jobs, plus maxima); an unreachable box keeps its last-known maxima with a
+last-seen time and a `power it on?` line, never dropped. With `--admit-peak` each far box also gets
+its own verdict from its live reading (no reservation netted; UNKNOWN when unreachable); the exit code
+is this box's. `--json` keeps the single-box fields at top level and adds `fleet` and `power_on`.
+`--local` is today's single-box output. Admission flags (`--command-key`, `--register-pid`,
+`--release-pid`, `--record-peak`, `--run`, `--reservation`, ...) stay this box's own and never fan out.
 
 On Linux available is MemAvailable, commit limit is physical + swap capacity, the cache field is `Cached`,
 standby and nonpaged pool print `unavailable`, and a `Memory PSI` line gives the some/full avg10 of
@@ -16,7 +24,9 @@ END in admission.jsonl of max(0, declared_peak_mb - tree RSS). Need is peak + mi
 `--command-key K` with `--record-peak GIB` keeps K's largest seen peak (used when `--admit-peak` is omitted, except on a record or release call);
 `--register-pid P` on ADMIT reserves P's headroom, `--release-pid P` frees it. `--reservation` prints
 each registered running job's headroom and the total in GiB (an exited job is absent: it adds 0). `--json` emits the same
-fields. Other hosts: exit 6.
+fields plus `gpu`: one in-process `gpu_sample.sample()` reading as free/total VRAM per device and in sum,
+and `jobs` holding only pids with >= 1 GiB VRAM, or `{"unavailable": reason}` where no GPU is readable.
+Other hosts: exit 6.
 
 Exit codes: ADMIT 0, HOLD 4, ERROR 5 (admission could not be decided: unreadable status or an uncaught
 exception). Under `--json` with `--admit-peak` (or a `--command-key` peak) every such path prints one
@@ -40,7 +50,10 @@ import argparse
 import dataclasses
 import importlib.util
 import json
+import os
 import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Callable, Optional
@@ -153,8 +166,85 @@ def _process_counts(table_fn: Optional[Callable], names_fn: Callable) -> Optiona
     return {k: stems.count(k) for k in _COUNTED}
 
 
+_GPU_JOB_MIN_MIB = 1024
+
+
+def _gpu_object(reading) -> dict:
+    """Fold one `gpu_sample.sample()` reading into the snapshot's `gpu` object; pure.
+
+    `{"unavailable": reason}` for a `gpu_unavailable` or malformed reading. Otherwise per-device free
+    and total VRAM (free is None where used is unreadable, as on unified memory), their sums, and only
+    the jobs holding >= 1 GiB (desktop clients appear as compute apps). Per-pid VRAM the driver
+    withholds is already absent from `vram_by_pid`; it is never reported as 0.
+    """
+    gpus = reading.get("gpus") if isinstance(reading, dict) else None
+    if not isinstance(gpus, list) or not gpus:
+        reason = reading.get("gpu_unavailable") if isinstance(reading, dict) else None
+        return {"unavailable": reason or "gpu reading malformed"}
+    devices = []
+    for g in gpus:
+        total, used = g.get("vram_total_mib"), g.get("vram_used_mib")
+        free = max(total - used, 0) if total is not None and used is not None else None
+        devices.append({
+            "index": g.get("index"),
+            "name": g.get("name"),
+            "vram_total_mib": total,
+            "vram_free_mib": free,
+            "unified": bool(g.get("unified")),
+        })
+
+    def _sum(key: str) -> Optional[int]:
+        vals = [d[key] for d in devices]
+        return sum(vals) if vals and all(v is not None for v in vals) else None
+
+    by_pid = reading.get("vram_by_pid") or {}
+    jobs = sorted(
+        ({"pid": int(pid), "vram_mib": mib} for pid, mib in by_pid.items() if mib >= _GPU_JOB_MIN_MIB),
+        key=lambda j: j["vram_mib"],
+        reverse=True,
+    )
+    return {
+        "vram_total_mib": _sum("vram_total_mib"),
+        "vram_free_mib": _sum("vram_free_mib"),
+        "devices": devices,
+        "jobs": jobs,
+    }
+
+
+def _read_gpu() -> dict:
+    """The `gpu` object from one in-process NVML / unified-memory reading; never raises."""
+    try:
+        _place_engine_on_path()
+        from coordinator_core.group_em import gpu_sample
+
+        return _gpu_object(gpu_sample.sample())
+    except Exception as exc:
+        return {"unavailable": f"gpu-read-error:{type(exc).__name__}"}
+
+
+def _render_gpu(gpu: dict) -> list:
+    if "unavailable" in gpu:
+        return [f"GPU:              {_UNAVAILABLE}: {gpu['unavailable']}"]
+
+    def _mib(v: Optional[int]) -> str:
+        return _UNAVAILABLE if v is None else f"{round(v / 1024, 2)} GiB"
+
+    lines = [f"GPU VRAM:         {_mib(gpu['vram_free_mib'])} free / {_mib(gpu['vram_total_mib'])}"]
+    jobs = gpu["jobs"]
+    lines.append(
+        "GPU jobs >=1 GiB: " + ("none" if not jobs else "  ".join(f"{j['pid']}={_mib(j['vram_mib'])}" for j in jobs))
+    )
+    return lines
+
+
 def build_snapshot(
-    status, nonpaged_fn, cache_host_fn, consumers_fn: Callable, top: int, counts_fn: Optional[Callable] = None
+    status,
+    nonpaged_fn,
+    cache_host_fn,
+    consumers_fn: Callable,
+    top: int,
+    counts_fn: Optional[Callable] = None,
+    gpu_fn: Optional[Callable] = None,
 ) -> dict:
     cache = _try(lambda: cache_host_fn().read_memory())
     nonpaged = _try(nonpaged_fn)
@@ -169,6 +259,7 @@ def build_snapshot(
         "nonpaged_pool_gib": _gib(nonpaged) if nonpaged is not None else _UNAVAILABLE,
         "top_consumers": consumers if consumers is not None else _UNAVAILABLE,
         "process_counts": counts if counts is not None else _UNAVAILABLE,
+        "gpu": (gpu_fn or _read_gpu)(),
     }
     failed = [k for k in _READ_FIELDS if snap[k] == _UNAVAILABLE]
     if failed:
@@ -192,6 +283,7 @@ def _render(snap: dict) -> str:
     psi = snap.get("memory_psi")
     if psi:
         lines.append("Memory PSI:       " + "  ".join(f"{k}={v}" for k, v in psi.items()))
+    lines.extend(_render_gpu(snap["gpu"]))
     if "note" in snap:
         lines.append(f"Note:             {snap['note']}")
     top = snap["top_consumers"]
@@ -210,6 +302,140 @@ def _render_reservation(res: dict) -> str:
         lines.append(f"  {'grant' if j['pid'] is None else j['pid']:>7}  {j['reserved_gib']:>7.2f} GiB  {j['run']}")
     lines.append(f"Reservation total: {res['total_gib']} GiB")
     return "\n".join(lines)
+
+
+_LOCAL_ONLY_ARGS = (
+    "register_pid", "release_pid", "record_peak", "command_key", "run", "session_id",
+    "parent_pool_run", "reservation", "admission_file", "commit_limit_gib",
+)
+_MB = 1024**2
+_DOWN_LABEL = {"timed_out": "UNREACHABLE (timed out)", "unreachable": "UNREACHABLE"}
+
+
+def _fleet_wanted(args) -> bool:
+    """Fleet-wide unless `--local`, or a flag that reads or writes this box's own admission state."""
+    return not args.local and all(getattr(args, name) in (None, False) for name in _LOCAL_ONLY_ARGS)
+
+
+def _no_local_sample() -> dict:
+    raise RuntimeError("this box is read by the local snapshot")
+
+
+def _fleet_fetch() -> dict:
+    """Far boxes' live rows (`fleet_live.gather`, one invoke each, in parallel, per-box timeout) plus
+    this box's alias; never raises: `{"error": reason}` on failure."""
+    try:
+        _place_engine_on_path()
+        from coordinator_core.group_em import box_registry, fleet_live
+
+        local = box_registry.local_box_id()
+        rows = fleet_live.gather(local_sample=_no_local_sample, local_id=local)
+        return {"local_alias": fleet_live.box_alias(None), "rows": [r for r in rows if r.get("box") != local]}
+    except Exception as exc:  # noqa: BLE001 -- a fleet read never sinks this box's snapshot
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def _start_fleet(fetch: Callable) -> tuple:
+    """Run `fetch` on a daemon thread so the far reads overlap this box's own; `(thread, result_box)`."""
+    box: list = []
+
+    def _run() -> None:
+        try:
+            box.append(fetch())
+        except Exception as exc:  # noqa: BLE001
+            box.append({"error": f"{type(exc).__name__}: {exc}"})
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return thread, box
+
+
+def _mb_gib(mb) -> str:
+    return _UNAVAILABLE if not isinstance(mb, (int, float)) else f"{round(mb / 1024, 2)}"
+
+
+def _ago(then, now: float) -> str:
+    if not isinstance(then, (int, float)):
+        return "never"
+    s = max(0, int(now - then))
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if s >= size:
+            return f"{s // size}{unit}"
+    return f"{s}s"
+
+
+def _far_admit(row: dict, peak_gib: float, cushion_pct: float, host) -> dict:
+    """This far box's verdict on `peak_gib` from its live reading (no reservation netted: a far box's
+    admission is its own). An UNREACHABLE box or a missing reading is `UNKNOWN`, never ADMIT."""
+    if row.get("state") != "ok":
+        return {"verdict": "UNKNOWN", "peak_gib": peak_gib, "reason": str(row.get("reason") or row.get("state"))}
+    keys = ("ram_free_mb", "ram_total_mb", "commit_used_mb", "commit_limit_mb")
+    if any(not isinstance(row.get(k), (int, float)) for k in keys):
+        return {"verdict": "UNKNOWN", "peak_gib": peak_gib, "reason": "reading missing"}
+    status = host.MemoryStatus(
+        int(row["ram_free_mb"] * _MB), int(row["ram_total_mb"] * _MB),
+        int(row["commit_used_mb"] * _MB), int(row["commit_limit_mb"] * _MB),
+    )
+    verdict = host.admit(int(peak_gib * host.GIB), status, cushion_pct=cushion_pct)
+    return {
+        "verdict": "ADMIT" if verdict.admit else "HOLD",
+        "peak_gib": peak_gib,
+        "need_avail_gib": _gib(int(verdict.need_avail)),
+        "avail_ok": verdict.avail_ok,
+        "commit_ok": verdict.commit_ok,
+        "line": _admit_line(verdict, peak_gib, status, status.commit_limit),
+    }
+
+
+def _maxima_line(row: dict) -> str:
+    gpus = [g for g in (row.get("gpus") or []) if isinstance(g, dict)]
+    gpu = ", ".join(f"{g.get('name') or '?'} {_mb_gib(g.get('vram_total_mib'))} GiB" for g in gpus) or "no gpu"
+    cores = row.get("cores")
+    return (f"{cores if cores is not None else _UNAVAILABLE} cores, {_mb_gib(row.get('ram_total_mb'))} GiB RAM, "
+            f"commit limit {_mb_gib(row.get('commit_limit_mb'))} GiB, {gpu}")
+
+
+def _render_far(row: dict, admit: Optional[dict], now: float) -> str:
+    """One far box's section; a box that did not answer keeps its last-known maxima and last-seen time."""
+    name = row.get("alias") or row.get("box")
+    head = f"== {name} ({row.get('os') or '?'})"
+    if row.get("state") != "ok":
+        label = _DOWN_LABEL.get(str(row.get("state")), str(row.get("state")).upper())
+        lines = [f"{head} {label} ({row.get('reason') or row.get('state')}) ==",
+                 f"Maxima (last known): {_maxima_line(row) if row.get('maxima_source') else _UNAVAILABLE}",
+                 f"Last seen:        {_ago(row.get('last_seen'), now)} ago"]
+    else:
+        vram = row.get("vram_used_mib")
+        jobs = row.get("jobs")
+        lines = [
+            f"{head} ==",
+            f"Available:        {_mb_gib(row.get('ram_free_mb'))} GiB",
+            f"Commit:           {_mb_gib(row.get('commit_used_mb'))} / {_mb_gib(row.get('commit_limit_mb'))} GiB",
+            f"GPU VRAM used:    {_mb_gib(vram)} GiB",
+            f"Sessions/jobs:    {row.get('sessions') if row.get('sessions') is not None else _UNAVAILABLE}"
+            f" / {len(jobs) if isinstance(jobs, list) else _UNAVAILABLE}",
+            f"Maxima:           {_maxima_line(row)}",
+            f"Sampled:          {_ago(row.get('last_seen'), now)} ago",
+        ]
+    if admit is not None:
+        lines.append(admit["line"] + " reserved=n/a" if "line" in admit
+                     else f"UNKNOWN peak={admit.get('peak_gib', '?')}GiB ({admit['reason']})")
+    return "\n".join(lines)
+
+
+def _render_fleet(fleet: dict, admits: dict, now: float) -> list:
+    """Far-box sections plus one `power it on?` line per UNREACHABLE box; `[]` when the fleet read failed
+    (a note line instead)."""
+    if "error" in fleet:
+        return [f"== fleet == unavailable ({fleet['error']})"]
+    lines = []
+    for row in fleet["rows"]:
+        lines.append(_render_far(row, admits.get(row["box"]), now))
+    for row in fleet["rows"]:
+        if row.get("state") in _DOWN_LABEL:
+            lines.append(f"power it on? {row.get('alias') or row.get('box')} is UNREACHABLE "
+                         f"(last seen {_ago(row.get('last_seen'), now)} ago)")
+    return lines
 
 
 def _admit_line(verdict, peak_gib: float, status, limit: int) -> str:
@@ -286,16 +512,23 @@ def _main(
     proc_table_fn: Optional[Callable] = None,
     cmdline_fn: Optional[Callable] = None,
     names_fn: Optional[Callable] = None,
+    gpu_fn: Optional[Callable] = None,
+    fleet_fn: Optional[Callable] = None,
+    owner_pid_fn: Optional[Callable] = None,
 ) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description="One-screen box memory snapshot.", allow_abbrev=False)
     parser.add_argument("--top", type=int, default=10, help="top N consumers (default 10)")
     parser.add_argument("--admit-peak", type=float, metavar="GIB", help="check admission of a peak; the default "
-                        "mode fits a single heavy job and adds a cushion of min(--cushion-pct of peak, 8 GiB)")
+                        "mode fits a single heavy job and adds a cushion of min(--cushion-pct of peak, 8 GiB); "
+                        "an ADMIT reserves the peak for the caller's parent pid until it exits "
+                        "(release: --command-key admit-peak --release-pid P)")
     parser.add_argument("--fleet", action="store_true", help="admit with no cushion: available >= peak and "
                         "commit + peak <= limit only. For a fleet already sized with its reserve S")
     parser.add_argument("--cushion-pct", type=float, default=25.0, help="available cushion percent")
     parser.add_argument("--commit-limit-gib", type=float, help="override the commit limit")
     parser.add_argument("--admission-file", help="admission.jsonl path (default: settings-home channel)")
+    parser.add_argument("--local", action="store_true", help="this box only (default: every Unimatrix box; "
+                        "admission flags and --reservation are always this box's own)")
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument("--command-key", help="name of the command; keys its recorded peak")
     parser.add_argument("--run", help="credit only this invoking session's live Group EM slot for this run")
@@ -315,6 +548,7 @@ def _main(
         parser.error("--run requires --admit-peak or a recorded --command-key peak")
     if args.fleet:  # a fleet's width formula already took its reserve S out; a cushion pads it twice
         args.cushion_pct = 0.0
+    fleet_wanted = _fleet_wanted(args)
 
     host = _load("box_memory_host")
     adm_path = args.admission_file or host.admission_file()
@@ -345,6 +579,7 @@ def _main(
         if missing is not None:
             return missing
 
+    fleet_thread, fleet_box = _start_fleet(fleet_fn or _fleet_fetch) if fleet_wanted else (None, [])
     status_fn = status_fn or host.read_memory_status
     if plat == "darwin":
         # No nonpaged pool or file-cache counters on macOS: those fields print `unavailable`.
@@ -378,7 +613,7 @@ def _main(
 
     status = _try(_read_status)
     counts_fn = lambda: _process_counts(table_fn, names_fn or _psutil_image_names)
-    snap = build_snapshot(status, nonpaged_fn, cache_host_fn, consumers_fn, args.top, counts_fn)
+    snap = build_snapshot(status, nonpaged_fn, cache_host_fn, consumers_fn, args.top, counts_fn, gpu_fn)
     if plat.startswith("linux"):
         snap["memory_psi"] = _try(host.read_psi_memory)
     code = 0
@@ -432,13 +667,20 @@ def _main(
                 cushion_pct=args.cushion_pct, commit_limit=limit, **reserved_kw,
             )
         else:
-            reserved = host.reserved_bytes(adm_path, **reserved_kw)
-            adjusted = dataclasses.replace(
-                status,
-                avail_phys=max(0, status.avail_phys - reserved),
-                commit_used=status.commit_used + reserved,
-            )
-            verdict = host.admit(peak, adjusted, cushion_pct=args.cushion_pct, commit_limit=limit)
+            owner = (owner_pid_fn or os.getppid)()
+            if owner and owner > 0:
+                verdict, reserved = host.admit_and_register(
+                    adm_path, args.command_key or "admit-peak", owner, args.admit_peak, status,
+                    cushion_pct=args.cushion_pct, commit_limit=limit, credit_own=True, **reserved_kw,
+                )
+            else:
+                reserved = host.reserved_bytes(adm_path, **reserved_kw)
+                adjusted = dataclasses.replace(
+                    status,
+                    avail_phys=max(0, status.avail_phys - reserved),
+                    commit_used=status.commit_used + reserved,
+                )
+                verdict = host.admit(peak, adjusted, cushion_pct=args.cushion_pct, commit_limit=limit)
         # Display only: the verdict above already netted `reserved`.
         status = dataclasses.replace(
             status,
@@ -456,15 +698,35 @@ def _main(
         }
         code = 0 if verdict.admit else 4
 
+    fleet: dict = {}
+    admits: dict = {}
+    if fleet_thread is not None:
+        fleet_thread.join()
+        fleet = fleet_box[0] if fleet_box else {"error": "no reply"}
+        if args.admit_peak is not None and "rows" in fleet:
+            admits = {r["box"]: _far_admit(r, args.admit_peak, args.cushion_pct, host) for r in fleet["rows"]}
+    now = time.time()
     if args.json:
+        if fleet:
+            snap["fleet"] = (
+                [{**r, "admit": admits[r["box"]]} if r["box"] in admits else r for r in fleet["rows"]]
+                if "rows" in fleet else {"unavailable": fleet["error"]}
+            )
+            if "rows" in fleet:
+                snap["power_on"] = [r["box"] for r in fleet["rows"] if r.get("state") in _DOWN_LABEL]
         print(json.dumps(snap))
         _JSON_EMITTED[0] = True
     else:
+        if fleet:
+            print(f"== {fleet.get('local_alias', 'this box')} (this box) ==")
         print(_render(snap))
         if "reservation" in snap:
             print(_render_reservation(snap["reservation"]))
         if admit_line:
             print(admit_line)
+        if fleet:
+            for line in _render_fleet(fleet, admits, now):
+                print(line)
     return code
 
 

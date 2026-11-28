@@ -50,6 +50,9 @@ def _engine(monkeypatch, tmp_path):
     (package.parent / "host_hooks" / "codex_lifecycle.py").write_text("# capability fixture", encoding="utf-8")
     (package.parent / "codex_status").mkdir(exist_ok=True)
     (package.parent / "codex_status" / "hook.py").write_text("# capability fixture", encoding="utf-8")
+    registry_dir = root / "coordinator_core" / "install"
+    registry_dir.mkdir()
+    shutil.copy2(ui._load_host_registry().__file__, registry_dir / ui.HOST_REGISTRY_REL[-1])
     _write_stubs(_engine_bin(tmp_path))
     monkeypatch.setattr(ui, "resolve_engine_root", lambda: (str(root), "published-target"))
     return root
@@ -293,7 +296,8 @@ def test_install_copies_scripts_and_prints_rc_notice(monkeypatch, tmp_path, plat
     rc, out = _run(["--install"], "2.1.316", dest, tmp_path / "gemini" / "hooks.json")
     assert rc == 0
     assert "/rc" in out and out.index("/rc") < out.index("installed")
-    assert sorted(p.name for p in dest.iterdir()) == sorted(ui.VENDORED_SCRIPTS)
+    assert sorted(p.name for p in dest.iterdir() if p.is_file()) == sorted(ui.VENDORED_SCRIPTS)
+    assert [p.name for p in (dest / "lib").iterdir()] == [ui.HOST_REGISTRY_REL[-1]]
 
 
 def test_install_prints_authorized_keys_line_with_absolute_paths(monkeypatch, tmp_path):
@@ -4076,6 +4080,15 @@ def test_missing_host_registry_is_a_typed_refusal_at_use_not_at_import(tmp_path,
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "codex"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf) == 2
     assert "REFUSE: --hosts cannot be checked" in buf.getvalue()
+
+
+def test_host_registry_resolves_from_the_engine_root_when_no_source_tree_is_beside_the_installer(tmp_path, monkeypatch, _engine):
+    monkeypatch.setattr(ui, "_BIN_DIR", tmp_path / "carried" / "a" / "b" / "bin")
+    registry = ui._load_host_registry()
+    assert Path(registry.__file__) == _engine.joinpath(*ui.HOST_REGISTRY_REL)
+    buf = io.StringIO()
+    ui.main(["--install", "--hosts", "codex"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf)
+    assert "REFUSE: --hosts cannot be checked" not in buf.getvalue()
 
 
 def test_host_present_reads_path_and_home(monkeypatch, tmp_path):

@@ -7,6 +7,8 @@ import io
 import sys
 from pathlib import Path
 
+import pytest
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -20,6 +22,13 @@ def _load_publish():
 
 
 publish = _load_publish()
+
+
+@pytest.fixture(autouse=True)
+def _unimatrix_on(tmp_path, monkeypatch):
+    home = tmp_path / "settings-home"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    return home
 
 
 def _stub_gate(tmp_path: Path, body: str) -> Path:
@@ -96,3 +105,22 @@ def test_the_gate_result_is_conjoined_into_gates_ok():
     )
     names = {v.id for v in gates_ok.value.values if isinstance(v, ast.Name)}
     assert "unimatrix_inbound_ok" in names
+
+
+def test_the_off_switch_skips_the_gate_without_running_it(tmp_path, _unimatrix_on):
+    marker = _unimatrix_on / "unimatrix" / "DISABLED"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("", encoding="utf-8")
+    gate = _stub_gate(tmp_path, "import sys\nprint(\'mini: missing\')\nsys.exit(1)\n")
+    ok, out, err = _run(gate)
+    assert ok is True
+    assert "switched off" in out and str(marker) in out
+    assert "[inbound-gate]" not in out
+    assert err == ""
+
+
+def test_without_the_off_switch_a_failing_gate_still_fails(tmp_path):
+    gate = _stub_gate(tmp_path, "import sys\nsys.exit(1)\n")
+    ok, _, err = _run(gate)
+    assert ok is False
+    assert "exit 1" in err

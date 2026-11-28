@@ -833,3 +833,63 @@ def test_retired_plugins_unreachable_manifest_falls_back_to_coordinator(
     assert ns.func(ns) == 0
     err = capsys.readouterr().err
     assert "web-dev@coordinator-claude" in err
+
+
+# ---------------------------------------------------------------------------
+# check-project-type
+# ---------------------------------------------------------------------------
+
+def _ptype_root(tmp_path: Path, declaration: str | None, uproject: bool) -> Path:
+    if declaration is not None:
+        (tmp_path / "coordinator.local.md").write_text(declaration, encoding="utf-8")
+    if uproject:
+        (tmp_path / "Game.uproject").write_text("{}", encoding="utf-8")
+    return tmp_path
+
+
+def _ptype(root: Path, capsys) -> tuple[int, str]:
+    ns = _mod.build_parser().parse_args(["check-project-type", "--root", str(root)])
+    rc = ns.func(ns)
+    return rc, capsys.readouterr().out
+
+
+def test_project_type_conflict_is_reported_and_fails(tmp_path: Path, capsys) -> None:
+    root = _ptype_root(tmp_path, "---\nproject_type: web-dev\n---\n", uproject=True)
+    rc, out = _ptype(root, capsys)
+    assert rc == 1
+    assert "project_type: conflict" in out
+    assert "hint:" in out
+
+
+def test_project_type_seedable_is_reported_with_repair_and_passes(tmp_path: Path, capsys) -> None:
+    root = _ptype_root(tmp_path, None, uproject=True)
+    rc, out = _ptype(root, capsys)
+    assert rc == 0
+    assert "project_type: seedable" in out
+    assert "check-project-type" in out and "--apply" in out
+    assert not (root / "coordinator.local.md").exists()
+
+
+def test_project_type_ok_and_missing(tmp_path: Path, capsys) -> None:
+    ok = tmp_path / "ok"
+    ok.mkdir()
+    _ptype_root(ok, "---\nproject_type: general\n---\n", uproject=False)
+    missing = tmp_path / "missing"
+    missing.mkdir()
+    assert _ptype(ok, capsys) == (0, f"project_type: ok  {ok}: consistent\n")
+    rc, out = _ptype(missing, capsys)
+    assert rc == 0 and "project_type: missing" in out
+
+
+def test_project_type_defaults_to_cwd(tmp_path: Path, capsys, monkeypatch) -> None:
+    _ptype_root(tmp_path, "---\nproject_type: meta\n---\n", uproject=False)
+    monkeypatch.chdir(tmp_path)
+    ns = _mod.build_parser().parse_args(["check-project-type"])
+    assert ns.func(ns) == 1
+    assert "project_type: conflict" in capsys.readouterr().out
+
+
+def test_project_type_non_directory_fails(tmp_path: Path, capsys) -> None:
+    ns = _mod.build_parser().parse_args(["check-project-type", "--root", str(tmp_path / "nope")])
+    assert ns.func(ns) == 1
+    assert "not a directory" in capsys.readouterr().err

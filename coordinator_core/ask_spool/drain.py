@@ -74,6 +74,9 @@ _DRIVEN_BY_SESSION = "is driven by session"
 #: Engine-written refire entries (`pending_oracle.spool_refire`, `stranded_wait.SOURCE`) carry their source label as the
 #: session id, so no session reads their notices.
 _REFIRE_SESSIONS = frozenset({"stranded-wait", "pending-oracle"})
+#: trap: a launcher or deferred submission names a run whose `scratch/warp` dir only the launcher Workflow writes, which a
+#: headless drain never runs, so each retry re-mints a fresh script and still finds no dir. Terminal after `FIRE_ATTEMPT_CAP`.
+_NO_RUN_DIR = "has no run dir"
 
 Evaluate = Callable[[dict], dict]
 
@@ -443,9 +446,12 @@ def _reclaim_stale(root: str, stale_after_s: float, now: float) -> None:
 
 
 def _is_unfireable(header: dict) -> bool:
-    """True for an entry the engine refuses for good: a refusal naming the session driving its run, or `UNFIREABLE_ATTEMPTS`
+    """True for an entry the engine refuses for good: a refusal naming the session driving its run, `FIRE_ATTEMPT_CAP`
+    consecutive mints that named a run with no run dir, or `UNFIREABLE_ATTEMPTS`
     failures on an entry spooled over `UNFIREABLE_AGE_S` ago. `header` already carries this failure's `attempts` and `last_error`."""
     if _DRIVEN_BY_SESSION in str(header.get("last_error") or ""):
+        return True
+    if int(header.get("no_run_dir_attempts") or 0) >= FIRE_ATTEMPT_CAP:
         return True
     old = time.time() - float(header.get("spooled_at") or 0) >= UNFIREABLE_AGE_S
     return old and int(header.get("attempts") or 0) >= UNFIREABLE_ATTEMPTS
@@ -496,7 +502,8 @@ def _withdraw_unfireable(root: str, sid: str, header: dict, payload: bytes, coun
 def _fail(root: str, sid: str, path: str, header: dict, payload: bytes, why: str, counts: dict, loaded: bool) -> None:
     """`loaded` False (entry unreadable or still being written) keeps the entry's bytes untouched."""
     attempts = int(header.get("attempts") or 0) + 1
-    header = {**header, "attempts": attempts, "last_error": why[:500]}
+    streak = int(header.get("no_run_dir_attempts") or 0) + 1 if _NO_RUN_DIR in why else 0
+    header = {**header, "attempts": attempts, "last_error": why[:500], "no_run_dir_attempts": streak}
     if loaded:
         try:
             _rewrite(path, header, payload)
@@ -1170,7 +1177,10 @@ def run(
                 if run_id is None and superseded is None:
                     run_id = _mint(root, header, parsed, evaluate, taken)
                 if superseded is None and not os.path.isdir(root / RUN_DIR_ROOT / run_id):
-                    raise RuntimeError(f"run {run_id} has no run dir")
+                    raise RuntimeError(
+                        f"run {run_id} {_NO_RUN_DIR}: a launcher or deferred submission starts only inside a session; "
+                        "re-submit it from one"
+                    )
         except Exception as exc:  # BaseException (a kill) leaves the claim for the stale reclaim
             _fail(repo_root, sid, path, header, payload, f"{type(exc).__name__}: {exc}", counts, loaded)
             continue

@@ -1114,6 +1114,7 @@ def admit_and_register(
     commit_limit: int | None = None,
     cores: int = 1,
     cpu_budget: int | None = None,
+    credit_own: bool = False,
     **reserved_kwargs,
 ) -> tuple[AdmitVerdict, int]:
     """Read reservations, decide and write the START line under one lock; returns (verdict, reserved bytes).
@@ -1121,13 +1122,26 @@ def admit_and_register(
     Two concurrent callers serialize, so the second sees the first's reservation. ``cores`` is the
     leg's declared cores (undeclared = 1) and ``cpu_budget`` the box budget (None = ``default_cpu_budget()``);
     the verdict holds when declared plus already-reserved cores exceed it.
+
+    ``credit_own`` makes ``pid`` the owner of a default-mode reservation: its own live rows under the same
+    ``key`` are not subtracted from the headroom it asks for, and on ADMIT they are ended so the new START replaces them.
     """
     import dataclasses
+    import time
 
     liveness = {k: v for k, v in reserved_kwargs.items() if k in ("alive_fn", "create_time_fn", "image_fn", "now_fn")}
     with admission_lock(admission_path):
         compact_admission(admission_path, locked=True, **liveness)
-        reserved = reserved_bytes(admission_path, **reserved_kwargs)
+        own_rows: list = []
+        if credit_own:
+            rows = _holdings(admission_path, reserved_kwargs.get("rss_fn", tree_rss_mb),
+                reserved_kwargs.get("alive_fn", pid_alive), reserved_kwargs.get("create_time_fn", pid_create_time),
+                reserved_kwargs.get("image_fn", pid_image), reserved_kwargs.get("now_fn") or time.time)
+            own_run = f"{key}:{pid}"
+            own_rows = [r for r in rows if r["pid"] == pid and r.get("run") == own_run]
+            reserved = sum(r["bytes"] for r in rows if r not in own_rows)
+        else:
+            reserved = reserved_bytes(admission_path, **reserved_kwargs)
         adjusted = dataclasses.replace(
             status,
             avail_phys=max(0, status.avail_phys - reserved),
@@ -1136,6 +1150,10 @@ def admit_and_register(
         verdict = admit(int(peak_gib * GIB), adjusted, cushion_pct=cushion_pct, commit_limit=commit_limit)
         verdict = _with_cpu_axis(verdict, cores, reserved_cores(admission_path, exclude_pid=pid, **liveness), cpu_budget)
         if verdict.admit:
+            for row in own_rows:
+                _append_admission(admission_path, {
+                    "phase": "END", "session_id": row["session_id"], "run": row["run"], "pids": [],
+                })
             register_command(admission_path, key, pid, peak_gib, cores=cores,
                              **{k: v for k, v in liveness.items() if k == "create_time_fn"})
     return verdict, reserved

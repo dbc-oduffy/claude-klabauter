@@ -1039,6 +1039,10 @@ _COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 # grok's; a rejected pattern surfaces as the named cancel error. Literals match ask_compose's.
 _INVOKE_ONLY_AGENT_TYPES = frozenset({_OP_RELAY_AGENT_TYPE, _COMMIT_AGENT_TYPE})
 _RELAY_ALLOW = "Bash(coordinator-invoke:*)"
+# Trap: a headless grok cannot approve a prompt, and it names its shell tool Execute (Bash covers neither it
+# nor the PowerShell shell Windows runs); each tool the stage prompt tells it to call is pre-approved here.
+_SHELL_ALLOW = ("Bash", "PowerShell", "Execute")
+_EXAMPLE_RETRIEVAL_REPO_ALLOW = "MCPTool(example_retrieval_repo__*)"
 # Trap: grok's headless allow gate never matches a command led by the `&` call operator (measured: every
 # `--allow Bash...` rule still answers "permission required"), so grok is told the bare form; settings-home
 # bin is on its PATH (_grok_child_path), which resolves sizing-assemble and coordinator-invoke by name.
@@ -1118,11 +1122,12 @@ def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None
     """
     try:
         if backend == "grok":
-            allow = _RELAY_ALLOW if agent_type in _INVOKE_ONLY_AGENT_TYPES else "Bash"
+            allow = (_RELAY_ALLOW,) if agent_type in _INVOKE_ONLY_AGENT_TYPES else (*_SHELL_ALLOW, _EXAMPLE_RETRIEVAL_REPO_ALLOW)
             output_format = "streaming-json" if agent_type == "coordinator:sizing-scout" else "json"
             argv = [*resolve_grok(), "--prompt-file", str(artifact_dir / "prompt.txt"),
                     "--output-format", output_format, "--permission-mode", "acceptEdits",
-                    "--allow", allow, "--no-subagents", "--no-auto-update"]
+                    *[flag for rule in allow for flag in ("--allow", rule)],
+                    "--no-subagents", "--no-auto-update"]
             if model:
                 argv += ["--model", model]
             if effort:
@@ -1403,7 +1408,7 @@ def run_agent(
         ) + full_prompt
     elif backend == "grok":
         full_prompt = (
-            "Grok stage tools: search_replace or write for file edits; run_terminal_command for commands. "
+            "Grok stage tools: search_replace or write for file edits; Execute for commands. "
             "Edit, Write, Bash, and Agent in the brief name the action. Subagents are off. "
             "coordinator-invoke only when the brief names that command.\n\n"
         ) + full_prompt

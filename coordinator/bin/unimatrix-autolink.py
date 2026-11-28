@@ -2190,4 +2190,7 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    from _unimatrix.off_switch import is_off as _unimatrix_off
+    if _unimatrix_off() and not any(_a in ("-h", "--help") for _a in __import__("sys").argv[1:]):
+        raise SystemExit(0)
     sys.exit(main())

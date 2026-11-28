@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 from coordinator_core.resolve_validation_cmd import _extract_frontmatter
 
@@ -46,6 +47,27 @@ def _flow_items(raw: str) -> list[str]:
 LOCAL_MD_RELPATHS: tuple[str, ...] = (".claude/coordinator.local.md", "coordinator.local.md")
 
 
+class Declaration(NamedTuple):
+    """One coordinator.local.md declaration: `project_type`, `project_subtypes`, winning file."""
+
+    project_type: str | None
+    project_subtypes: tuple[str, ...]
+    source_file: Path
+
+    @property
+    def ue(self) -> bool:
+        return any(v in UE_DECLARED_VALUES for v in (self.project_type, *self.project_subtypes))
+
+
+def declared_project(root: str | os.PathLike) -> Declaration | None:
+    """The first `LOCAL_MD_RELPATHS` file under `root` carrying a declaration, else None."""
+    for rel in LOCAL_MD_RELPATHS:
+        found = _declaration_in(Path(root) / rel)
+        if found is not None:
+            return found
+    return None
+
+
 def declared_ue(root: str | os.PathLike) -> bool | None:
     """Whether `<root>/.claude/coordinator.local.md`, else `<root>/coordinator.local.md`, declares UE.
 
@@ -53,14 +75,11 @@ def declared_ue(root: str | os.PathLike) -> bool | None:
     None: no file readable or none declares either key. True: project_type or a
     project_subtypes entry is `unreal` or `unreal-engine`. False: any other declaration.
     """
-    for rel in LOCAL_MD_RELPATHS:
-        verdict = _declared_ue_in(Path(root) / rel)
-        if verdict is not None:
-            return verdict
-    return None
+    found = declared_project(root)
+    return None if found is None else found.ue
 
 
-def _declared_ue_in(path: Path) -> bool | None:
+def _declaration_in(path: Path) -> Declaration | None:
     try:
         if not path.is_file():
             return None
@@ -68,7 +87,8 @@ def _declared_ue_in(path: Path) -> bool | None:
     except OSError:
         return None
 
-    values: list[str] = []
+    types: list[str] = []
+    subtypes: list[str] = []
     lines = fm.splitlines()
     i = 0
     while i < len(lines):
@@ -77,6 +97,7 @@ def _declared_ue_in(path: Path) -> bool | None:
         if not m:
             continue
         key, rest = m.group(1), m.group(2).strip()
+        values = types if key == "project_type" else subtypes
         if rest.startswith("["):
             values.extend(_flow_items(rest))
         elif rest and not rest.startswith("#"):
@@ -92,6 +113,6 @@ def _declared_ue_in(path: Path) -> bool | None:
                 if val:
                     values.append(val)
                 i += 1
-    if not values:
+    if not types and not subtypes:
         return None
-    return any(v in UE_DECLARED_VALUES for v in values)
+    return Declaration(types[0] if types else None, tuple(types[1:] + subtypes), path)

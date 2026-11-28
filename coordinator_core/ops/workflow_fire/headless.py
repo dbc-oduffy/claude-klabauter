@@ -21,10 +21,37 @@ from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV, stamp_fir
 from coordinator_core.ops.workflow_fire.wait import DEFAULT_TIMEOUT_S
 
 
+_CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+
+
 def _save(path: Path, value: dict) -> None:
     temporary = path.with_name(f'{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp')
     temporary.write_text(json.dumps(value, indent=2), encoding='utf-8')
     os.replace(temporary, path)
+
+
+def _spawn_worker(command: list[str], *, cwd, env, stdout, popen=None, windows: bool | None = None) -> subprocess.Popen:
+    """Start the worker outside the caller's job; a job that forbids breakaway gets one retry without it."""
+    popen = subprocess.Popen if popen is None else popen
+    windows = os.name == 'nt' if windows is None else windows
+    kwargs: dict = {}
+    base = 0
+    if windows:
+        base = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200)
+        kwargs['creationflags'] = base | _CREATE_BREAKAWAY_FROM_JOB
+    else:
+        kwargs['start_new_session'] = True
+
+    def spawn() -> subprocess.Popen:
+        return popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=stdout, stderr=subprocess.STDOUT, **kwargs)
+
+    try:
+        return spawn()
+    except OSError:
+        if not windows:
+            raise
+        kwargs['creationflags'] = base
+        return spawn()
 
 
 def _pid_birth(pid: int) -> float | None:
@@ -174,9 +201,7 @@ def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = N
         if not admission.admitted:
             raise RuntimeError(f'headless Workflow worker not admitted: {admission.reason}')
         with log.open('wb') as output:
-            kwargs = {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)} if os.name == 'nt' else {'start_new_session': True}
-            child = subprocess.Popen(command, cwd=repo, env=env, stdin=subprocess.DEVNULL,
-                                     stdout=output, stderr=subprocess.STDOUT, **kwargs)
+            child = _spawn_worker(command, cwd=repo, env=env, stdout=output)
         # Before the gate, a crash is execution-unknown. The worker itself marks
         # execution_started=True after observing the released gate, so the parent
         # never overwrites a quickly completed child's terminal record.

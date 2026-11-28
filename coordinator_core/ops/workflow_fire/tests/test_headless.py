@@ -365,6 +365,40 @@ def test_failed_gate_release_reaps_only_its_own_spawned_driver(tmp_path: Path, m
     assert value['state'] == 'exited' and value['exit_code'] == 1
     assert 'gate denied' in value['error']
 
+def test_worker_spawn_breaks_away_from_the_callers_job_on_windows() -> None:
+    calls = []
+    def popen(cmd, **kw):
+        calls.append(kw['creationflags'])
+        return 'child'
+    assert headless._spawn_worker(['x'], cwd='.', env={}, stdout=None, popen=popen, windows=True) == 'child'
+    assert calls == [0x08000000 | 0x00000200 | 0x01000000]
+
+
+def test_worker_spawn_retries_once_without_breakaway_on_oserror() -> None:
+    calls = []
+    def popen(cmd, **kw):
+        calls.append(kw['creationflags'])
+        if len(calls) == 1:
+            raise OSError('job forbids breakaway')
+        return 'child'
+    assert headless._spawn_worker(['x'], cwd='.', env={}, stdout=None, popen=popen, windows=True) == 'child'
+    assert calls == [0x08000000 | 0x00000200 | 0x01000000, 0x08000000 | 0x00000200]
+
+
+def test_worker_spawn_second_oserror_and_posix_oserror_propagate() -> None:
+    def boom(cmd, **kw):
+        raise OSError('no')
+    with pytest.raises(OSError):
+        headless._spawn_worker(['x'], cwd='.', env={}, stdout=None, popen=boom, windows=True)
+    seen = []
+    def posix(cmd, **kw):
+        seen.append(kw)
+        raise OSError('no')
+    with pytest.raises(OSError):
+        headless._spawn_worker(['x'], cwd='.', env={}, stdout=None, popen=posix, windows=False)
+    assert len(seen) == 1 and seen[0]['start_new_session'] is True and 'creationflags' not in seen[0]
+
+
 @pytest.mark.parametrize("worker_failed", [False, True])
 def test_headless_gate_journals_tool_output_and_separates_diagnostics(
     tmp_path: Path, worker_failed: bool,

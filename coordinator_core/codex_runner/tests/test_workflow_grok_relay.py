@@ -245,11 +245,61 @@ def test_run_agent_hands_the_grok_child_a_path_with_git_only_when_the_engine_lac
     assert (str(program_files / "Git" / "cmd") in parts) is (not git_on_path)
 
 
-def test_other_grok_stages_keep_the_incumbent_allow(tmp_path: Path, stub) -> None:
+def test_other_grok_stages_lead_with_the_incumbent_bash_allow(tmp_path: Path, stub) -> None:
     seen, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
     assert _run(tmp_path, "coordinator:executor") == {"a": 1}
     assert _allow(seen[0]) == "Bash"
+
+
+def _allows(argv):
+    return [argv[i + 1] for i, token in enumerate(argv) if token == "--allow"]
+
+
+@pytest.mark.parametrize("agent_type", ["coordinator:sizing-scout", "coordinator:executor"])
+def test_headless_grok_stage_may_call_example_retrieval_repo_tools(tmp_path: Path, stub, agent_type) -> None:
+    seen, box = stub
+    box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
+    assert _run(tmp_path, agent_type) == {"a": 1}
+    assert "MCPTool(example_retrieval_repo__*)" in _allows(seen[0])
+
+
+def test_headless_grok_code_stage_pre_approves_the_shell_tool_it_is_told_to_call(tmp_path: Path, stub) -> None:
+    seen, box = stub
+    box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
+    assert _run(tmp_path, "coordinator:executor") == {"a": 1}
+    assert {"Execute", "MCPTool(example_retrieval_repo__*)"} <= set(_allows(seen[0]))
+    assert "--always-approve" not in seen[0]
+    assert "Execute for commands" in (tmp_path / "art" / "prompt.txt").read_text(encoding="utf-8")
+
+
+def test_windows_grok_prompt_carries_no_quoted_settings_home_invoke(
+        tmp_path: Path, stub, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, box = stub
+    box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
+    real_os = workflow.os
+
+    class _OsView:
+        name = "nt"
+
+        def __getattr__(self, attr):
+            return getattr(real_os, attr)
+
+    monkeypatch.setattr(workflow, "os", _OsView())
+    quoted = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
+    workflow.run_agent(f"run {quoted} dispatch.land_run --params-file p.json", {"schema": _SCHEMA, "agentType": "coordinator:executor"},
+                       repo_root=tmp_path, artifact_dir=tmp_path / "art", backend="grok", parent_session_id="sid")
+    prompt = (tmp_path / "art" / "prompt.txt").read_text(encoding="utf-8")
+    assert "COORDINATOR_SETTINGS_HOME" not in prompt
+    assert "run coordinator-invoke dispatch.land_run --params-file p.json" in prompt
+
+
+@pytest.mark.parametrize("agent_type", ["coordinator:op-relay", "coordinator:git-commit-agent"])
+def test_invoke_only_children_get_no_example_retrieval_repo_allow(tmp_path: Path, stub, agent_type) -> None:
+    seen, box = stub
+    box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
+    assert _run(tmp_path, agent_type) == {"a": 1}
+    assert _allows(seen[0]) == ["Bash(coordinator-invoke:*)"]
 
 
 def test_cancelled_stop_reason_fails_with_named_error_carrying_stderr(tmp_path: Path, stub) -> None:

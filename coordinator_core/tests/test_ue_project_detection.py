@@ -102,6 +102,28 @@ def test_general_is_false(tmp_path: Path) -> None:
     assert _decl(tmp_path, body) is False
 
 
+def test_declared_project_values_and_source(tmp_path: Path) -> None:
+    from coordinator_core.ue_project_detection import declared_project
+
+    (tmp_path / ".claude").mkdir()
+    first = tmp_path / ".claude" / "coordinator.local.md"
+    first.write_text("---\nproject_type: game-dev\nproject_subtypes:\n  - unreal\n  - 'x'\n---\n", encoding="utf-8")
+    (tmp_path / "coordinator.local.md").write_text("---\nproject_type: general\n---\n", encoding="utf-8")
+    found = declared_project(tmp_path)
+    assert (found.project_type, found.project_subtypes, found.source_file) == ("game-dev", ("unreal", "x"), first)
+    assert found.ue is True and declared_ue(tmp_path) is True
+
+
+def test_declared_project_none_when_undeclared(tmp_path: Path) -> None:
+    from coordinator_core.ue_project_detection import declared_project
+
+    assert declared_project(tmp_path) is None
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "coordinator.local.md").write_text("---\nother: 1\n---\n", encoding="utf-8")
+    (tmp_path / "coordinator.local.md").write_text("---\nproject_type: web-dev\n---\n", encoding="utf-8")
+    assert declared_project(tmp_path).source_file == tmp_path / "coordinator.local.md"
+
+
 def test_block_subtypes_without_unreal_is_false(tmp_path: Path) -> None:
     body = "---\nproject_subtypes:\n  - web\n---\n"
     assert _decl(tmp_path, body) is False

@@ -212,6 +212,60 @@ def test_a_run_id_with_no_run_dir_is_not_minted_and_the_entry_stays_pending(tmp_
     assert drain.run(str(tmp_path), evaluate=Engine(tmp_path))["minted"] == 1
 
 
+def test_a_launcher_shaped_submission_is_withdrawn_after_the_attempt_cap_naming_the_cause(tmp_path):
+    sid = _spool(tmp_path)
+
+    def launcher(payload):
+        return {
+            "hookSpecificOutput": {
+                "permissionDecision": "allow",
+                "updatedInput": {"scriptPath": "x"},
+                "permissionDecisionReason": "Submitted to the engine as run ask-20261104T140000-aaaaaa, ask-20261104T140001-bbbbbb.",
+            }
+        }
+
+    for attempt in range(1, drain.FIRE_ATTEMPT_CAP):
+        counts = drain.run(str(tmp_path), evaluate=launcher)
+        assert counts["failed"] == 1 and counts["withdrawn"] == 0
+        header, _ = record.read_entry(record.entry_path(str(tmp_path), sid))
+        assert header["attempts"] == attempt
+    counts = drain.run(str(tmp_path), evaluate=launcher)
+    assert counts["withdrawn"] == 1 and counts["minted"] == 0
+    assert not os.path.exists(record.entry_path(str(tmp_path), sid))
+    withdrawn = [n for n in _notices(tmp_path) if n["status"] == "withdrawn"]
+    assert len(withdrawn) == 1
+    assert "has no run dir" in withdrawn[0]["reason"] and withdrawn[0]["reason"].startswith("unfireable: ")
+    assert withdrawn[0]["attempts"] == drain.FIRE_ATTEMPT_CAP
+
+
+def test_earlier_refusals_do_not_count_toward_the_no_run_dir_cap(tmp_path):
+    sid = _spool(tmp_path)
+    for _ in range(drain.FIRE_ATTEMPT_CAP - 1):
+        drain.run(str(tmp_path), evaluate=Engine(tmp_path, refuse=True))
+
+    def dirless(payload):
+        return {
+            "hookSpecificOutput": {
+                "permissionDecision": "allow",
+                "updatedInput": {"scriptPath": "x"},
+                "permissionDecisionReason": "Submitted to the engine as run ask-20261104T140000-eeeeee.",
+            }
+        }
+
+    counts = drain.run(str(tmp_path), evaluate=dirless)
+    assert counts["failed"] == 1 and counts["withdrawn"] == 0
+    assert os.path.exists(record.entry_path(str(tmp_path), sid))
+
+
+def test_a_refused_mint_is_not_withdrawn_at_the_no_run_dir_cap(tmp_path):
+    sid = _spool(tmp_path)
+    for _ in range(drain.FIRE_ATTEMPT_CAP):
+        drain.run(str(tmp_path), evaluate=Engine(tmp_path, refuse=True))
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid))
+    assert header["attempts"] == drain.FIRE_ATTEMPT_CAP
+    assert not [n for n in _notices(tmp_path) if n["status"] == "withdrawn"]
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
 def test_failed_entry_stays_0600(tmp_path):
     sid = _spool(tmp_path)
@@ -1076,3 +1130,14 @@ def test_exhausted_fire_attempts_halt_with_the_typed_cause_not_a_bare_abandon(tm
     called = []
     drain._fire_minted(str(tmp_path), lambda r, i: called.append(i), time.time())
     assert not called
+
+
+def test_a_minted_ask_is_a_never_launched_candidate_and_a_landed_one_is_not(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir, read_run_stage, write_run_stage_at
+
+    rd = record_dir(tmp_path, "ask-20261124T145236-b8a33e")
+    rd.mkdir(parents=True)
+    write_run_stage_at(rd, "minted")
+    assert drain._never_launched_candidate(tmp_path, rd.name, read_run_stage(tmp_path, rd.name)) is True
+    write_run_stage_at(rd, "landed")
+    assert drain._never_launched_candidate(tmp_path, rd.name, read_run_stage(tmp_path, rd.name)) is False

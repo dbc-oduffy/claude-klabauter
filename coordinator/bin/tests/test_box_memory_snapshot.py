@@ -54,7 +54,9 @@ def _cmdline(pid):
     return f"proc{pid}"
 
 
-def _run(argv, **kw):
+def _run(argv, local=True, **kw):
+    if local:
+        argv = [*argv, "--local"]
     kw.setdefault("status_fn", _status())
     kw.setdefault("nonpaged_fn", lambda: GIB)
     kw.setdefault("cache_host_fn", _cache())
@@ -62,6 +64,7 @@ def _run(argv, **kw):
     kw.setdefault("cmdline_fn", _cmdline)
     kw.setdefault("create_time_fn", lambda p: CREATED)
     kw.setdefault("image_fn", lambda p: "python.exe")
+    kw.setdefault("gpu_fn", lambda: {"unavailable": "nvml-absent"})
     CMDLINE_CALLS.clear()
     return mod.main(argv, platform="win32", **kw)
 
@@ -138,6 +141,66 @@ def test_dead_holder_reservation_freed(tmp_path):
     assert _run(base + ["--admit-peak", "20", "--register-pid", "77"], alive_fn=lambda p: True, **kw) == 0
     assert _run(["--admission-file", path, "--admit-peak", "20"], alive_fn=lambda p: True, **kw) == 4
     assert _run(["--admission-file", path, "--admit-peak", "20"], alive_fn=lambda p: False, **kw) == 0
+
+
+def _owner_kw(owner, **over):
+    kw = dict(rss_fn=lambda p: 1024.0, alive_fn=lambda p: True, owner_pid_fn=lambda: owner)
+    kw.update(over)
+    return kw
+
+
+def test_default_admit_reserves_for_owner_and_refuses_later_tenant(tmp_path, capsys):
+    path = str(tmp_path / "admission.jsonl")
+    assert _run(["--admit-peak", "20", "--admission-file", path], **_owner_kw(500)) == 0
+    capsys.readouterr()
+    rc = _run(["--admit-peak", "20", "--admission-file", path], **_owner_kw(501))
+    assert rc == 4 and "reserved=19.0GiB" in capsys.readouterr().out
+    assert [j["pid"] for j in host.top_holders(path, rss_fn=lambda p: 1024.0, alive_fn=lambda p: True,
+                                               create_time_fn=lambda p: CREATED, image_fn=lambda p: "python.exe")] == [500]
+
+
+def test_owner_inner_admit_draws_from_its_own_reservation(tmp_path, capsys):
+    path = str(tmp_path / "admission.jsonl")
+    assert _run(["--admit-peak", "20", "--admission-file", path], **_owner_kw(500)) == 0
+    capsys.readouterr()
+    assert _run(["--admit-peak", "20", "--admission-file", path], **_owner_kw(500)) == 0
+    assert "reserved=0.0GiB" in capsys.readouterr().out
+    assert _run(["--admit-peak", "20", "--admission-file", path], **_owner_kw(501)) == 4
+    live, _ = host._ledger_starts(path)
+    assert [r["pids"] for r in live.values()] == [[500]]
+
+
+def test_owner_admit_keeps_its_other_key_reservation(tmp_path):
+    path = str(tmp_path / "admission.jsonl")
+    base = ["--admission-file", path]
+    assert _run(base + ["--command-key", "other", "--admit-peak", "10", "--register-pid", "500"],
+                **_owner_kw(500)) == 0
+    assert _run(base + ["--admit-peak", "10"], **_owner_kw(500)) == 0
+    live, _ = host._ledger_starts(path)
+    assert sorted(r["run"] for r in live.values()) == ["admit-peak:500", "other:500"]
+
+
+def test_dead_owner_default_reservation_is_reclaimed(tmp_path):
+    path = str(tmp_path / "admission.jsonl")
+    assert _run(["--admit-peak", "20", "--admission-file", path], **_owner_kw(500)) == 0
+    assert _run(["--admit-peak", "20", "--admission-file", path], **_owner_kw(501)) == 4
+    assert _run(["--admit-peak", "20", "--admission-file", path],
+                **_owner_kw(501, alive_fn=lambda p: p != 500)) == 0
+
+
+def test_owner_procstart_change_default_reservation_is_reclaimed(tmp_path):
+    path = str(tmp_path / "admission.jsonl")
+    assert _run(["--admit-peak", "20", "--admission-file", path], **_owner_kw(500)) == 0
+    assert _run(["--admit-peak", "20", "--admission-file", path], **_owner_kw(501)) == 4
+    assert _run(["--admit-peak", "20", "--admission-file", path],
+                **_owner_kw(501, create_time_fn=lambda p: CREATED + 500.0)) == 0
+
+
+def test_held_default_admit_registers_nothing(tmp_path):
+    path = str(tmp_path / "admission.jsonl")
+    assert _run(["--admit-peak", "39", "--admission-file", path], **_owner_kw(500)) == 4
+    assert host.reserved_bytes(path, rss_fn=lambda p: 0.0, alive_fn=lambda p: True,
+                               create_time_fn=lambda p: CREATED) == 0
 
 
 def test_admit_need_is_peak_plus_cushion_with_no_floor(tmp_path, capsys):
@@ -352,7 +415,9 @@ def test_unsupported_host(capsys):  # linux is supported; any other OS is not
 
 
 def _run_darwin(argv, **kw):
+    argv = [*argv, "--local"]
     kw.setdefault("status_fn", _status())
+    kw.setdefault("gpu_fn", lambda: {"unavailable": "nvml-absent"})
     return mod.main(argv, platform="darwin", governor=GOV, **kw)
 
 
@@ -453,6 +518,195 @@ def test_counts_unavailable_when_table_and_psutil_both_fail(capsys):
     assert json.loads(capsys.readouterr().out)["process_counts"] == "unavailable"
 
 
+_NVML = {
+    "gpus": [
+        {"index": 0, "name": "A", "vram_total_mib": 24576, "vram_used_mib": 4096, "util_pct": 3},
+        {"index": 1, "name": "B", "vram_total_mib": 8192, "vram_used_mib": 8000, "util_pct": 0},
+    ],
+    "vram_by_pid": {10: 1024, 11: 1023, 12: 6000, 13: 0},
+}
+_UNIFIED = {
+    "gpus": [{"index": 0, "name": "Apple silicon", "vram_total_mib": 32768, "vram_used_mib": None, "unified": True}],
+    "vram_by_pid": {},
+}
+
+
+def test_gpu_object_nvml_free_total_and_one_gib_job_filter():
+    gpu = mod._gpu_object(_NVML)
+    assert gpu["vram_total_mib"] == 24576 + 8192
+    assert gpu["vram_free_mib"] == (24576 - 4096) + (8192 - 8000)
+    assert [d["vram_free_mib"] for d in gpu["devices"]] == [20480, 192]
+    assert gpu["jobs"] == [{"pid": 12, "vram_mib": 6000}, {"pid": 10, "vram_mib": 1024}]
+
+
+def test_gpu_object_unified_reading_has_total_and_no_free():
+    gpu = mod._gpu_object(_UNIFIED)
+    assert gpu["vram_total_mib"] == 32768 and gpu["vram_free_mib"] is None
+    assert gpu["devices"][0]["unified"] is True and gpu["jobs"] == []
+
+
+def test_gpu_object_unavailable_reading_names_the_reason():
+    assert mod._gpu_object({"gpu_unavailable": "nvml-absent"}) == {"unavailable": "nvml-absent"}
+    assert "unavailable" in mod._gpu_object({})
+
+
+def test_json_carries_gpu_object_from_one_reading(capsys):
+    calls = []
+    assert _run(["--json"], gpu_fn=lambda: calls.append(1) or mod._gpu_object(_NVML)) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert calls == [1] and data["gpu"]["vram_free_mib"] == 20672
+    assert [j["pid"] for j in data["gpu"]["jobs"]] == [12, 10]
+
+
+def test_json_gpu_unavailable_reason_and_other_fields_intact(capsys):
+    assert _run(["--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["gpu"] == {"unavailable": "nvml-absent"} and data["available_gib"] == 40.0
+
+
+def test_text_render_shows_gpu_free_total_and_jobs(capsys):
+    assert _run([], gpu_fn=lambda: mod._gpu_object(_NVML)) == 0
+    out = capsys.readouterr().out
+    assert "GPU VRAM:" in out and "20.19 GiB free / 32.0 GiB" in out and "12=5.86 GiB" in out
+    assert "13=" not in out and "11=" not in out
+
+
+def test_text_render_gpu_unavailable_prints_reason(capsys):
+    assert _run([]) == 0
+    assert "GPU:              unavailable: nvml-absent" in capsys.readouterr().out
+
+
+def test_darwin_json_gpu_unified(capsys):
+    assert _run_darwin(["--json"], gpu_fn=lambda: mod._gpu_object(_UNIFIED)) == 0
+    assert json.loads(capsys.readouterr().out)["gpu"]["vram_total_mib"] == 32768
+
+
+def test_read_gpu_failure_degrades_to_unavailable(monkeypatch):
+    monkeypatch.setattr(mod, "_place_engine_on_path", _boom)
+    assert mod._read_gpu() == {"unavailable": "gpu-read-error:OSError"}
+
+
+# ---- fleet-wide default and --local ------------------------------------------------------------
+
+_NOW = 1_000_000.0
+_GIPSY = {
+    "box": "box-g", "alias": "gipsy", "os": "windows", "state": "ok", "cores": 16, "ram_total_mb": 65536,
+    "commit_limit_mb": 98304, "gpus": [{"name": "RTX 4090", "vram_total_mib": 24576}], "ram_free_mb": 30720,
+    "commit_used_mb": 40960, "vram_used_mib": 2048, "sessions": 3, "jobs": [], "last_seen": _NOW - 30,
+    "maxima_source": None,
+}
+_EXAMPLE_FLEET = {**_GIPSY, "box": "box-d", "alias": "machine-b", "ram_free_mb": 10240}
+_MINI = {
+    "box": "box-m", "alias": "mini", "os": "darwin", "state": "timed_out", "reason": "ssh_timeout", "cores": 8,
+    "ram_total_mb": 16384, "commit_limit_mb": None, "gpus": None, "last_seen": _NOW - 3 * 86400,
+    "maxima_source": "last_known",
+}
+_NAMES = lambda: ["python.exe", "conhost.exe", "python3.11"]  # noqa: E731
+
+
+def _fleet(*rows):
+    return lambda: {"local_alias": "machine-a", "rows": list(rows)}
+
+
+def _no_fleet():
+    raise AssertionError("the fleet fan-out must not run")
+
+
+def _fleet_run(argv, fleet_fn, **kw):
+    return _run(argv, local=False, fleet_fn=fleet_fn, names_fn=_NAMES, **kw)
+
+
+def test_local_flag_is_todays_single_box_output_byte_for_byte(capsys):
+    assert _run(["--top", "2"], fleet_fn=_no_fleet, names_fn=_NAMES) == 0
+    assert capsys.readouterr().out == (
+        "Available:        40.0 GiB\n"
+        "Commit:           50.0 / 100.0 GiB\n"
+        "System cache WS:  2.0 GiB\n"
+        "Standby:          5.0 GiB\n"
+        "Nonpaged pool:    1.0 GiB\n"
+        "Process counts:   python=2  conhost=1\n"
+        "GPU:              unavailable: nvml-absent\n"
+        "Top consumers by private commit:\n"
+        "        2      900.0 MB  proc2\n"
+        "        3      500.0 MB  proc3\n"
+    )
+
+
+def test_default_prints_a_section_per_box_and_keeps_the_unreachable_box(monkeypatch, capsys):
+    monkeypatch.setattr(mod.time, "time", lambda: _NOW)
+    assert _fleet_run([], _fleet(_GIPSY, _MINI)) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("== machine-a (this box) ==\nAvailable:        40.0 GiB")
+    assert "== gipsy (windows) ==\nAvailable:        30.0 GiB" in out
+    assert "Commit:           40.0 / 96.0 GiB" in out
+    assert "Sessions/jobs:    3 / 0" in out
+    assert "Maxima:           16 cores, 64.0 GiB RAM, commit limit 96.0 GiB, RTX 4090 24.0 GiB" in out
+    assert "== mini (darwin) UNREACHABLE (timed out) (ssh_timeout) ==" in out
+    assert "Maxima (last known): 8 cores, 16.0 GiB RAM" in out
+    assert "Last seen:        3d ago" in out
+    assert out.rstrip().endswith("power it on? mini is UNREACHABLE (last seen 3d ago)")
+
+
+def test_default_admit_peak_reports_each_box_and_exit_is_this_boxs(capsys):
+    assert _fleet_run(["--admit-peak", "20"], _fleet(_GIPSY, _EXAMPLE_FLEET, _MINI)) == 0
+    out = capsys.readouterr().out
+    gipsy, example_fleet, mini = (out.split("== ")[i] for i in (2, 3, 4))
+    assert "ADMIT peak=20.0GiB" in gipsy and "reserved=n/a" in gipsy
+    assert "HOLD peak=20.0GiB failed available: need 25.0GiB > avail 10.0GiB" in example_fleet
+    assert "UNKNOWN peak=20.0GiB (ssh_timeout)" in mini
+    assert "ADMIT peak=20.0GiB need_avail=25.0GiB reserved=0.0GiB" in out.split("== ")[1]
+
+
+def test_default_admit_peak_exit_stays_this_boxs_hold(capsys):
+    assert _fleet_run(["--admit-peak", "39"], _fleet(_GIPSY)) == 4
+    out = capsys.readouterr().out
+    assert "HOLD" in out.split("== ")[1] and "HOLD peak=39.0GiB failed available: need 47.0GiB > avail 30.0GiB" in out.split("== ")[2]
+
+
+def test_far_row_with_a_missing_reading_is_unknown_never_admit(capsys):
+    assert _fleet_run(["--admit-peak", "1"], _fleet({**_GIPSY, "commit_used_mb": None})) == 0
+    assert "UNKNOWN peak=1.0GiB (reading missing)" in capsys.readouterr().out
+
+
+def test_fleet_flag_still_drops_the_cushion_on_far_boxes(capsys):
+    assert _fleet_run(["--admit-peak", "30", "--fleet"], _fleet(_GIPSY)) == 0
+    assert "ADMIT peak=30.0GiB need_avail=30.0GiB" in capsys.readouterr().out.split("== ")[2]
+
+
+def test_json_keeps_single_box_fields_and_adds_fleet_rows(capsys):
+    assert _fleet_run(["--json", "--admit-peak", "20"], _fleet(_GIPSY, _MINI)) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["available_gib"] == 40.0 and doc["admit"]["verdict"] == "ADMIT"
+    by_alias = {r["alias"]: r for r in doc["fleet"]}
+    assert by_alias["gipsy"]["admit"]["verdict"] == "ADMIT" and by_alias["gipsy"]["ram_free_mb"] == 30720
+    assert by_alias["mini"]["state"] == "timed_out" and by_alias["mini"]["cores"] == 8
+    assert by_alias["mini"]["admit"] == {"verdict": "UNKNOWN", "peak_gib": 20.0, "reason": "ssh_timeout"}
+    assert doc["power_on"] == ["box-m"]
+
+
+@pytest.mark.parametrize("fleet_fn", [lambda: {"error": "OSError: engine absent"}, lambda: 1 / 0])
+def test_a_failed_fleet_read_never_sinks_this_boxs_snapshot(fleet_fn, capsys):
+    assert _fleet_run([], fleet_fn) == 0
+    out = capsys.readouterr().out
+    assert "Available:        40.0 GiB" in out and "== fleet == unavailable (" in out
+
+
+@pytest.mark.parametrize("extra", [
+    ["--command-key", "k", "--register-pid", "5", "--admit-peak", "1"],
+    ["--command-key", "k", "--release-pid", "5"],
+    ["--command-key", "k", "--record-peak", "2"],
+    ["--reservation"],
+    ["--admission-file", "x.jsonl"],
+])
+def test_admission_state_flags_stay_this_box_and_never_fan_out(tmp_path, extra, capsys):
+    if "--admission-file" in extra:
+        extra = ["--admission-file", _admission(tmp_path)]
+    elif "--reservation" not in extra:
+        extra = [*extra, "--admission-file", _admission(tmp_path)]
+    rc = _run(extra, local=False, fleet_fn=_no_fleet, names_fn=_NAMES)
+    assert rc in (0, 4) and "==" not in capsys.readouterr().out
+
+
 # Real Ubuntu readings (24 CPUs, kernel 7.0.0-44).
 MEMINFO = """MemTotal:       95954360 kB
 MemFree:        60000000 kB
@@ -476,7 +730,7 @@ def test_memory_status_linux_from_meminfo_fixture():
 
 
 def test_memory_status_linux_counts_swap_in_use():
-    st = host.memory_status_linux(MEMINFO.replace("SwapFree:        8388604", "SwapFree:        8388604".replace("8388604", "388604")))
+    st = host.memory_status_linux(MEMINFO.replace("SwapFree:        8388604", "SwapFree:        388604"))
     assert st.commit_used == (95954360 - 91225216 + 8000000) * 1024
 
 
@@ -494,16 +748,26 @@ def _run_linux(argv, **kw):
     kw.setdefault("status_fn", lambda: host.memory_status_linux(MEMINFO))
     kw.setdefault("cache_host_fn", lambda: SimpleNamespace(read_memory=lambda: SimpleNamespace(
         cache_bytes=host.linux_cached_bytes(MEMINFO), standby_bytes=None)))
-    return mod.main(argv, platform="linux", governor=GOV, **kw)
+    kw.setdefault("gpu_fn", lambda: {"unavailable": "nvml-absent"})
+    return mod.main([*argv, "--local"], platform="linux", governor=GOV, **kw)
 
 
 def test_linux_snapshot_and_admit(capsys):
-    assert _run_linux(["--admit-peak", "20"]) == 0
+    assert _run_linux(["--admit-peak", "20"], owner_pid_fn=lambda: 0) == 0
     out = capsys.readouterr().out
     assert "ADMIT" in out and "Available:        87.0 GiB" in out and "Standby:          unavailable" in out
     assert "System cache WS:  8.58 GiB" in out
 
 
 def test_linux_hold_when_peak_plus_cushion_exceeds_available(capsys):
-    assert _run_linux(["--admit-peak", "80"]) == 4  # 80 + 8 GiB cushion > 87.0 GiB available
+    assert _run_linux(["--admit-peak", "80"], owner_pid_fn=lambda: 0) == 4  # 80 + 8 GiB cushion > 87.0 GiB available
     assert "HOLD" in capsys.readouterr().out
+
+
+def test_linux_default_admit_registers_owner_reservation(tmp_path):
+    path = str(tmp_path / "admission.jsonl")
+    kw = dict(rss_fn=lambda p: 1024.0, alive_fn=lambda p: True, create_time_fn=lambda p: CREATED,
+              image_fn=lambda p: "python.exe")
+    assert _run_linux(["--admit-peak", "40", "--admission-file", path], owner_pid_fn=lambda: 500, **kw) == 0
+    assert _run_linux(["--admit-peak", "60", "--admission-file", path], owner_pid_fn=lambda: 501, **kw) == 4
+

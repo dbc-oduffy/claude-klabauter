@@ -63,6 +63,9 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    from _unimatrix.off_switch import is_off as _unimatrix_off
+    if _unimatrix_off() and not any(_a in ("-h", "--help") for _a in __import__("sys").argv[1:]):
+        raise SystemExit(0)
     if any(_a in ("-h", "--help") for _a in __import__("sys").argv[1:]):
         print("usage: unimatrix-peer-agy [-h]\nunimatrix Antigravity peer")
         raise SystemExit(0)

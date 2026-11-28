@@ -49,6 +49,51 @@ from coordinator_core.ops.match_core import QuarantineLog, rank_candidates
 _LOG = logging.getLogger(__name__)
 
 
+_HEAD_CHUNK = 16384
+_FM_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+#: invariant: path -> ((mtime_ns, size), ("item", id, title) | ("skip", reason, detail)). A warm engine
+#: re-reads only the plans that changed; a cold scan of ~2.7k plans took 15s in pure-Python YAML.
+_ENTRY_CACHE: dict = {}
+
+
+def _frontmatter_text(fpath: Path) -> Optional[str]:
+    """The text between the first two `---\n` delimiters (to EOF when unclosed), or None when the
+    file does not open with one. Reads the head only: plan bodies are never needed."""
+    head = ""
+    with fpath.open("r", encoding="utf-8", newline="") as fh:
+        while True:
+            chunk = fh.read(_HEAD_CHUNK)
+            head += chunk
+            norm = head.replace("\r\n", "\n")
+            if len(norm) >= 4 and not norm.startswith("---\n"):
+                return None
+            end = norm.find("---\n", 4)
+            if end != -1:
+                return norm[4:end]
+            if not chunk:
+                return norm[4:] if norm.startswith("---\n") else None
+
+
+def _plan_entry(fpath: Path) -> tuple:
+    try:
+        fm_text = _frontmatter_text(fpath)
+        if fm_text is None:
+            return ("skip", "no YAML frontmatter block", None)
+        fm = yaml.load(fm_text, Loader=_FM_LOADER)
+    except Exception as exc:  # noqa: BLE001 — parity with goals_match quarantine pattern
+        return ("skip", "parse error", str(exc))
+    if not isinstance(fm, dict):
+        return ("skip", "YAML did not produce a dict", None)
+    title_val = fm.get("title")
+    if not isinstance(title_val, str) or not title_val:
+        return ("skip", "missing required field: title", None)
+    plan_id_val = fm.get("plan_id")
+    if not isinstance(plan_id_val, str) or not plan_id_val:
+        plan_id_val = fpath.stem
+    return ("item", plan_id_val, title_val)
+
+
 def _collect_plans(plans_dir: Path) -> List[dict]:
     items: List[dict] = []
 
@@ -61,34 +106,21 @@ def _collect_plans(plans_dir: Path) -> List[dict]:
         fname = fpath.name
         quarantine.scanned()
         try:
-            raw = fpath.read_text(encoding="utf-8").replace("\r\n", "\n")
-            if raw.startswith("---\n"):
-                parts = raw.split("---\n", 2)
-                fm_text = parts[1]
-            else:
-                quarantine.skip(fname, "no YAML frontmatter block")
-                continue
-            fm = yaml.safe_load(fm_text)
-        except Exception as exc:  # noqa: BLE001 — parity with goals_match quarantine pattern
+            st = fpath.stat()
+        except OSError as exc:
             quarantine.skip(fname, "parse error", str(exc))
             continue
-
-        if not isinstance(fm, dict):
-            quarantine.skip(fname, "YAML did not produce a dict")
+        stamp = (st.st_mtime_ns, st.st_size)
+        cached = _ENTRY_CACHE.get(str(fpath))
+        if cached is not None and cached[0] == stamp:
+            entry = cached[1]
+        else:
+            entry = _plan_entry(fpath)
+            _ENTRY_CACHE[str(fpath)] = (stamp, entry)
+        if entry[0] == "skip":
+            quarantine.skip(fname, entry[1], entry[2])
             continue
-
-        title_val = fm.get("title")
-        if not isinstance(title_val, str) or not title_val:
-            quarantine.skip(fname, "missing required field: title")
-            continue
-
-        plan_id_val = fm.get("plan_id")
-        if not isinstance(plan_id_val, str) or not plan_id_val:
-            plan_id_val = fpath.stem
-
-        haystack = title_val.lower()
-
-        items.append({"id": plan_id_val, "title": title_val, "text": haystack})
+        items.append({"id": entry[1], "title": entry[2], "text": entry[2].lower()})
 
     quarantine.summarize()
     return items

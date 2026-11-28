@@ -84,6 +84,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from types import ModuleType
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +786,39 @@ def cmd_check_plugin_registered(args: argparse.Namespace) -> int:
     return 1
 
 
+def _project_type_engine() -> "ModuleType":
+    try:
+        import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+        import cc_invoke
+
+        cc_invoke.require_engine_on_path(__file__)
+    except (ImportError, RuntimeError, OSError):
+        pass
+    from coordinator_core import project_type_check
+
+    return project_type_check
+
+
+def cmd_check_project_type(args: argparse.Namespace) -> int:
+    """Read-only: print the verdict; exit 1 on conflict only (the one verdict --apply never repairs)."""
+    root = Path(args.root) if args.root else Path.cwd()
+    if not root.is_dir():
+        print(f"FAIL: project_type: not a directory: {root}", file=sys.stderr)
+        return 1
+    try:
+        res = _project_type_engine().check_root(root)
+    except ImportError as exc:
+        print(f"FAIL: project_type: cannot import coordinator_core: {exc}", file=sys.stderr)
+        return 1
+    verdict = res["verdict"]
+    print(f"project_type: {verdict}  {res['root']}: {res['reason']}")
+    if res.get("repair"):
+        print(f"  run: {res['repair']['command']}")
+    if res.get("hint"):
+        print(f"  hint: {res['hint']}")
+    return 1 if verdict == "conflict" else 0
+
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -872,6 +906,13 @@ def build_parser() -> argparse.ArgumentParser:
         "there (never on a sentinel alone).",
     )
     p_plugin_reg.set_defaults(func=cmd_check_plugin_registered)
+
+    p_ptype = sub.add_parser(
+        "check-project-type",
+        help="Report the project_type verdict (ok|missing|seedable|conflict) for a repo root",
+    )
+    p_ptype.add_argument("--root", default=None, help="Repo root to verify (default: cwd).")
+    p_ptype.set_defaults(func=cmd_check_project_type)
 
     return parser
 

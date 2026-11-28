@@ -221,6 +221,30 @@ def _step_detect(ctx: _Ctx) -> None:
     ctx.created("detect", f"coordinator.local.md written (project_type {ctx.project_type})", local)
 
 
+def _step_project_type(ctx: _Ctx) -> None:
+    from coordinator_core import project_type_check as ptc
+    from coordinator_core.ue_project_detection import LOCAL_MD_RELPATHS
+
+    if not any((ctx.root / rel).is_file() for rel in LOCAL_MD_RELPATHS):
+        return
+    res = ptc.check_root(ctx.root)
+    verdict = res["verdict"]
+    if verdict == "ok":
+        ctx.existed("project-type", "project_type declaration consistent with UE markers")
+    elif verdict == "seedable":
+        writes = res["repair"]["writes"]
+        target = ptc.seed_target(ctx.root)
+        if not ctx.dry_run:
+            declare_write(ptc.seed(ctx.root, writes))
+        ctx.created("project-type", f"seeded {writes} ({', '.join(res['markers'])})", target)
+        ctx.project_type = writes["project_type"]
+        ctx.subtypes = list(writes["project_subtypes"])
+    elif verdict == "conflict":
+        ctx.attention("project-type", f"conflict ({res['reason']}): {res['hint']}")
+    else:
+        ctx.open("project-type", f"missing declaration; run: {res['repair']['command']}")
+
+
 def _step_render_docs(ctx: _Ctx) -> None:
     claude_md, readme = ctx.root / "CLAUDE.md", ctx.root / "docs" / "README.md"
     todo = [p for p in (claude_md, readme) if not p.exists()]
@@ -420,7 +444,8 @@ def _step_git_config(ctx: _Ctx) -> None:
         ctx.existed("git-config", "git maintenance config already set")
     ctx.open(
         "git-config",
-        "core.untrackedCache needs git's multi-second filesystem probe; run coordinator-configure-git from the repo",
+        "core.untrackedCache needs git's multi-second filesystem probe; run coordinator-configure-git from the repo "
+        "(it also writes GLOBAL git config: help.format, web.browser, browser.noop.cmd)",
     )
 
 
@@ -560,19 +585,47 @@ def _step_tripwires(ctx: _Ctx) -> None:
     ctx.open("tripwires", "widened spawn tripwire (test_no_bare_python_spawn.py, spawn_detect.py) needs per-repo SCOPE_SUBDIR edits")
 
 
-def _register_command(root: Path) -> str:
+def _repo_key(root: Path) -> str:
     # Mirrors repo-setup-args-and-register.derive_repo_key; the script is not imported on the op path.
-    key = re.sub(r"[^a-z0-9]+", "_", root.name.lower()).strip("_")
-    return f'repo-setup-args-and-register register-repo --path "{root.as_posix()}" (registers repos.{key})'
+    return re.sub(r"[^a-z0-9]+", "_", root.name.lower()).strip("_")
+
+
+def _register_command(root: Path) -> str:
+    return f'repo-setup-args-and-register register-repo --path "{root.as_posix()}" (registers repos.{_repo_key(root)})'
+
+
+def _repo_registered(key: str) -> bool:
+    from coordinator_core.machine_resolver import registry_get
+
+    return registry_get(f"repos.{key}") is not None
 
 
 def _step_register(ctx: _Ctx) -> None:
     if ctx.answers.get("register_repo") is True and _machine_profile() == "author":
-        ctx.open("register-repo", f"run: {_register_command(ctx.root)}")
+        key = _repo_key(ctx.root)
+        if _repo_registered(key):
+            ctx.existed("register-repo", f"repos.{key} already registered")
+        else:
+            ctx.open("register-repo", f"run: {_register_command(ctx.root)}")
+
+
+def _step_metric_register(ctx: _Ctx) -> None:
+    """Scaffold an empty state/metrics/<repo key>/register.jsonl; create-if-absent, dry-run writes nothing."""
+    reg = ctx.root / "state" / "metrics" / _repo_key(ctx.root) / "register.jsonl"
+    if reg.is_file():
+        ctx.existed("metric-register", "metric register present", reg)
+        return
+    try:
+        ctx.write_new(reg, "")
+    except OSError as exc:
+        ctx.attention("metric-register", f"register.jsonl could not be written: {exc}", reg)
+        return
+    ctx.created("metric-register", "metric register scaffolded", reg)
 
 
 _STEPS = (
     _step_detect,
+    _step_project_type,
     _step_render_docs,
     _step_exec_summary,
     _step_dirs,
@@ -582,6 +635,7 @@ _STEPS = (
     _step_git_config,
     _step_vscode,
     _step_seeds,
+    _step_metric_register,
     _step_manifests,
     _step_tripwires,
     _step_register,

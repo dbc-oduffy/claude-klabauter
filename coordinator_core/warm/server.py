@@ -3447,6 +3447,27 @@ _POOL_SATURATED_MESSAGE = (
 )
 
 
+def _saturation_holders_sentence(diagnosis: dict) -> str:
+    """The holders as message text: the door relays `error.message` only, never `error.data`, so
+    the pinning ops reach the caller here."""
+    def _count(ops: list) -> str:
+        counts: dict = {}
+        for op in ops:
+            counts[op] = counts.get(op, 0) + 1
+        return ", ".join(f"{op} x{n}" if n > 1 else str(op) for op, n in sorted(counts.items(), key=lambda kv: str(kv[0])))
+
+    parts = []
+    for label, key in (("hung", "hung"), ("io-wait", "io_wait")):
+        ops = diagnosis.get(key) or []
+        if ops:
+            parts.append(f"{label}: {_count(ops)}")
+    if not parts and diagnosis.get("holders"):
+        parts.append(f"holders: {_count(diagnosis['holders'])}")
+    if diagnosis.get("stall_dump"):
+        parts.append(f"stall_dir={diagnosis['stall_dump']}")
+    return (" Holders -- " + "; ".join(parts) + ".") if parts else ""
+
+
 def _pool_saturated_envelope(
     msg: dict, holders: list, stall_dump, hung: Optional[list] = None, io_wait: Optional[list] = None
 ) -> dict:
@@ -3469,7 +3490,7 @@ def _pool_saturated_envelope(
         "id": msg.get("id"),
         "error": {
             "code": INTERNAL_ERROR,
-            "message": _POOL_SATURATED_MESSAGE.format(STALL_DUMP_SECS),
+            "message": _POOL_SATURATED_MESSAGE.format(STALL_DUMP_SECS) + _saturation_holders_sentence(diagnosis),
             "data": {"diagnosis": diagnosis},
         },
     }

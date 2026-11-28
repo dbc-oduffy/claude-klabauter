@@ -381,6 +381,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    from _unimatrix.off_switch import is_off as _unimatrix_off
+    if _unimatrix_off() and not any(_a in ("-h", "--help") for _a in __import__("sys").argv[1:]):
+        raise SystemExit(0)
     if any(_a in ("-h", "--help") for _a in __import__("sys").argv[1:]):
         print("usage: unimatrix-codex-hook-sessionstart [-h]\nCodex SessionStart hook body; reads hook JSON on stdin, emits JSON")
         raise SystemExit(0)
