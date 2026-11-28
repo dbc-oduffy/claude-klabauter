@@ -43,6 +43,27 @@ def test_real_runtime_parallel_journal_and_terminal_handoff(tmp_path: Path) -> N
     assert events[-1]['type'] == 'completed'
 
 
+def test_terminal_assignment_is_delivered_but_not_copied_to_fire_journal(tmp_path):
+    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import render_params_block
+
+    prompt = render_params_block({'run_id': 'run', 'run_token': 'fixture-secret',
+                                  'script_path': 'run.mjs'})
+    path = record(tmp_path, 'await agent(' + json.dumps(prompt) + ', {label:"commit"}); return {};')
+    delivered = []
+    def worker(text, options, **kwargs):
+        delivered.append(text)
+        return 'done'
+
+    result = headless.execute(path, agent_runner=worker)
+    assert result['exit_code'] == 0
+    assert delivered == [prompt]
+    journal = Path(result['journal_path']).read_text()
+    assert 'fixture-secret' not in journal
+    events = [json.loads(line) for line in journal.splitlines()]
+    assignment, = [row for row in events if row['type'] == 'agent']
+    assert assignment['prompt_sha256'] == hashlib.sha256(prompt.encode()).hexdigest()
+
+
 def test_exited_driver_records_started_child_workflow(tmp_path: Path) -> None:
     child = tmp_path / 'staged-run.workflow.mjs'
     child.write_text("export const meta={}; throw new Error('child halted');", encoding='utf-8')

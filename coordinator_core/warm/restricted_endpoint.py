@@ -117,15 +117,15 @@ def _matches(conn, peer):
             and conn.getsockopt(0, 2) == peer.pid and peer.is_running())
 
 
-def _read_request(conn):
+def _read_request(conn, *, limit=1024):
     deadline = time.monotonic() + 1
     frame = bytearray()
-    while len(frame) < 1024:
+    while len(frame) < limit:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         conn.settimeout(remaining)
-        data = conn.recv(1024 - len(frame))
+        data = conn.recv(min(8192, limit - len(frame)))
         if not data:
             break
         frame.extend(data)
@@ -221,7 +221,7 @@ def _spawn_notice(control, parent, current, stopped):
     return current
 
 
-def _serve_spawned(listener, control, parent, stopped):
+def _serve_spawned(listener, control, parent, stopped, serve=None):
     peer = None
     try:
         while not stopped.is_set():
@@ -230,22 +230,31 @@ def _serve_spawned(listener, control, parent, stopped):
                 peer = _spawn_notice(control, parent, peer, stopped)
             if listener in ready:
                 with listener.accept()[0] as conn:
-                    _serve_connection(conn, peer)
+                    if serve is None:
+                        _serve_connection(conn, peer)
+                    else:
+                        serve(conn, peer, parent)
     except (OSError, ValueError) as exc:
         if not stopped.is_set():
             print(f"headless-em-launch: diagnostic listener stopped: {exc}", file=sys.stderr)
 
 
 @contextmanager
-def diagnostic_spawn(directory, argv, env):
+def diagnostic_spawn(directory, argv, env, *, serve_submit=None):
     """Host side of native exec --json. Only the spawned native parent can nominate its pipe child."""
     import subprocess
     import threading
 
     with ExitStack() as stack:
         try:
-            data = stack.enter_context(bound_listener(directory))
+            if serve_submit is None:
+                data = stack.enter_context(bound_listener(directory))
+            else:
+                stack.enter_context(_private_directory(directory))
+                data = stack.enter_context(_listen(directory / "submit.sock"))
         except _DiagnosticsBusy:
+            if serve_submit is not None:
+                raise RuntimeError("issued submit endpoint already in use")
             print("headless-em-launch: diagnostic endpoint busy; starting without diagnostics", file=sys.stderr)
             with subprocess.Popen(argv, env=env, stdout=subprocess.PIPE) as child:
                 yield child
@@ -253,7 +262,7 @@ def diagnostic_spawn(directory, argv, env):
         control = stack.enter_context(_listen(directory / "spawn.sock"))
         with subprocess.Popen(argv, env=env, stdout=subprocess.PIPE) as child:
             stopped = threading.Event()
-            thread = threading.Thread(target=_serve_spawned, args=(data, control, psutil.Process(child.pid), stopped))
+            thread = threading.Thread(target=_serve_spawned, args=(data, control, psutil.Process(child.pid), stopped, serve_submit))
             thread.start()
             try:
                 yield child

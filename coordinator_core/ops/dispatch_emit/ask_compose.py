@@ -97,6 +97,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_VERIFY_LABEL,
     ASK_VERIFY_PHASE,
     DELIVERY_NOTE_DIR,
+    delivery_note_rel,
     EMPTY_REGISTER_REASON,
     EMPTY_REGISTER_REFUSAL_HEAD,
     EMPTY_REGISTER_REFUSAL_TAIL,
@@ -2474,7 +2475,7 @@ def _review_recover_js(
     Closes the run's own failing tests, WARN/BLOCKED slice findings and stale assertions of behaviour the
     ask changes in at most `SELF_CORRECTION_CAP` `halt-fix` legs, each followed by one `halt-reverify` leg;
     foreign reds are recorded, never fixed; a red that passes alone is recorded as `flaky`, not a halt.
-    Trap: the fix footprint is `_manifest.review_declared_paths`; the one write allowed outside it is a
+    Reports inside the current halt-fix sidecar directory are bookkeeping. The fix footprint is `_manifest.review_declared_paths`; the one write allowed outside it is a
     test file (recorded under `widened`); any other outside write ends the loop as `scope`.
     """
     widen_record = f"{run_dir or record_dir}/{WIDEN_RECORD_NAME}"
@@ -3027,7 +3028,12 @@ def _criterion_judge_brief(
         stage_schemas=stage_schemas,
         plan_path=_PLAN_SLOT,
         run_base_sha=run_base_sha,
-        prompt_head=intent + _JUDGE_PATH_CLAUSE,
+        prompt_head=(
+            intent
+            + " For the stage-start ledger read, capture the full text and the SHA-256 of the same "
+            "byte buffer together. Keep both for this verdict."
+            + _JUDGE_PATH_CLAUSE
+        ),
         ledger_charter=ledger_charter,
         evidence_path=_EVIDENCE_SLOT,
     )
@@ -3170,6 +3176,7 @@ def _verify_tests_call(
     the call, so nothing cuts the run
     before the runner's own budget."""
     base_flag = f"--base-sha {base_sha} " if base_sha else ""
+    base_flag += f"--measured --run-id {run_id} "
     if repo_root:
         base_flag += f'--repo-root "{Path(repo_root).as_posix()}" '
     leg_command = engine_module_command(
@@ -3351,8 +3358,8 @@ def _verify_call(
         "\n\nReturn one object: "
         + return_test
         + ("`judge` (the criterion verdict fields the judge brief above names, its status included), " if judged else "")
-        + "`items`, `all_of_pm_ask` and `conflicts` (the ledger verdict), and `doc_paths`, `note_path` and "
-        "`stale_docs` (step 2).",
+        + "`items`, `all_of_pm_ask` and `conflicts` (the ledger verdict). Include the documentation fields "
+        "only when step 2 requests them.",
         "js:_vNudge",
         "js:_vMissing",
     )
@@ -3420,6 +3427,8 @@ _OVERLAY_FOLD_JS = (
     "      if (_ovHead !== null) {\n"
     f"        const _t = _verify.test ?? {_VERIFY_TEST_RESULT_VAR} ?? {{}};\n"
     "        _verify.test = { ..._t, status: 'fail', tests_failed: Math.max(1, Number(_t.tests_failed) || 0), "
+    "test_leg: { status: _t.status, run: _t.tests_run ?? null, failed: _t.tests_failed ?? null }, "
+    "overlay: { exit_code: _ov?.exit_code ?? null, detail: _ovHead }, "
     "summary: String(_ovHead + ' | ' + (_t.summary ?? '')).slice(0, 300) };\n"
     "      }\n"
     "    }"
@@ -3985,8 +3994,8 @@ def _remnant_complete_js(
         "a whole-run verdict never stands in for a row. ",
         *verdict_parts,
         "\n\nReturn one object: `test`, " + ("`judge`, " if judged else "") + "`items`, `all_of_pm_ask` and `conflicts`, "
-        "`doc_paths`, `note_path` and `stale_docs`, and `delivery` ({verdict: PASS or FAIL, reason}) ruled on the "
-        "delivery items above.",
+        "and `delivery` ({verdict: PASS or FAIL, reason}) ruled on the delivery items above. Include the "
+        "documentation fields only when step 2 requests them.",
     )
     props = dict(schema["properties"])
     props["delivery"] = _obj(["verdict"], {"verdict": _STR, "reason": _STR})
@@ -4152,10 +4161,17 @@ def _folded_ledger_charter(
         "the result against every requirement "
         + ("on record (the PM's, and the relayed ask, which is not the PM's words)" if relayed else "the PM has on record")
         + ", never against the plan alone. "
-        f"Re-read the requirements ledger at {ledger_rel} now (revisions may have landed since the run "
-        f"started), then {record_dir}/{PM_INTENT_FILE} when it exists, the change, and the briefs under "
+        f"Read a fresh byte snapshot of the requirements ledger at {ledger_rel} now. Compare its SHA-256 "
+        "with the digest of the full text you read in this stage. On a match with that text still in "
+        "context, return only the digest from the read and judge the retained text. Otherwise return "
+        "and judge the full text from the fresh snapshot, including every revision. "
+        f"Then read {record_dir}/{PM_INTENT_FILE} when it exists, the change, and the briefs under "
         f"{run_dir}/briefs. "
         + _LEDGER_ITEMS_RULES
+        + "For a numeric public-caller requirement, bind its objective axis to the register ID and exact "
+        "source text. Use the calibrated falsifier to exercise that caller on the specified input. Run "
+        "dispatch.measured_rev followed by dispatch.objective_check on the final candidate and report "
+        "the actual value in observed. A changed candidate needs a fresh check. "
         + "A path the manifest's write_baseline shows unchanged since stage was not delivered by this "
         "run: pre-existing dirt never meets a row, whatever the working tree holds. "
         "A dirty path outside the manifest's write footprint that this run did not write never makes a "
@@ -7669,10 +7685,11 @@ def compose_ask_script(
     b.append("  }")
 
     b.append("  const _verdictReports = [];")
+    late_params = "{ run_id: _runId, ...(_final ? { verify_read: true } : {}), ..._lateServedParam() }"
     late_read_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         f"Run `{_INVOKE} {OP_LATE_ROWS} '",
-        "js:JSON.stringify({ run_id: _runId, ...(_final ? { verify_read: true } : {}), ..._lateServedParam() })",
+        f"js:JSON.stringify({late_params})",
         f"'{_repo_flag(repo_root)}` once and return the {LATE_ROWS_FIELD} array of its JSON reply as "
         f"{LATE_ROWS_FIELD}. Commit nothing.",
     )
@@ -7706,11 +7723,22 @@ def compose_ask_script(
     )
     b.append(
         "  const _lateRead = async (_final) => {\n"
-        f"    try {{ const _r = await {late_read_call}; "
-        f"return (Array.isArray(_r?.{LATE_ROWS_FIELD}) ? _r.{LATE_ROWS_FIELD} : [])"
-        ".filter((s) => typeof s === 'string' && s.trim()); }\n"
-        "    catch (e) { const _m = _errLimitText(e) ?? String((e && e.message) ?? e); "
-        "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('late-rows read threw: ' + _m); } return []; }\n"
+        "    for (let attempt = 0; attempt < 2; attempt++) {\n"
+        f"      try {{ const _r = await ((typeof engineOp === 'function' && engineOp.stagedLateRows) "
+        f"? engineOp('workflow.staged_late_rows', {late_params}) : {_HOST_GATE_OWNER_JS} ? engineOp('{OP_LATE_ROWS}', {late_params})"
+        f" : {late_read_call}); const ids = _r?.{LATE_ROWS_FIELD};\n"
+        "        if (_r?.error || !Array.isArray(ids) || !ids.every(id => typeof id === 'string' && id.trim())) "
+        "{ throw new Error('invalid workflow.late_rows reply'); }\n"
+        "        return ids;\n"
+        "      } catch (e) { const reason = _errLimitText(e) || String(e?.message ?? e);\n"
+        "        if (_USAGE_LIMIT_RE.test(reason)) { _haltOnUsageLimit(e); break; }\n"
+        "        log('late-rows read failed: ' + reason);\n"
+        "        if (attempt === 1) { _halted = { halted: 'ledger-check', kind: 'ledger-check', "
+        "reason: 'workflow.late_rows unavailable at ' + (_final ? 'verify' : 'execute') + ': ' + reason, "
+        "run_id: _runId, sizing: _sizingRel, plan: _planRel }; }\n"
+        "      }\n"
+        "    }\n"
+        "    return [];\n"
         "  };"
     )
     b.append("  if (!_halted && (!_resumeLedger || _ledgerExec)) {")
@@ -10114,7 +10142,7 @@ def _docs_prompt_parts(*, run_id: str, manifest_rel: str, root: str = "") -> tup
     It edits only `_manifest.doc_writes`; the delivery note's `## Verdicts` section is
     `dispatch.land_run`'s, so the prompt carries none of the tail's own results.
     """
-    note_rel = f"{DELIVERY_NOTE_DIR}/{run_id}.md"
+    note_rel = delivery_note_rel(run_id)
     root = f"{root}/" if root else ""
     from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_FORM
 

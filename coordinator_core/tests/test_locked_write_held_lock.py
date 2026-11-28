@@ -526,20 +526,13 @@ _INSTALL_PRINT_DIR_SCRIPT = textwrap.dedent("""\
 def _make_fake_install(root: Path) -> Path:
     """Materialise a second, independent INSTALL of the engine's lock module.
 
-    A faithful stand-in for the multi-copy topology this machine actually
-    runs (engine-resident checkout + shared install): a separate directory
-    tree, off any `sys.path` the parent has, with its own physical copy of
-    `locked_write.py` imported as its own module object. `held_lock`'s
-    default path deliberately touches nothing else in the package, so the
-    copy needs no other engine module — which is itself the point: the
-    rendezvous must be derivable without reference to the install.
-    `timestamps` (stdlib-only) rides along for the timeout diagnostic's
-    holder age, which `_describe_holder` imports on the refusal path.
+    Each subprocess imports its own copy of the lock implementation and its
+    runtime dependencies, while sharing the machine rendezvous.
     """
     pkg = root / "coordinator_core"
     pkg.mkdir(parents=True, exist_ok=True)
     (pkg / "__init__.py").write_text("", encoding="utf-8")
-    for name in ("locked_write.py", "timestamps.py"):
+    for name in ("locked_write.py", "timestamps.py", "bounded_io.py", "atomic_append.py"):
         source = Path(_PROJECT_ROOT) / "coordinator_core" / name
         (pkg / name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     return root
@@ -847,3 +840,23 @@ class TestWindowsMandatoryRangeLock:
                 assert b"ranged" in raw
             finally:
                 os.close(fd)
+
+
+def test_preprovisioned_sidecar_needs_no_parent_creation(tmp_path, monkeypatch):
+    from coordinator_core.locked_write import held_lock
+
+    target = tmp_path / "repo"
+    lock_dir = tmp_path / "locks"
+    with held_lock(target, lock_dir=lock_dir):
+        pass
+
+    original = Path.mkdir
+
+    def restricted_mkdir(path, *args, **kwargs):
+        if path == lock_dir:
+            raise PermissionError(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", restricted_mkdir)
+    with held_lock(target, lock_dir=lock_dir):
+        pass

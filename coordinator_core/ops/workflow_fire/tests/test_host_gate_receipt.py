@@ -83,3 +83,55 @@ return await engineOp('gate.host_run', {run_id:'foreign', require_live_token:tru
     assert code == 1
     assert not any(event["type"] == "invoke" for event in events)
     assert "Nested workflows do not own host operations" in events[-1]["error"]
+
+
+@pytest.mark.parametrize("change", ["none", "script", "manifest", "commit request", "foreign read"])
+def test_commit_worker_requires_gate_issued_staged_bytes(tmp_path, monkeypatch, change):
+    import hashlib
+    from coordinator_core.ops.dispatch_emit import nested_run_contract, reply_sidecar
+    from coordinator_core.ops.workflow_fire.tests.test_headless import record
+
+    run_id = "ask-1"
+    source = "export const meta={};\n// coordinator:ask-run-manifest v1 state/warp/ask-1/manifest.json\n" + nested_run_contract.STAGED_INLINE_SLOT + "\nawait agent('work',{}); return await agent('commit',{phase:'commit'});"
+    if change == "foreign read":
+        source = source.replace("await agent('work',{});", "await engineOp('workflow.staged_late_rows',{run_id:'other'});")
+    base = tmp_path / "scratch/warp/ask-1.workflow.mjs"
+    base.parent.mkdir(parents=True)
+    base.write_bytes(source.encode())
+    manifest = tmp_path / "state/warp/ask-1/manifest.json"
+    marker = base.parent / "request.txt"
+    marker.write_text("fixture request", encoding="utf-8")
+    reply_sidecar.write_reply(tmp_path, manifest, {"rows": [], "run_dir": "state/warp/ask-1",
+                              "review_declared_paths": [], "marker_path": "scratch/warp/request.txt"})
+    stage = {}
+    stage["manifest_handle"], stage["twin_path"] = reply_sidecar.handle_and_twin(
+        tmp_path, manifest, source_receipt=stage)
+    child = tmp_path / stage["twin_path"]
+    assert stage["twin_sha256"] == hashlib.sha256(child.read_bytes()).hexdigest()
+    if change == "script":
+        child.write_bytes(child.read_bytes() + b"\n")
+    path = record(tmp_path, "const gate=await engineOp('gate.host_run',{});"
+                  "return await workflow({scriptPath:gate.stage_reply.twin_path});")
+    row = json.loads(path.read_bytes())
+    path.write_text(json.dumps({**row, "run_id": run_id}))
+    monkeypatch.setattr(headless, "_host_gate", lambda *args: ({"stage_reply": stage}, "fixture"))
+    calls = []
+    def worker(prompt, options, **kwargs):
+        calls.append(prompt)
+        if prompt == "work" and change in ("manifest", "commit request"):
+            target = manifest if change == "manifest" else marker
+            target.write_bytes(target.read_bytes() + b"\n")
+        return {}
+    result = headless.execute(path, agent_runner=worker, terminal_runner=lambda *args: None)
+    if change == "script":
+        assert result["exit_code"] == 1 and "differs from host-issued" in result["error"]
+        assert calls == []
+    elif change == "foreign read":
+        assert result["exit_code"] == 1 and "host-issued staged run" in result["error"]
+        assert calls == []
+    elif change in ("manifest", "commit request"):
+        assert result["exit_code"] == 1 and "changed after fire" in result["error"]
+        assert calls == ["work"]
+    else:
+        assert result["exit_code"] == 0, result.get("error")
+        assert calls == ["work", "commit"]

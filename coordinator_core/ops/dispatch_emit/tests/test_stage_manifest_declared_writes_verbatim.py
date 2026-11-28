@@ -72,8 +72,16 @@ def test_no_path_absent_from_the_tree_is_invented_beside_declared_sources(tmp_pa
     assert set(writes) <= set(m.review_declared_paths)
 
 
-def test_a_derived_test_that_exists_is_still_widened_in(tmp_path):
+def test_existing_companion_is_a_test_target_until_explicitly_declared(tmp_path):
     existing = "remote_compute/tests/test_bands.py"
     _on_disk(tmp_path, [existing, *SOURCES])
     m = _stage(tmp_path, list(SOURCES))
+    assert existing in m.test_targets
+    assert existing not in _x1(m).writes
+    assert existing not in m.review_declared_paths
+
+    declared = tmp_path / "declared"
+    _on_disk(declared, [existing, *SOURCES])
+    m = _stage(declared, [*SOURCES, existing])
     assert existing in _x1(m).writes
+    assert existing in m.test_targets

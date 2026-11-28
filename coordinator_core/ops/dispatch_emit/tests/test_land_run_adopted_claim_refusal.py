@@ -56,3 +56,36 @@ def test_a_call_that_holds_its_claim_lands_and_spends_the_token(repo):
     assert out["committed"] is True, out
     assert out.get("refused") is None
     assert not run_token._record_path(repo, RUN, claimed=True).exists()
+
+
+def test_owner_lands_identical_request_after_claim_denial(repo, monkeypatch):
+    from pathlib import Path
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    handler = land_run._handler
+    issued = {}
+
+    def restricted(params, repo_root):
+        issued.update(params)
+        claim = run_token._record_path(repo, RUN, claimed=True)
+        original = run_token.os.open
+
+        def restricted_open(path, *args, **kwargs):
+            if Path(path) == claim:
+                raise PermissionError(path)
+            return original(path, *args, **kwargs)
+
+        with monkeypatch.context() as restriction:
+            restriction.setattr(run_token.os, "open", restricted_open)
+            return handler(params, repo_root=repo_root)
+
+    with monkeypatch.context() as worker:
+        worker.setattr(land_run, "_handler", restricted)
+        refusal = _land(repo, hand_commit=False)
+    assert refusal["refused"] == "run-token-claim-denied"
+    assert head == _git(repo, "rev-parse", "HEAD").strip()
+    landed = handler(issued, repo_root=repo / ".git")
+    assert landed["committed"] and landed["sha"] == _git(repo, "rev-parse", "HEAD").strip()
+    duplicate = handler(issued, repo_root=repo / ".git")
+    assert duplicate["sha"] == landed["sha"] and duplicate["already_landed"]

@@ -1299,9 +1299,16 @@ def _redeem_or_answer(
     from coordinator_core.ops.dispatch_emit import run_token
 
     budget = _claim_budget_secs()
-    won = run_token.redeem_claim(root, run_id, token, script_path, budget_secs=budget)
-    if won is None and _readmitted_reviewed(root, run_id, token, script_path):
-        won = run_token.redeem_claim(root, run_id, token, script_path, budget_secs=budget)
+    try:
+        won = run_token.redeem_claim(root, run_id, token, script_path, budget_secs=budget, report_denial=True)
+        if won is None and _readmitted_reviewed(root, run_id, token, script_path):
+            won = run_token.redeem_claim(root, run_id, token, script_path, budget_secs=budget, report_denial=True)
+    except PermissionError:
+        return _error(
+            "The run token matches, but this process cannot write the claim in the engine records. "
+            "Continue the issued landing on the owning host.",
+            refused="run-token-claim-denied",
+        )
     if won is not None:
         if token_state is not None:
             token_state["identity"] = won
@@ -2200,6 +2207,51 @@ def _recovery_dependents(root: Path, request, incomplete: set, backed: dict, chu
         found.update(added)
 
 
+def _caller_measurements(root: Path, run_dir: Path, ledger) -> tuple[set[str], list[dict]]:
+    from coordinator_core.ops.dispatch_emit import objective_check, objective_contract as oc, requirements_ledger as rl
+
+    declared = {}
+    path = run_dir / oc.OBJECTIVE_FILE
+    if path.is_file():
+        try:
+            objective = oc.Objective.from_json(json.loads(path.read_text(encoding="utf-8")))
+            declared = {a.id: a for a in objective.axes if type(a.threshold) in (int, float)}
+        except (OSError, ValueError, TypeError, AttributeError):
+            return set(), [{"id": None, "reason": "cannot read declared objective measurements"}]
+
+    required = []
+    for item in ledger.items:
+        if not isinstance(item, rl.Item):
+            continue
+        expected = rl.exact_return(item)
+        axis = declared.get(item.id)
+        if expected is not None or (axis and axis.claim == item.text):
+            required.append((item, expected, axis))
+    if not required:
+        return set(), []
+
+    candidate = objective_check.checked_revision(run_dir, root)
+    checks = oc._check_lines(_read_loop_lines(run_dir / oc.LOOP_FILE))
+    check = checks[-1] if checks else {}
+    rows = check.get("axes")
+    verified = set()
+    failures = []
+    for item, expected, axis in required:
+        matching = [r for r in rows if isinstance(r, dict) and r.get("axis") == item.id] if isinstance(rows, list) else []
+        measured = matching[0] if len(matching) == 1 else {}
+        if (candidate and check.get("measured_sha") == candidate and axis and axis.claim == item.text
+                and measured.get("claim") == item.text and measured.get("pass") is True
+                and measured.get("kind") == oc.KIND_MEASURE and measured.get("command")
+                and oc.measure_matches(measured, axis.threshold)
+                and (expected is None or (measured.get("comparator") == "=="
+                     and rl.matches_return(expected, measured.get("now"))))):
+            verified.add(item.id)
+            continue
+        failures.append({"id": item.id, "reason": "missing matching public-caller measurement for the current "
+                         "candidate; measure the candidate and run its pinned objective check"})
+    return verified, failures
+
+
 def _ledger_gate(
     root: Path, run_dir: Path, verdict: object, manifest_abs: Optional[Path], gated: Sequence[str],
     operator: dict, plan_text: Optional[str], inline_review: dict, resume_ledger: object,
@@ -2241,13 +2293,16 @@ def _ledger_gate(
     except (OSError, ValueError):
         manifest_data, routed = None, {}
     recovery_reasons = recovery_reasons or {}
+    measured_ids, measurement_failures = _caller_measurements(root, run_dir, ledger)
     result = requirements_ledger.judge(
-        ledger, verdict, routed, gated=[*gated, *recovery_reasons], operator=operator, repo_root=root, plan_text=plan_text,
+        ledger, verdict, routed, measured_ids=measured_ids, gated=[*gated, *recovery_reasons], operator=operator, repo_root=root, plan_text=plan_text,
         wave_reviews=[w for w in inline_review.get("wave_reviews") or [] if isinstance(w, dict)],
         noted_paths=requirements_ledger.noted_paths(root, run_dir),
         code_paths=code_paths, review_verdicts=review_floor.verdict_count(inline_review, root),
         note_ids=requirements_ledger.note_ids(run_dir), mended=mended, inline_review=inline_review,
     )
+    if result["pass"] and measurement_failures:
+        result.update({"pass": False, "failures": measurement_failures})
     from coordinator_core.ops.dispatch_emit import measured_rev
 
     try:
@@ -2396,6 +2451,7 @@ def _ledger_gate(
         refused="ledger-unmet",
         **infra,
         ledger_failures=result["failures"],
+        accountable_run=run_dir.name,
         ledger_items=len(ledger.items),
         all_of_pm_ask=ledger.all_of_pm_ask,
         awaiting_operator=[
@@ -2853,6 +2909,10 @@ def _submitter_session(root: Path, run_id: object) -> str:
 def _firing_sessions(root: Path, run_id: object, session_id: Optional[str]) -> set:
     """Sessions that are this landing's own hand: the landing caller, the run's submitting session, the session on the run's token and the run's recorded emitter."""
     own = {session_id} if session_id else set()
+    from coordinator_core.ops.workflow_fire.finalizer import observed_sizing_session
+    scout = observed_sizing_session(root, run_id)
+    if scout:
+        own.add(scout)
     submitter = _submitter_session(root, run_id)
     if submitter:
         own.add(submitter)
@@ -6058,6 +6118,27 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         merge_artifacts_reply = _land_merge_artifacts(root, merge_artifacts, message, sha)
     _exclude_withheld()
     token_state["landed"] = True
+    criterion = inline_review.get("criterion")
+    criterion_record_error = None
+    if isinstance(criterion, dict) and criterion.get("status"):
+        if (unlanded_rows or review_gap) and criterion["status"] != "not_met":
+            criterion = {
+                **criterion, "status": "not_met", "authored_by": "engine:landing",
+                "reason": "declared work remained unlanded or unreviewed",
+                "judge_at_landing": criterion, "unlanded_rows": sorted(unlanded_rows),
+                "review_gap": review_gap,
+            }
+        # The landed-stage writer supplies a missing-judge fallback. Save the actual
+        # decision first, in the manifest's record even when a sibling run is credited.
+        outcome_id = ask_run_dir.name if ask_run_dir is not None else sibling_run_id
+        try:
+            if safe_id(outcome_id) and record_dir(root, outcome_id).is_dir():
+                previous = read_run_outcome(root, outcome_id) or {}
+                write_run_outcome(root, outcome_id, {
+                    **previous, "inline_review": {**inline_review, "criterion": criterion},
+                })
+        except (OSError, ValueError) as exc:
+            criterion_record_error = str(exc)
     if ask_run_dir is not None and not incomplete and not review_gap:
         from coordinator_core.ops.dispatch_emit.ask_contract import stamp_run_stage_at
 
@@ -6185,9 +6266,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["origin_landed"] = origin_landed
     if halted_auto_landed is not None:
         reply["halted_auto_landed"] = {"holders": auto_landed_holders, **halted_auto_landed}
-    criterion = inline_review.get("criterion")
     if isinstance(criterion, dict) and criterion.get("status"):
-        reply["criterion_status"] = "not_met" if unlanded_rows or review_gap else criterion["status"]
+        reply["criterion_status"] = criterion["status"]
+    if criterion_record_error is not None:
+        reply["criterion_record_error"] = criterion_record_error
     if ledger_partial:
         reply["ledger_partial"] = ledger_partial
     if ledger_advisory:
@@ -6341,10 +6423,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             "sibling_run_id": sibling_run_id,
             "presets": presets, "plan_rel": request.plan_path, "session_id": session_id, "sha": sha,
             "review_receipt": review_record, "run_base_sha": _close_job_run_base(root, run_base, sibling_run_id),
-            "criterion": (
-                {**criterion, "status": "not_met"} if isinstance(criterion, dict) and (unlanded_rows or review_gap)
-                else criterion if isinstance(criterion, dict) else None
-            ),
+            "criterion": criterion if isinstance(criterion, dict) else None,
             "falsifier_broken": _falsifier_broken_tells(params.get("falsifier_broken"), request.plan_path),
             "inputs": inputs,
         }

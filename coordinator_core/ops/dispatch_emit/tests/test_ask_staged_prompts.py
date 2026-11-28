@@ -68,6 +68,21 @@ def test_adjacent_literals_join_into_one_staged_run_with_escapes_decoded() -> No
     assert out.count("prompts/p.md") == 1
 
 
+@pytest.mark.parametrize("template", [False, True], ids=["concat", "template"])
+@pytest.mark.parametrize("separator", [" ", "\n\n"])
+def test_staging_keeps_separator_between_dynamic_path_and_read_instruction(template, separator):
+    sink = {}
+    body = separator + _BIG
+    source = "`${path}" + body + "`" if template else "path + " + _js_string_literal(body)
+    result = stage_literal_runs(source, "row", _stager(sink))
+    pointer = stage("row", _BIG, {}, record_dir="rec")
+    if template:
+        assert result == "`${path}" + separator + "${" + pointer + "}`"
+    else:
+        assert result == "path + " + _js_string_literal(separator) + " + " + pointer
+    assert sink == {"row": _BIG}
+
+
 def test_double_quoted_literals_and_runs_below_the_floor_are_never_staged() -> None:
     sink: dict[str, str] = {}
     schema_like = '"' + "d" * (MIN_STAGE_BYTES + 10) + '"'
@@ -106,14 +121,26 @@ def test_without_staged_out_every_body_stays_inline() -> None:
     assert "You are the run's one closing agent" in script.replace("\\'", "'")
 
 
+_BB_DECL = re.compile(r"^const (_BB\d+) = `((?:[^`\\]|\\.)*)`;\n", re.M | re.S)
+
+
 def _unshare_precedence(script: str) -> str:
-    """Inline the hoisted precedence-tail const back into each use; staging runs before the share, so only the inline script carries it."""
+    """Inline post-staging shared consts (`_BBn`, `_agentHead`, precedence tail) back into each use."""
     fn = ask_compose._PRECEDENCE_TAIL_FN
     script = unshare_agent_head(script)
-    m = re.search(rf"const {fn} = `([^`]*)`;\n", script)
+    decls = {
+        name: "'" + re.sub(r"\\(.)|'", lambda m: (m.group(1) if m.group(1) in ("`", "$") else m.group(0)) if m.group(1) else "\\'", text) + "'"
+        for name, text in _BB_DECL.findall(script)
+    }
+    if decls:
+        script = _BB_DECL.sub("", script)
+        for name in sorted(decls, key=lambda n: -int(n[3:])):
+            script = re.sub(rf"\b{name}\b", lambda _m, t=decls[name]: t, script)
+        script = prompt_fragments.fold_literals(script)
+    m = re.search(rf"const {fn} = `((?:[^`\\]|\\.)*)`;\n", script)
     if not m:
         return script
-    tail = m.group(1)
+    tail = m.group(1).replace("\\`", "`")
     body = script[: m.start()] + script[m.end() :]
     body = body.replace(f"' + {fn} + '", tail)
     return re.sub(rf"' \+ {fn}(?![A-Za-z0-9_])", lambda _m: tail + "'", body)
@@ -131,6 +158,7 @@ def test_pointer_replaced_text_equals_the_inline_script(monkeypatch: pytest.Monk
             f"Read REPO/{RECORD_DIR_ROOT}/{_RUN}/prompts/{name}.md in full and follow it as the rest of this brief.\n"
         )
         assert pointer in staged
+        staged = staged.replace("${" + pointer + "}", ask_staged_prompts._template_encode(text))
         staged = staged.replace(pointer, _js_string_literal(text))
     assert prompt_fragments.fold_literals(_unshare_precedence(staged)) == prompt_fragments.fold_literals(_unshare_precedence(inline))
 

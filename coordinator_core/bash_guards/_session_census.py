@@ -7,6 +7,7 @@ snapshot to both.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Collection, Dict, List, Mapping, Optional, Sequence
 
@@ -39,13 +40,33 @@ def _stem(name: str) -> str:
     return low[:-4] if low.endswith(".exe") else low
 
 
+# invariant: same shapes as session.external_registry._NATIVE_CODEX.
+# A codex- prefix matches codex-windows-sandbox-service, which is not a session.
+_NATIVE_CODEX = re.compile(
+    r"codex(-(aarch64|arm64|x86_64|x64)-(apple-darwin|unknown-linux-(musl|gnu)|pc-windows-msvc))?"
+)
+
+
 def _is_claude(name: str) -> bool:
     stem = _stem(name)
-    return stem == "agy" or stem.startswith(("claude", "codex", "agy-", "agy_", "antigravity"))
+    return (
+        stem == "agy"
+        or _NATIVE_CODEX.fullmatch(stem) is not None
+        or stem.startswith(("claude", "agy-", "agy_", "antigravity"))
+    )
+
+
+def _is_grok(stem: str) -> bool:
+    # trap: the macOS image is grok-<version>-<os>-<arch>, not grok.
+    # grok-coordinator is the launcher above that image and is not a session.
+    if stem == "grok":
+        return True
+    return stem.startswith("grok-") and stem[5:6].isdigit()
 
 
 def _is_session_host(name: str) -> bool:
-    return _is_claude(name) or _stem(name) == "codex"
+    stem = _stem(name)
+    return _is_claude(name) or stem == "codex" or _is_grok(stem)
 
 
 def _payload_pid(payload: Mapping[str, Any]) -> Optional[int]:
@@ -63,7 +84,7 @@ def resolve_anchor(
     primitives: ProcessPrimitives,
     snapshot: Optional[Sequence[ProcRow]] = None,
 ) -> Optional[ProcRow]:
-    """Nearest Claude or Codex ancestor of payload["pid"], or None (the guard then denies).
+    """Nearest Claude, Codex, or Grok ancestor of payload["pid"], or None (the guard then denies).
 
     None on: no usable pid, unreadable snapshot, a missing hop, a hop whose parent is not older
     than its child (pid reuse), a cycle, or no session host ancestor.

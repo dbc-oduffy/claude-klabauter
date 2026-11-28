@@ -87,8 +87,9 @@ def test_stop_after_key_and_value_domain() -> None:
 
 
 def test_parked_next_action_text() -> None:
-    assert c.parked_next_action("docs/plans/x.md") == "Run /mise-prep on docs/plans/x.md, then /mise-en-place."
-    expected = "Run /mise-prep on the run's plan, then /mise-en-place."
+    tail = "; re-fire the sizing to stage and run it, no baton needed."
+    assert c.parked_next_action("docs/plans/x.md") == "Plan landed: docs/plans/x.md" + tail
+    expected = "Plan landed: the run's plan" + tail
     assert c.parked_next_action(None) == expected
     assert c.parked_next_action("") == expected
 
@@ -96,7 +97,7 @@ def test_parked_next_action_text() -> None:
 def test_parked_next_action_js_matches_python_form() -> None:
     js = c.parked_next_action_js("_planRel")
     plan_branch, none_branch = js[1:-1].split(" ? ", 1)[1].split(" : ", 1)
-    assert plan_branch == '"Run /mise-prep on " + _planRel + ", then /mise-en-place."'
+    assert plan_branch == '"Plan landed: " + _planRel + "; re-fire the sizing to stage and run it, no baton needed."'
     assert js.startswith("(_planRel ? ")
     assert json.loads(none_branch) == c.parked_next_action(None)
     head, tail = plan_branch.split(" + _planRel + ")
@@ -390,3 +391,53 @@ def test_halted_naming_existing_plan_drops_missing_plan_from_trailer(tmp_path: P
     missing = {"halted": "commit", c.HALT_PLAN_FIELD: "docs/plans/gone.md"}
     assert c.HALT_PLAN_TRAILER not in c.halted_record_message("r", c.halted_naming_existing_plan(tmp_path, missing))
     assert f"{c.HALT_PLAN_TRAILER}: docs/plans/gone.md" in c.halted_record_message("r", missing)
+
+
+def _reason_line(halted: dict) -> str:
+    return next(l for l in c.halted_record_message("r", halted).split("\n") if l.startswith("Halt-Reason:"))
+
+
+def test_review_blocked_failing_tests_name_their_ids_in_the_trailer() -> None:
+    ids = [f"coordinator_core/tests/test_x.py::test_{n}" for n in range(8)]
+    line = _reason_line({"halted": "review_blocked", "blocker": "failing_test", "failing": ids})
+    assert line.startswith("Halt-Reason: 8 failing tests: coordinator_core/tests/test_x.py::test_0, ")
+    assert c.HALT_NO_REASON_TEXT not in line
+
+
+def test_review_blocked_failing_node_id_objects_name_their_ids() -> None:
+    line = _reason_line({"halted": "review_blocked", "failing": [{"node_id": "t::a", "message": ""}]})
+    assert line == "Halt-Reason: 1 failing test: t::a"
+
+
+def test_review_blocked_unapplied_findings_name_count_and_slices() -> None:
+    halted = {"halted": "review_blocked", "unapplied_findings": 3, "slices": [{"slice_id": "S1"}, {"slice_id": "S2"}]}
+    assert _reason_line(halted) == "Halt-Reason: 3 unapplied review findings in slices S1, S2"
+
+
+def test_review_blocked_items_name_their_remaining() -> None:
+    halted = {"halted": "review_blocked", "items": [{"id": "R1", "remaining": ["t::a", "t::b"]}]}
+    assert _reason_line(halted) == "Halt-Reason: R1: t::a, t::b"
+
+
+def test_explicit_reason_still_outranks_failing_tests() -> None:
+    assert _reason_line({"halted": "review_blocked", "reason": "why", "failing": ["t::a"]}) == "Halt-Reason: why"
+
+
+def test_causeless_halt_message_keeps_fallback_text() -> None:
+    assert _reason_line({"halted": "review_blocked", "failing": [], "unapplied_findings": 0}) == f"Halt-Reason: {c.HALT_NO_REASON_TEXT}"
+
+
+def test_halt_names_no_cause_pins_both_sides() -> None:
+    assert c.halt_names_no_cause({"halted": "review_blocked"})
+    assert c.halt_names_no_cause({"halted": "review_blocked", "failing": [""], "items": [{}]})
+    assert not c.halt_names_no_cause({"halted": "review_blocked", "failing": ["t::a"]})
+    assert not c.halt_names_no_cause({"halted": "review_blocked", "unapplied_findings": 1})
+    assert not c.halt_names_no_cause({"halted": "ledger-check"})
+
+
+def test_commit_halted_record_refuses_causeless_review_blocked_halt(tmp_path: Path) -> None:
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import commit_halted_record
+
+    reply = commit_halted_record(tmp_path, tmp_path, {"halted_by": {"halted": "review_blocked"}, "run_id": "warp-x"})
+    assert reply["committed"] is False and reply["refused"] == c.HALT_NO_CAUSE_REFUSAL
+    assert not (tmp_path / c.RECORD_DIR_ROOT).exists()

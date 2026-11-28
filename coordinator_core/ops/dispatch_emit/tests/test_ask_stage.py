@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
+import shlex
+import subprocess
 
 import pytest
 import yaml
@@ -86,10 +89,24 @@ def test_three_row_plan_yields_briefs_equal_to_the_plan_routes_prompts(repo):
     for mr in m.rows:
         row = next(r for r in rows if r.id == mr.id)
         brief = (repo / mr.brief_path).read_text(encoding="utf-8")
-        assert brief.startswith(emit._row_prompt(row, PLAN_REL, ctx).rstrip())
+        expected = emit._row_prompt(row, PLAN_REL, ctx).rstrip()
+        assert brief.startswith(expected.replace(emit._runtime_root_marker(), shlex.quote(repo.as_posix())))
     waves = {r.id: r.wave for r in m.rows}
     assert waves["C2"] > waves["C1"]
     assert {"pkg/a.py", "pkg/b.py", "pkg/c.py"} <= set(m.review_declared_paths)
+
+
+def test_static_brief_git_command_locates_workspace_from_other_cwd(repo):
+    workspace = repo / "project with spaces"
+    workspace.mkdir()
+    (repo / "docs").rename(workspace / "docs")
+    write_run_scripts(workspace, "anchor")
+    subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+    manifest = stage(workspace, run_id="anchor", plan_rel=PLAN_REL)
+    brief = (workspace / manifest.rows[0].brief_path).read_text(encoding="utf-8")
+    command = re.search(r"confirm with `(git -C [^`]+)`", brief).group(1)
+    resolved = subprocess.check_output(shlex.split(command), cwd=repo, text=True).strip()
+    assert resolved == workspace.resolve().as_posix()
 
 
 def test_manifest_round_trips_and_request_names_every_row(repo):

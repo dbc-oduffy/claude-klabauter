@@ -538,9 +538,40 @@ def _prune_top_level(
     return removed
 
 
+def _pytest_leg_roots() -> list:
+    """Sweep roots for this prune.
+
+    trap: under pytest, ``gettempdir`` is often a tmp_path inside the worktree while
+    ``pytest_sweep_roots`` still names the host temp. Reaping that host temp from a test
+    is not this leg. A real prune (no ``PYTEST_CURRENT_TEST``) uses every sweep root.
+    """
+    from coordinator_core.ops.fleet.pytest_basetemp_sweep import pytest_sweep_roots
+
+    roots = list(pytest_sweep_roots())
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return roots
+    temp = Path(tempfile.gettempdir()).resolve()
+    kept = []
+    for root in roots:
+        try:
+            Path(root).resolve().relative_to(temp)
+        except ValueError:
+            continue
+        kept.append(root)
+    return kept
+
+
+def _pytest_backlog(now: Optional[float] = None) -> bool:
+    from coordinator_core.ops.fleet.pytest_basetemp_sweep import pytest_backlog
+
+    return pytest_backlog(roots=_pytest_leg_roots(), now=now)
+
+
 def roots_due(
     roots: "Optional[list[tuple[Path, int, float]]]" = None, repo_root: str = ""
 ) -> bool:
+    if roots is None and _pytest_backlog():
+        return True
     if roots is None and not stamp_is_fresh(_top_level_stamp_root()):
         return True
     return any(
@@ -577,6 +608,19 @@ def prune(
     fleet = fleet_temp_root()
     coord_parent = fleet.parent
     removed = 0
+    pytest_pending = False
+    if roots is None:
+        from coordinator_core.ops.fleet.pytest_basetemp_sweep import (
+            drain_tombstones,
+            tombstone_dead_runs,
+        )
+
+        # Own slice: a full drain must not latch the age-pass budget or skip its stamp.
+        pytest_budget = _Budget(None if drain else budget_seconds)
+        leg_roots = _pytest_leg_roots()
+        removed += tombstone_dead_runs(roots=leg_roots, now=now, check=pytest_budget.check)
+        removed += drain_tombstones(roots=leg_roots, check=pytest_budget.check)
+        pytest_pending = _pytest_backlog(now)
     index = None
     if repo_root and roots is None:
         try:
@@ -628,7 +672,7 @@ def prune(
                 (root / STAMP_NAME).touch()
             except OSError:
                 pass
-    if roots is None and not budget.stopped:
+    if roots is None and not budget.stopped and not pytest_pending:
         stamp_root = _top_level_stamp_root()
         if drain or not stamp_is_fresh(stamp_root, now):
             removed += _prune_top_level(now - RETENTION_DAYS * 86400, budget, keep_live)

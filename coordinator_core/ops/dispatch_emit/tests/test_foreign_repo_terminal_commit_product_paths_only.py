@@ -77,10 +77,10 @@ def _stage_run(root: Path) -> None:
     _write(root, f"{RECORD_DIR_ROOT}/{RUN}/ask.md", "ask\n")
 
 
-def _fire(root: Path) -> dict:
+def _fire(root: Path, extra_chunks=()) -> dict:
     marker = f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt"
     request = CommitRequest(
-        chunks=(ChunkCommit(id="C1", title="t1", paths=(PRODUCT,)),), plan_path=PLAN
+        chunks=(ChunkCommit(id="C1", title="t1", paths=(PRODUCT,)), *extra_chunks), plan_path=PLAN
     )
     _write(root, marker, render_marker(request) + "\n")
     manifest = StageManifest(
@@ -121,11 +121,11 @@ def test_a_run_in_a_repo_without_coordinator_state_commits_product_paths_only(re
     out = _fire(repo)
 
     assert out["committed"] is True, out
-    # Pins current behavior: the stage stamp lands as a second "(process files)" commit rather
+    # Pins current behavior: the run outcome lands as a second "(process files)" commit rather
     # than riding the product commit; a fix to that must update this count.
     assert _commits(repo) == before + 2
     stage = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
-    assert stage == [f"{RECORD_DIR_ROOT}/{RUN}/run-stage.json"], stage
+    assert stage == [f"state/run-evidence/{RUN}/outcome.json"], stage
     paths = _git(["show", "--name-only", "--format=", "HEAD~1"], repo).split()
     assert paths == [PRODUCT], paths
     assert out["run_artifacts"]["landed"] == []
@@ -165,3 +165,17 @@ def test_the_same_run_in_an_onboarded_repo_still_lands_the_artifacts(repo):
     assert out["committed"] is True, out
     assert out["run_artifacts"]["withheld"] == {}
     assert EVIDENCE in out["run_artifacts"]["landed"]
+
+@pytest.mark.parametrize("chunk_id", ["sizing", "C2"])
+def test_withheld_sizing_only_discharges_bookkeeping(repo, chunk_id):
+    _stage_run(repo)
+    before = _git(["rev-parse", "HEAD"], repo)
+    out = _fire(repo, (ChunkCommit(id=chunk_id, title="Sizing file", paths=(SIZING,)),))
+    if chunk_id == "sizing":
+        assert out["committed"] is True and not out.get("error"), out
+        assert _git(["show", "--format=", "--name-only", out["sha"]], repo).split() == [PRODUCT]
+        assert out["run_artifacts"]["withheld"][SIZING] == "repo-not-opted-in"
+    else:
+        assert out["refused"] == "credited-chunk-uncommitted", out
+        assert out["uncommitted"] == {chunk_id: [SIZING]}
+        assert _git(["rev-parse", "HEAD"], repo) == before

@@ -3223,7 +3223,22 @@ def _terminal_commit_inner(
         for p in (bookkeeping_record_path, note_rel, request.plan_path, *record_dir_present, *companions, *seam_own):
             if p and p not in declared_writes:
                 proc_wh.setdefault(p, process_artifact_policy.WITHHELD_REASON)
+    # A local-only run record is not a product write. Keep overlapping product
+    # declarations subject to both the pre-commit credit gate and the residue check.
+    local_bookkeeping = set()
     if proc_wh:
+        local_bookkeeping = {
+            p for c in request.chunks if c.id in credit_gate.BOOKKEEPING_CHUNK_IDS
+            for p in c.paths if p in proc_wh
+        }
+        for c in request.chunks:
+            if local_bookkeeping and c.id not in credit_gate.BOOKKEEPING_CHUNK_IDS:
+                local_bookkeeping.difference_update(c.paths)
+                for prefix in c.prefixes:
+                    boundary = prefix.rstrip("/")
+                    local_bookkeeping = {p for p in local_bookkeeping if p != boundary and not p.startswith(boundary + "/")}
+        declared_writes.difference_update(local_bookkeeping)
+        chunk_declared.difference_update(local_bookkeeping)
         all_paths = [p for p in all_paths if p not in proc_wh]
         deleted_paths = [p for p in deleted_paths if p not in proc_wh]
         run_owned = [p for p in run_owned if p not in proc_wh]
@@ -3484,6 +3499,7 @@ def _terminal_commit_inner(
     credited: dict = {}
     for c in done_chunks + contributing_partial:
         declared = set(c.paths) | set(_own_prefix_files(worktree_root, c, report_cache) or [])
+        declared.difference_update(local_bookkeeping)
         credited[c.id] = sorted(
             declared - absent_dropped - set(wh_reasons) - set(never_commit_dropped) - set(reverted_absent)
         )
@@ -4876,7 +4892,7 @@ def _terminal_commit_inner(
     if reply.get("committed") and reply.get("sha"):
         residue = _commit_residue(
             worktree_root, request, snapshot, report_cache, session_id,
-            excluded=set(all_paths) | set(deleted_paths) | set(scope.get("landed", ())) | set(dropped_absent) | set(wh_map) | set(never_commit_dropped) | set(closure_withheld) | {p for ps in sibling_paths.values() for p in ps},
+            excluded=local_bookkeeping | set(all_paths) | set(deleted_paths) | set(scope.get("landed", ())) | set(dropped_absent) | set(wh_map) | set(never_commit_dropped) | set(closure_withheld) | {p for ps in sibling_paths.values() for p in ps},
             unfinished=incomplete_chunks | held_ids,
             commit_v2_mod=commit_v2_mod,
         )

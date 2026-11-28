@@ -98,6 +98,8 @@ from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import (
     review_specs,
 )
 from coordinator_core.ops.dispatch_emit.emit import (
+    _REPO_ANCHOR_LINE,
+    _runtime_root_marker,
     LAZY_BRIEFS_ABOVE_ROWS,
     resolve_agent_model,
     _EXECUTOR_AGENT_TYPE,
@@ -1220,26 +1222,65 @@ def _sizing_plan_edge(root: Path, sizing_rel: str) -> Optional[str]:
     raise AskStageError(f"PLAN-EDGE-DANGLING: {sizing_rel} has plan edge {edge!r}, but that file exists in no layout")
 
 
-def _sizing_named_plan(root: Path, plan_rel: str, sizing_rel: str) -> str:
-    """The plan path to stage when `plan_rel` and the sizing's own plan path share a file name but differ in directory.
+def _sizing_file(root: Path, rel: str | None) -> str | None:
+    """`rel` when it is a file inside `root`, else None."""
+    if not isinstance(rel, str) or not rel.strip():
+        return None
+    rel = rel.strip().replace(chr(92), "/")
+    found = contained_path(root / rel, [root])
+    if found is None or not found.is_file():
+        return None
+    return rel
 
-    Returns the sizing-named path when that file exists, else `plan_rel` when that file exists (the
-    plan stages where it was actually written, 664092bb10); raises AskStageError `PLAN-PATH-MISMATCH`
-    naming both only when neither exists. A matching path or a differently named plan is returned unchanged.
-    Trap: refusing an existing `plan_rel` denies recoverable work, an engine bug, never a guard."""
+
+def _recorded_sizing_rel(root: Path, run_id: str) -> str | None:
+    """The sizing path on this run's `run.json`, when that file exists.
+
+    A stage reader can rename both the plan and the sizing in the command it
+    copies. The run record still names the sizing that was submitted.
+    """
+    try:
+        record = record_dir(root, run_id)
+    except ValueError:
+        return None
+    path = record / "run.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    rel = data.get("sizing_rel") if isinstance(data, dict) else None
+    return _sizing_file(root, rel if isinstance(rel, str) else None)
+
+
+def _sizing_named_plan(root: Path, plan_rel: str, sizing_rel: str) -> str:
+    """The plan path to stage when the caller path and the sizing-named path disagree.
+
+    An existing caller path with a different file name is that plan. A missing caller
+    path uses the sizing-named file when that file exists, including when the names
+    differ. Same file name, different directory: the sizing-named file when it exists,
+    else the caller path where the plan was written. Neither file: `PLAN-PATH-MISMATCH`.
+    Trap: refusing an existing `plan_rel` denies recoverable work, an engine bug, never a guard.
+    """
     from coordinator_core.ops.dispatch_emit.sizing_fire import s_plan_path
 
     named = s_plan_path(sizing_rel)
     given = plan_rel.replace(chr(92), "/")
-    if given == named or PurePosixPath(given).name != PurePosixPath(named).name:
+    named_path = contained_path(root / named, [root])
+    given_path = contained_path(root / given, [root])
+    named_exists = named_path is not None and named_path.is_file()
+    given_exists = given_path is not None and given_path.is_file()
+    same_name = PurePosixPath(given).name == PurePosixPath(named).name
+    if given == named or (given_exists and not same_name):
         return plan_rel
-    found = contained_path(root / named, [root])
-    if found is not None and found.is_file():
+    if named_exists:
         return named
-    own = contained_path(root / given, [root])
-    if own is not None and own.is_file():
+    if given_exists:
         return plan_rel
-    raise AskStageError(f"PLAN-PATH-MISMATCH: plan_path {given!r} is not the sizing-named {named!r}, and neither file exists")
+    raise AskStageError(
+        f"PLAN-PATH-MISMATCH: plan_path {given!r} is not the sizing-named {named!r}, and neither file exists"
+    )
 
 
 def _refuse_misrouted_xs_mint(sizing: Mapping, sizing_rel: str, writes: Sequence[str]) -> None:
@@ -1764,7 +1805,9 @@ def stage(
         _write(spine_path, spine_text)
         plan_path = spine_path
     else:
-        if commit_sizing_rel:
+        usable = _sizing_file(root, commit_sizing_rel) or _recorded_sizing_rel(root, run_id)
+        if usable is not None:
+            commit_sizing_rel = usable
             plan_rel = _sizing_named_plan(root, plan_rel, commit_sizing_rel)
         plan_path = contained_path(root / plan_rel, [root])
         if plan_path is None or not plan_path.is_file():
@@ -2118,6 +2161,11 @@ def stage(
                     text = _reviewer_brief(root, run_dir, row.id, raw_by_id.get(row.id) or {})
                 else:
                     text = _row_prompt(row, plan_posix, context)
+                    text = text.replace(
+                        _REPO_ANCHOR_LINE.format(root=_runtime_root_marker()),
+                        _REPO_ANCHOR_LINE.format(root=shlex.quote(root.as_posix())),
+                        1,
+                    )
                     served_regs = (raw_by_id.get(row.id) or {}).get("register_rows") or ()
                     if ledger_resume and served_regs and run_sizing_rel:
                         served = served_rows_block(root, run_id, served_regs)
@@ -2168,7 +2216,8 @@ def stage(
                 text = text.replace(stage_family.RUN_ID_TOKEN, run_id)
                 _put_brief(brief_name, brief_rel, text, wave_no)
                 brief_sizes[row.id] = len(text.encode("utf-8"))
-                paths = _widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root, widen_probes)
+                # Test discovery supplies verification targets; only the row defines edit and commit scope.
+                paths = commit_pathspec_or_none([row]) or []
                 declared.extend(paths)
                 if not kept_from:
                     fresh_rows[row.id] = (tuple(paths), text.replace(prior_line, "") if prior_line else text)
@@ -3430,7 +3479,7 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
             recorded = ask_stage_receipt.landed(prior_dir, digest, spine_sha)
             if recorded is not None and not _recorded_misses_resume_rows(prior_dir, params.get("only_rows")):
                 again = {"manifest_handle": recorded, ask_stage_receipt.ALREADY_STAGED_KEY: True}
-                _, again_twin = reply_sidecar.handle_and_twin(root, prior_dir / "manifest.json")
+                _, again_twin = reply_sidecar.handle_and_twin(root, prior_dir / "manifest.json", source_receipt=again)
                 if again_twin is not None:
                     again["twin_path"] = again_twin
                 return again
@@ -3495,7 +3544,10 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
             with leg("stamp"):
                 stamp = stamp_plan_executing(root, params["plan_path"])
         with leg("receipt"):
-            handle, twin_rel = reply_sidecar.handle_and_twin(root, record_dir(root, run_id) / "manifest.json")
+            source_receipt = {}
+            handle, twin_rel = reply_sidecar.handle_and_twin(
+                root, record_dir(root, run_id) / "manifest.json", source_receipt=source_receipt
+            )
             ask_stage_receipt.write(record_dir(root, run_id), digest, handle, spine_sha)
         engine_identity.append_stage_start_receipt(root, run_id, "ask_stage")
     except StageWaiting as exc:
@@ -3530,7 +3582,7 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
         if prior_dir is not None:
             with leg("release"):
                 ask_stage_receipt.release(prior_dir)
-    reply = {"manifest_handle": handle, **family_report}
+    reply = {"manifest_handle": handle, **family_report, **source_receipt}
     if twin_rel is not None:
         reply["twin_path"] = twin_rel
     if stamp is not None and stamp["outcome"] != "unchanged":

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import time
 
+from coordinator_core import temp_layout
 from coordinator_core.ops import prune_claude_temp as pct
 from pathlib import Path
 import pytest
@@ -102,6 +103,61 @@ def test_over_budget_session_keeps_a_fresh_empty_dir(tmp_path: Path) -> None:
     removed = pct._enforce_scratch_budget(root, 100, now, pct._Budget(None))
     assert removed == 1
     assert sorted(p.name for p in pad.iterdir()) == ["fresh_dir"]
+
+
+def test_prune_reaps_dead_pytest_runs_inside_the_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+    import time
+
+    from coordinator_core.group_em import session_registry
+    from coordinator_core.temp_layout import PYTEST_KEPT_MARKER
+
+    monkeypatch.setattr(pct.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(temp_layout.tempfile, "gettempdir", lambda: str(tmp_path))
+    dead = 3_900_000
+    while session_registry.pid_alive(dead) and dead > 3_000_000:
+        dead -= 17
+    base = tmp_path / "coordinator" / "myrepo" / "pytest"
+    dead_dir = base / f"{dead}-abc123"
+    dead_dir.mkdir(parents=True)
+    (dead_dir / "nested" / "f.txt").parent.mkdir()
+    (dead_dir / "nested" / "f.txt").write_text("x")
+    own = base / f"{os.getpid()}-abc123"
+    own.mkdir()
+    kept = base / f"{dead}-def456"
+    kept.mkdir()
+    (kept / PYTEST_KEPT_MARKER).write_text("")
+    odd = base / "not-a-run"
+    odd.mkdir()
+    fleet = tmp_path / "coordinator" / "_fleet" / "pytest" / f"{dead}-abc123"
+    fleet.mkdir(parents=True)
+    started = time.process_time()
+    pct.prune(repo_root=str(tmp_path / "myrepo"))
+    assert time.process_time() - started < pct.BUDGET_SECONDS
+    assert not dead_dir.exists()
+    assert own.exists() and kept.exists() and odd.exists() and fleet.exists()
+    assert (tmp_path / "coordinator" / pct.STAMP_NAME).is_file()
+
+
+def test_prune_pytest_backlog_holds_the_stamp_then_a_later_pass_clears_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.group_em import session_registry
+
+    monkeypatch.setattr(pct.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(temp_layout.tempfile, "gettempdir", lambda: str(tmp_path))
+    dead = 3_800_000
+    while session_registry.pid_alive(dead) and dead > 3_000_000:
+        dead -= 17
+    run = tmp_path / "coordinator" / "myrepo" / "pytest" / f"{dead}-abc123"
+    run.mkdir(parents=True)
+    (run / "f.txt").write_text("x")
+    pct.prune(budget_seconds=0)
+    assert run.exists()
+    assert not (tmp_path / "coordinator" / pct.STAMP_NAME).exists()
+    pct.prune()
+    assert not run.exists()
+    assert (tmp_path / "coordinator" / pct.STAMP_NAME).is_file()
 
 
 def test_budget_never_takes_a_child_written_within_the_idle_window(tmp_path: Path) -> None:

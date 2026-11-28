@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from datetime import datetime
 
 from coordinator_core.usage.price_table import estimate_usd, RATE_PROVENANCE, model_family
@@ -31,7 +32,7 @@ def configure(row, model, effort, speed, observed_at):
 
 
 def empty(root: str) -> dict:
-    return {"version": 3, "root": root, "threads": {}, "seen": {}, "files": {},
+    return {"version": 6, "root": root, "threads": {}, "seen": {}, "files": {},
             "coverage": {"subagents": False, "workflows": False}, "warnings": []}
 
 
@@ -74,11 +75,23 @@ def counts(raw: dict) -> dict:
     return out
 
 
+def _price_usage(state, model, usage, speed):
+    if (isinstance(model, str) and model.startswith("gpt-") and usage.get("cache_creation_input_tokens")
+            and "ttl_12h_tokens" not in usage):
+        warn(state, "cache-write retention unavailable; estimate assumes 30m writes")
+    return estimate_usd(model, usage, speed)
+
+
+def _native_usage_key(turn_id, total):
+    return hashlib.sha256(json.dumps([turn_id, total], sort_keys=True).encode()).hexdigest()
+
+
 def observe_usage(state: dict, sid: str, turn_id: str | None, usage: dict, observed_at=None,
                   pricing_model=_UNSET, pricing_speed=_UNSET) -> None:
     owner = thread(state, sid)
     total = counts(usage.get("total", usage.get("total_token_usage", {})))
-    last = counts(usage.get("last", usage.get("last_token_usage", {})))
+    raw_last = usage.get("last", usage.get("last_token_usage", {}))
+    last = counts(raw_last)
     if not last["input_tokens"] and not last["output_tokens"]:
         return  # Empty initial/rate-limit snapshots are not a settled request.
     window = usage.get("modelContextWindow", usage.get("model_context_window"))
@@ -91,7 +104,7 @@ def observe_usage(state: dict, sid: str, turn_id: str | None, usage: dict, obser
     if not turn_id:
         warn(state, "usage without a stable turn identity was not priced")
         return
-    key = hashlib.sha256(json.dumps([turn_id, total], sort_keys=True).encode()).hexdigest()
+    key = _native_usage_key(turn_id, total)
     previous = owner.get("cumulative")
     owner["cumulative"] = total
     if key in state["seen"]:
@@ -104,9 +117,11 @@ def observe_usage(state: dict, sid: str, turn_id: str | None, usage: dict, obser
         return
     normalized = {"input_tokens": uncached, "output_tokens": last["output_tokens"],
                   "cache_read_input_tokens": cached, "cache_creation_input_tokens": written}
+    if "ttl_12h_tokens" in raw_last:
+        normalized["ttl_12h_tokens"] = raw_last["ttl_12h_tokens"]
     priced_model = owner.get("model") if pricing_model is _UNSET else pricing_model
     speed = owner.get("speed") if pricing_speed is _UNSET else pricing_speed
-    price = estimate_usd(priced_model, normalized, speed)
+    price = _price_usage(state, priced_model, normalized, speed)
     pending = state.setdefault("pending_unpriced", {})
     if key in pending:
         if price is None:
@@ -128,6 +143,7 @@ def observe_usage(state: dict, sid: str, turn_id: str | None, usage: dict, obser
         owner["unpriced_events"] += 1
     else:
         owner["usd"] += price
+        owner.setdefault("native_charges", {})[key] = price
         owner["native_usd"] += price
         owner["priced_events"] += 1
     if priced_model:
@@ -176,11 +192,11 @@ def ingest(state: dict, event: dict, source: dict) -> None:
         native_turn, native_total = payload.get("native_turn_id"), payload.get("native_total_usage")
         joined = isinstance(native_turn, str) and isinstance(native_total, dict)
         if joined:
-            key = hashlib.sha256(json.dumps([native_turn, counts(native_total)], sort_keys=True).encode()).hexdigest()
+            key = _native_usage_key(native_turn, counts(native_total))
         else:
             key = hashlib.sha256(json.dumps([sid, request, payload.get("provider")]).encode()).hexdigest()
         state.setdefault("usage_requests", {})[json.dumps([sid, request])] = key
-        if key in state["seen"]:
+        if (joined and key in state["seen"]) or key in state.get("conflicting_requests", {}):
             return
         usage = payload.get("usage")
         if not isinstance(usage, dict) or any(field not in usage for field in ("input_tokens", "output_tokens",
@@ -191,7 +207,26 @@ def ingest(state: dict, event: dict, source: dict) -> None:
             value = usage.get(field, 0)
             if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value) or value < 0:
                 raise ValueError("invalid canonical workflow usage")
-        price = estimate_usd(payload.get("model"), usage, payload.get("service_tier"))
+        price = _price_usage(state, payload.get("model"), usage, payload.get("service_tier"))
+        if not joined:
+            # Only complete, priceable observations establish a charge. A later complete
+            # observation can still repair a previously unknown rate.
+            tier = payload.get("service_tier") or "default"
+            basis = [payload.get("model"), {"standard": "default", "priority": "fast"}.get(tier, tier),
+                     *[usage.get(name, 0) for name in ("input_tokens", "output_tokens",
+                       "cache_read_input_tokens", "cache_creation_input_tokens", "ttl_12h_tokens")]]
+            previous = state["seen"].get(key)
+            if previous is not None:
+                if price is not None and previous["basis"] != basis:
+                    del state["seen"][key]
+                    state.setdefault("conflicting_requests", {})[key] = True
+                    row["canonical_usd"] -= previous["price"]
+                    row["usd"] -= previous["price"]
+                    row["priced_events"] -= 1
+                    row["unpriced_events"] += 1
+                    row.get("canonical_responses", {}).pop(request, None)
+                    warn(state, f"conflicting workflow usage for {sid}/{request}; cost unknown")
+                return
         pending = state.setdefault("pending_unpriced", {})
         counter = "joined_canonical_events" if joined else "canonical_events"
         if key in pending:
@@ -209,7 +244,7 @@ def ingest(state: dict, event: dict, source: dict) -> None:
             state.setdefault("pending_counters", {})[key] = counter
             state.setdefault("pending_models", {})[key] = payload.get("model")
         else:
-            state["seen"][key] = True
+            state["seen"][key] = True if joined else {"basis": basis, "price": price}
         row["observations"] += 1
         row[counter] += 1
         if payload.get("model"):
@@ -219,6 +254,11 @@ def ingest(state: dict, event: dict, source: dict) -> None:
         if price is None:
             row["unpriced_events"] += 1
         else:
+            if joined:
+                row.setdefault("native_charges", {})[key] = price
+            elif payload.get("provider") == "codex" and re.fullmatch(r"resp_[A-Za-z0-9_-]+", request):
+                # Broker execution IDs include the fire and ordinal, separated by a colon.
+                row.setdefault("canonical_responses", {})[request] = price
             row["usd"] += price
             row["joined_canonical_usd" if joined else "canonical_usd"] += price
             row["priced_events"] += 1
@@ -262,6 +302,16 @@ def ingest(state: dict, event: dict, source: dict) -> None:
     if not sid:
         return
     owner = thread(state, sid)
+    if kind == "token_usage_record":
+        response_id = payload.get("response_id")
+        turn = payload.get("turn_id")
+        if (payload.get("thread_id") == sid and isinstance(turn, str) and turn
+                and isinstance(response_id, str) and response_id):
+            key = _native_usage_key(turn, counts(payload.get("thread_token_usage")))
+            ids = owner.setdefault("native_response_ids", {})
+            # Conflicting response IDs for one observation leave its overlap unknown.
+            ids[key] = response_id if ids.get(key, response_id) == response_id else None
+        return
     if kind == "turn_context":
         model = payload.get("model")
         source.update(model=model, effort=payload.get("effort"), speed=payload.get("service_tier"))
@@ -310,13 +360,32 @@ def summary(state: dict, alias: str | None = None) -> dict:
     root = thread(state, state["root"])
     included = descendants(state)
     rows = [row for sid, row in state["threads"].items() if sid in included]
-    overlap = any((row["native_events"] or row["joined_canonical_events"]) and row["canonical_events"] for row in rows)
+    overlap = False
+    usd = 0.0
+    priced_events = 0
+    for row in rows:
+        native = {}
+        identities = row.get("native_response_ids", {})
+        for key, charge in row.get("native_charges", {}).items():
+            response = identities.get(key)
+            if response:
+                native[response] = max(charge, native.get(response, 0.0))
+        canonical = row.get("canonical_responses", {})
+        # Three independently supported lower bounds. Unknown IDs on either
+        # stream cannot establish that its subtotal is additional spend.
+        response_sum = sum(max(native.get(r, 0.0), canonical.get(r, 0.0))
+                           for r in native.keys() | canonical.keys())
+        usd += max(row["native_usd"] + row["joined_canonical_usd"], row["canonical_usd"], response_sum)
+        priced_events += row.get("priced_events", 0) - len(native.keys() & canonical.keys())
+        native_count = row["native_events"] + row["joined_canonical_events"]
+        if native_count and row["canonical_events"]:
+            overlap |= len(native) != native_count or len(canonical) != row["canonical_events"]
     warnings = list(state["warnings"])
     if any(sid not in included and (row.get("observations") or row.get("unpriced_events"))
            for sid, row in state["threads"].items()):
         warnings.append("observed usage has unknown or unrelated parent ownership; excluded from this root estimate")
     if overlap:
-        warnings.append("native and workflow recorders overlap without a request join; per-thread maximum is a lower-bound estimate")
+        warnings.append("native and workflow recorders overlap without a request join; only proven distinct responses contribute beyond each stream subtotal")
     remaining = None
     if root.get("window") and root.get("used") is not None:
         remaining = max(0, min(100, 100 * (1 - root["used"] / root["window"])))
@@ -349,7 +418,7 @@ def summary(state: dict, alias: str | None = None) -> dict:
             "effort": root.get("effort"), "remaining_percent": remaining,
             "context_window": root.get("window"), "captured_at": root.get("usage_at"),
             "context_basis": "observed model context window; not an independently observed compaction threshold",
-            "usd": sum(max(r["native_usd"] + r["joined_canonical_usd"], r["canonical_usd"]) for r in rows), "priced_events": sum(r.get("priced_events", 0) for r in rows),
+            "usd": usd, "priced_events": priced_events,
             "unpriced_events": sum(r["unpriced_events"] for r in rows), "threads": len(rows),
             "coverage": coverage, "warnings": warnings,
             "execution_inventory": {"expected": len(executions), "missing_terminal": missing_terminal,

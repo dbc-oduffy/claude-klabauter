@@ -46,10 +46,12 @@ from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.row_returns import CONSUMED_RETURNS_PARAM
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_DEPENDENTS_UNSTARTED,
+    HALT_NO_CAUSE_REFUSAL,
     HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
     LEDGER_HALT_KIND,
     RECORD_DIR_ROOT,
+    halt_names_no_cause,
     halted_naming_existing_plan,
     halted_record_message,
 )
@@ -204,6 +206,12 @@ def _commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) ->
         return _error(
             f"params.{HALTED_RECORD_PARAM} must be the halted.json object, got {type(halted_raw).__name__}",
             refused="halted-by-malformed-json",
+        )
+    if halt_names_no_cause(halted_raw):
+        return _error(
+            "a review_blocked halt names no failing tests, items, unapplied findings or reason; "
+            "the halt record is not written. Instead: re-halt with `failing`, `items`, `unapplied_findings` or `reason` set.",
+            refused=HALT_NO_CAUSE_REFUSAL,
         )
     halted = halted_naming_existing_plan(worktree_root, halted_raw)
     run_id = params.get("run_id")

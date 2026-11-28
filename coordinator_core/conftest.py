@@ -1920,7 +1920,9 @@ def _no_ambient_plugin_root(request: pytest.FixtureRequest, monkeypatch: pytest.
 
 # An unhoisted, unstaged script is a shape production never emits; only these literal-text modules lift the
 # runner cap, never dispatch_emit-wide (emit.py and ask_roadmap.py share it, and cap tests expect the refusal).
-_LITERAL_TEXT_MODULES = frozenset({"test_ask_compose.py", "test_ask_compose_prompt_fragments.py"})
+_LITERAL_TEXT_MODULES = frozenset({
+    "test_ask_compose.py", "test_ask_compose_end_to_end.py", "test_ask_compose_prompt_fragments.py",
+})
 
 
 @pytest.fixture(autouse=True)
@@ -2039,6 +2041,7 @@ def default_basetemp_to_temp_layout(config) -> None:
     root.mkdir(parents=True, exist_ok=True)
     chosen = str(root / ("%d-%s" % (os.getpid(), os.urandom(3).hex())))
     config.option.basetemp = chosen
+    config._claude_klabauter_default_basetemp = chosen
     # tmpdir's pytest_configure may already have built its factory from the empty option.
     factory = getattr(config, "_tmp_path_factory", None)
     if factory is not None and getattr(factory, "_given_basetemp", None) is None:
@@ -2100,12 +2103,28 @@ def _managed_temp_left_by(seen: "dict | None", name: str) -> str:
     return (last.split("::", 1)[0] if last else "<no test>") + MANAGED_TEMP_AFTER_LAST_TEST
 
 
+def _reap_default_basetemp(session: pytest.Session, exitstatus) -> None:
+    """Remove a basetemp this module minted, on exit 0/5. A leftover is renamed into ``.reap``."""
+    chosen = getattr(session.config, "_claude_klabauter_default_basetemp", None)
+    if not chosen or int(exitstatus) not in (0, 5):
+        return
+    path = Path(chosen)
+    if not path.exists():
+        return
+    shutil.rmtree(path, ignore_errors=True)
+    if path.exists():
+        from coordinator_core.ops.fleet.pytest_basetemp_sweep import tombstone_one
+
+        tombstone_one(path)
+
+
 def managed_temp_session_finish(session: pytest.Session, exitstatus) -> None:
     """Restore ``tempfile.tempdir``; any entry left in the session dir fails a passing session.
 
     Empty dirs under ``coordinator/`` are the helper's own skeleton (a managed dir created while
     the session dir was the Temp root), pruned before the listing.
     """
+    _reap_default_basetemp(session, exitstatus)
     state = getattr(session.config, _SESSION_TEMP_ATTR, None)
     if state is None:
         return

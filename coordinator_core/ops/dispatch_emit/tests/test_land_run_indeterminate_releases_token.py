@@ -51,3 +51,21 @@ def test_a_second_land_past_the_budget_adopts_and_the_late_settle_is_a_noop(repo
 
     land_run._settle_token(second, landed=False)
     assert run_token.admits(repo, RUN_ID, token, SCRIPT)  # the holder's own settle still releases
+
+
+def test_restricted_claim_preserves_token_for_owner(repo, monkeypatch):
+    token = run_token.mint(repo, RUN_ID, SCRIPT)
+    claim_file = run_token._record_path(repo, RUN_ID, claimed=True)
+    original = run_token.os.open
+
+    def restricted_open(path, flags, *args, **kwargs):
+        if Path(path) == claim_file:
+            raise PermissionError(path)
+        return original(path, flags, *args, **kwargs)
+
+    with monkeypatch.context() as restriction:
+        restriction.setattr(run_token.os, "open", restricted_open)
+        rejected = land_run._redeem_or_answer(repo, RUN_ID, token, SCRIPT)
+        assert rejected["refused"] == "run-token-claim-denied"
+        assert land_run._redeem_or_answer(repo, RUN_ID, "0" * 32, SCRIPT)["refused"] == "run-token"
+    _claim(repo, token, {})

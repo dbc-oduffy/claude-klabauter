@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -16,11 +17,11 @@ BYTE_BUDGET = 4 * 1024 * 1024
 def load(path: Path, root: str) -> dict:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
-        if (state.get("version") == 3 and state.get("root") == root
+        if (state.get("version") == 6 and state.get("root") == root
                 and all(isinstance(state.get(k), dict) for k in ("threads", "seen", "files", "coverage"))
                 and isinstance(state.get("warnings"), list)):
             return state
-        if state.get("version") in (1, 2) and state.get("root") == root and isinstance(state.get("files"), dict):
+        if state.get("version") in (1, 2, 3, 4, 5) and state.get("root") == root and isinstance(state.get("files"), dict):
             migrated = empty(root)
             migrated["files"] = {p: {"offset": 0, "parent_override": row.get("parent_override")}
                                  for p, row in state["files"].items() if isinstance(row, dict)}
@@ -82,7 +83,7 @@ def rewind_for_repricing(state: dict) -> None:
             source.pop("skip_line", None)
 
 
-def advance(state: dict, paths: list[Path], *, byte_budget: int = BYTE_BUDGET) -> dict:
+def advance(state: dict, paths: Iterable[Path], *, byte_budget: int = BYTE_BUDGET) -> dict:
     """Consume complete appended records only, retaining offsets and unique-event sums."""
     remaining = max(0, byte_budget)
     complete = True

@@ -822,19 +822,55 @@ def _blocking_items_reason(items) -> str:
     return "; ".join(parts)
 
 
-def halted_record_message(run_id: str, halted: dict) -> str:
-    """Commit message for a halted run's record-only commit: subject, blank line, `Halted-By:`
-    and always one non-empty `Halt-Reason:` line: the first non-empty of `HALT_REASON_FIELDS`, else
-    the `blocking_items` as `id: remaining` pairs, else `HALT_NO_REASON_TEXT`; whitespace collapsed,
-    cut to `HALT_REASON_MAX_CHARS`. Pure."""
-    lines = [f"warp: record halted {run_id} run artifacts", "", f"Halted-By: {halted.get('halted')}"]
-    text = ""
+HALT_REVIEW_BLOCKED = "review_blocked"
+HALT_NO_CAUSE_REFUSAL = "halt-no-cause"
+
+
+def _failing_tests_reason(failing) -> str:
+    """`N failing tests: id, id, ...` over the non-empty ids of `failing` (strings or `{node_id}` objects); '' when none."""
+    raw = [f.get("node_id") if isinstance(f, dict) else f for f in failing] if isinstance(failing, list) else []
+    ids = [" ".join(f.split()) for f in raw if isinstance(f, str) and f.strip()]
+    return f"{len(ids)} failing test{'s' if len(ids) != 1 else ''}: {', '.join(ids)}" if ids else ""
+
+
+def _unapplied_findings_reason(halted: dict) -> str:
+    """`N unapplied review findings` (with the blocked slice ids when named); '' unless `unapplied_findings` is a positive int."""
+    count = halted.get("unapplied_findings")
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        return ""
+    slices = halted.get("slices")
+    ids = [str(s["slice_id"]) for s in slices if isinstance(s, dict) and s.get("slice_id")] if isinstance(slices, list) else []
+    return f"{count} unapplied review finding{'s' if count != 1 else ''}" + (f" in slices {', '.join(ids)}" if ids else "")
+
+
+def halt_cause_text(halted: dict) -> str:
+    """The cause a halt record names, whitespace collapsed: the first non-empty of `HALT_REASON_FIELDS`,
+    else `blocking_items`, else the failing test ids, else `items`, else the unapplied findings; '' when
+    it names none. Pure."""
     for field in HALT_REASON_FIELDS:
         value = halted.get(field)
         text = " ".join(str(value).split()) if value else ""
         if text:
-            break
-    text = text or _blocking_items_reason(halted.get(HALT_BLOCKING_ITEMS_FIELD)) or HALT_NO_REASON_TEXT
+            return text
+    return (
+        _blocking_items_reason(halted.get(HALT_BLOCKING_ITEMS_FIELD))
+        or _failing_tests_reason(halted.get("failing"))
+        or _blocking_items_reason(halted.get("items"))
+        or _unapplied_findings_reason(halted)
+    )
+
+
+def halt_names_no_cause(halted: dict) -> bool:
+    """True for a `review_blocked` halt that names no cause (`halt_cause_text` is empty). Pure."""
+    return halted.get("halted") == HALT_REVIEW_BLOCKED and not halt_cause_text(halted)
+
+
+def halted_record_message(run_id: str, halted: dict) -> str:
+    """Commit message for a halted run's record-only commit: subject, blank line, `Halted-By:`
+    and always one non-empty `Halt-Reason:` line: `halt_cause_text`, else `HALT_NO_REASON_TEXT`;
+    cut to `HALT_REASON_MAX_CHARS`. Pure."""
+    lines = [f"warp: record halted {run_id} run artifacts", "", f"Halted-By: {halted.get('halted')}"]
+    text = halt_cause_text(halted) or HALT_NO_REASON_TEXT
     lines.append(f"Halt-Reason: {text[:HALT_REASON_MAX_CHARS]}")
     plan = halted.get(HALT_PLAN_FIELD)
     if isinstance(plan, str) and _relative_inside(plan) and plan == "".join(plan.split()):
@@ -880,7 +916,9 @@ def _record_dir(repo_root: Path, run_id: str) -> Path:
     state = contained_path(root / RECORD_DIR_ROOT / run_id, [root / RECORD_DIR_ROOT])
     if state is None:
         raise ValueError(f"record dir for {run_id!r} escapes {RECORD_DIR_ROOT}")
-    if state.is_dir():
+    # A measurement can create the state directory while the active run still lives in scratch.
+    if state.is_dir() and (not (state / MEASURED_REV_RECORD).is_file()
+                           or any((state / name).is_file() for name in RUN_RECORD_FILES)):
         return state
     scratch = contained_path(root / RUN_DIR_ROOT / run_id, [root / RUN_DIR_ROOT])
     if scratch is not None and scratch.is_dir():
@@ -1273,7 +1311,8 @@ def rulable_ids(rows: Any) -> tuple[str, ...]:
     return tuple(
         str(r.get(rr.ROW_ID))
         for r in mappings
-        if r.get(rr.ROW_STATUS) not in (rr.STATUS_MET, rr.STATUS_WAIVED) and str(r.get(rr.ROW_ID)) not in out
+        if not rr.pm_obligation(r.get(rr.ROW_ANCHOR))
+        and r.get(rr.ROW_STATUS) not in (rr.STATUS_MET, rr.STATUS_WAIVED) and str(r.get(rr.ROW_ID)) not in out
     )
 
 

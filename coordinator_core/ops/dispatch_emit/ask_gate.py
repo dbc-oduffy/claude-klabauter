@@ -1795,7 +1795,7 @@ def _close_gate_leg(params: dict, out: dict, repo_root: Optional[Path]) -> dict:
         return out
     if params.get("stage_act"):
         if "manifest_handle" in out:
-            out["stage_reply"] = {"manifest_handle": out["manifest_handle"]}
+            out["stage_reply"] = {k: out[k] for k in ("manifest_handle", "twin_path", "twin_sha256") if k in out}
         elif isinstance(out.get("manifest"), dict) and "error" in out["manifest"]:
             out["stage_reply"] = {"error": out["manifest"]["error"]}
         elif out["arm"] == ARM_XS or (out["arm"] == ARM_S and out.get("resume_plan")):
@@ -2098,7 +2098,7 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
                     return out
             stamp = stamp_plan_executing(root, plan_rel)
             out["manifest_handle"], twin_rel = reply_sidecar.handle_and_twin(
-                root, record_dir(root, params["run_id"]) / "manifest.json"
+                root, record_dir(root, params["run_id"]) / "manifest.json", source_receipt=out
             )
             if twin_rel is not None:
                 out["twin_path"] = twin_rel

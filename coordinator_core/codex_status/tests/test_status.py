@@ -368,3 +368,31 @@ def test_observed_raw_window_resolves_without_catalog(tmp_path, monkeypatch, cat
         assert 'observed raw context window' in value['context_basis']
     else:
         assert 'before_compact_percent' not in value
+
+
+@pytest.mark.parametrize("response,events,expected", [
+    ("resp_prewarm", 2, .000976),
+    ("resp_generation", 1, .000888),
+    ("broker:1", 2, .000888),
+])
+@pytest.mark.parametrize("journal_first", [True, False])
+def test_provider_response_overlap(response, events, expected, journal_first):
+    snapshot = usage(101, 0, 2)
+    identity = {"type": "token_usage_record", "payload": {
+        "thread_id": ROOT, "turn_id": "turn", "response_id": "resp_generation",
+        "thread_token_usage": snapshot["payload"]["info"]["total_token_usage"],
+    }}
+    journal = {"type": "coordinator_usage", "payload": {
+        "session_id": ROOT, "request_id": response, "provider": "codex",
+        "model": "gpt-6.2-astra", "usage_format": "coordinator-canonical-v1",
+        "usage": {"input_tokens": 11, "output_tokens": 0,
+                  "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+    }}
+    state, source = empty(ROOT), {}
+    rollout = [metadata(ROOT), context("turn", "gpt-6.2-astra"), snapshot, identity]
+    for event in ([journal] + rollout if journal_first else rollout + [journal]):
+        ingest(state, event, source)
+    result = summary(state)
+    assert result["usd"] == pytest.approx(expected)
+    assert result["priced_events"] == events
+    assert any("overlap" in warning for warning in result["warnings"]) == (response == "broker:1")

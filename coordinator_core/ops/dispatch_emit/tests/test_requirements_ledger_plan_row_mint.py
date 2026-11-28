@@ -104,12 +104,12 @@ def test_register_with_an_ask_row_gets_no_plan_rows(tmp_path):
     assert reply["ledger_item_ids"] == ["R1"]
 
 
-def test_fully_withheld_register_gets_no_plan_rows(tmp_path):
+def test_unverified_ask_disposition_stays_on_original_row(tmp_path):
     ruling = {"source": "pm", "quote": "q", "ref": f"workflow.revise:{RUN}:out_of_scope", "on": "2026-10-21"}
     _setup(tmp_path, {"rows": [{**_row("R1", "deferred"), "ruling": ruling}]})
     reply = _stage(tmp_path)
     assert [r["id"] for r in _rows(tmp_path)] == ["R1"]
-    assert reply["ledger_item_ids"] == [] and reply["withheld_ids"] == ["R1"]
+    assert reply["ledger_item_ids"] == ["R1"] and reply["withheld_ids"] == []
 
 
 def test_plan_row_origin_is_read_from_the_anchor(tmp_path):
@@ -129,3 +129,16 @@ def test_judge_on_a_sizing_bound_empty_ledger_names_the_sizing():
 def test_judge_on_an_unbound_empty_ledger_keeps_the_bare_reason():
     out = rl.judge(rl.Ledger((), False), {"items": []})
     assert out["failures"] == [{"id": None, "reason": EMPTY_REGISTER_REASON}]
+
+
+def test_revise_can_withhold_a_subtask_minted_from_the_plan(tmp_path):
+    _setup(tmp_path, None)
+    assert "error" not in _stage(tmp_path)
+    rows = _rows(tmp_path)
+    subtask = next(row for row in rows if row["anchor"] == "plan-row:C3")
+    assert subtask["source_text"] == "Plan row C3: third"
+    rid = subtask["id"]
+    out = rl._handler({"run_id": RUN, "verbatim": "drop the third implementation subtask",
+                       "out_of_scope": [rid]}, repo_root=tmp_path)
+    assert out["ok"] and out["withheld"] == [rid]
+    assert [r for r in _rows(tmp_path) if r["id"] != rid] == [r for r in rows if r["id"] != rid]

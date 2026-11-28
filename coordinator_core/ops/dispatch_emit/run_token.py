@@ -828,7 +828,7 @@ def redeem(
 
 
 def redeem_claim(
-    repo_root: Path, run_id: object, token: object, script_path: object, *, budget_secs: Optional[float] = None
+    repo_root: Path, run_id: object, token: object, script_path: object, *, budget_secs: Optional[float] = None, report_denial: bool = False
 ) -> Optional[dict]:
     """`redeem`, returning the winning claim's identity `{claimed_at, pid, thread}` plus its `deadline`
     when stamped (None when this call did not win); pass it to `holds_claim` to learn whether a later
@@ -852,6 +852,10 @@ def redeem_claim(
     try:
         claimed.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(claimed, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except PermissionError:
+        if report_denial:
+            raise
+        return None
     except OSError:
         return None
     identity = _write_claim(fd, record, budget_secs)

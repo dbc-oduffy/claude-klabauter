@@ -144,6 +144,8 @@ def _install_deps(key: str, py: Path, root: Path, deps: list, timeout: float) ->
 def _collect(key: str, py: str, root: Path, timeout: float) -> CheckItem:
     name = f"fleet-test-env:{key}"
     argv = [py, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"]
+    # A registered checkout can be nested inside a different fleet repository.
+    argv.extend(["--confcutdir", str(root.resolve())])
     try:
         proc = _run(argv, root, timeout)
     except subprocess.TimeoutExpired:

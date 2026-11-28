@@ -247,3 +247,12 @@ def test_session_for_pid_matches_only_the_child():
     assert gc.session_for_pid(rows, 9)["session_id"] == "bbb"
     assert gc.session_for_pid(rows, 3) is None
     assert gc.session_for_pid({"nope": True}, 5) is None
+
+
+def test_session_for_pid_keeps_the_latest_row_when_the_pid_is_shared():
+    older = {"session_id": "old", "pid": 5, "opened_at": "2026-11-27T23:12:47Z"}
+    newer = {"session_id": "new", "pid": 5, "opened_at": "2026-11-27T23:48:53Z"}
+    assert gc.session_for_pid([older, newer], 5)["session_id"] == "new"
+    assert gc.session_for_pid([newer, older], 5)["session_id"] == "new"
+    assert gc.session_for_pid(
+        [{"session_id": "a", "pid": 5}, {"session_id": "b", "pid": 5}], 5)["session_id"] == "b"

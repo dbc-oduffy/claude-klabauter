@@ -146,28 +146,83 @@ def _between(script, start, end):
     return script[i: re.compile(end).search(script, i).end()]
 
 
-def _run_composed_late_legs(reads, tmp_path, added=("C2",)):
+def _run_composed_late_legs(reads, tmp_path, added=("C2",), *, final_replies=None, host_reads=False):
     """Run the composed `_lateRead`, `_lateLeg` and verify-block late snippet under node with stubbed agents."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
     script = _compose()
     read = _between(script, "const _lateRead = async (_final) => {", r"\n\s*};")
+    launch = _between(script, "const _launchRow = (r) => {", r"\n  };")
     leg = _between(script, "_lateLeg = async (_ids) => {", r"\n\s*};")
     verify = _between(script, "_verifyLateIds = await _lateRead(true);", r"await Promise\.all\(_verifications\); \} \}")
     body = "\n".join([
-        read, leg,
+        read, launch, leg,
         "_lateIds = await _lateRead(); if (_lateIds.length) { await _lateLeg(_lateIds); }",
         verify,
         "S.order.push('verify');",
     ])
     source = _DRIVER_JS.replace("READS", json.dumps(reads)).replace("ADDED", json.dumps(list(added))).replace("BODY", json.dumps(body))
+    if host_reads:
+        source = source.replace("S.log = () => {};", """
+          S.log = () => {};
+          S._runId = 'retained-run';
+          S._lateServedParam = () => ({ served: ['R1'] });
+          S.engineOp = async (op, params) => {
+            S.order.push({op, params});
+            const reply = S._lateReads.shift();
+            if (typeof reply === 'string') throw new Error(reply);
+            return reply;
+          };
+          S.engineOp.directRun = true;
+          S.engineOp.hostGateOwned = true;
+        """)
+    if final_replies is not None:
+        source = source.replace("S.log = () => {};", "S.log = () => {}; S.finalReplies = " + json.dumps(final_replies) + ";")
+        source = source.replace("if (opts.label === 'late-rows-read') return", """
+          if (opts.label === 'late-rows-read' && prompt.includes('"verify_read":true')) {
+            const reply = S.finalReplies.shift();
+            if (typeof reply === 'string') throw new Error(reply);
+            return reply;
+          }
+          if (opts.label === 'late-rows-read') return""")
     driver = tmp_path / "late_legs_driver.js"
     driver.write_text(source, encoding="utf-8")
     proc = subprocess.run([node, str(driver)], capture_output=True, text=True, timeout=30,
                           **no_console_creationflags())
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.parametrize("failure", [{}, {"late_rows": ["R2", 1]}, "receiver unavailable"])
+def test_unavailable_final_read_retries_then_halts(tmp_path, failure):
+    out = _run_composed_late_legs([[]], tmp_path, final_replies=[failure, failure])
+    assert out["order"].count("late-rows-read") == 3
+    assert out["halted"]["halted"] == "ledger-check"
+    assert "unavailable at verify" in out["halted"]["reason"]
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_direct_late_reads_observe_revision_or_halt(tmp_path, unavailable):
+    replies = [{"late_rows": []}, *(["unavailable", {}] if unavailable else [{"late_rows": ["R2"]}])]
+    result = _run_composed_late_legs(replies, tmp_path, host_reads=True)
+    reads = [entry for entry in result["order"] if isinstance(entry, dict)]
+    initial = {"run_id": "retained-run", "served": ["R1"]}
+    final = {**initial, "verify_read": True}
+    assert [entry["params"] for entry in reads] == ([initial, final, final] if unavailable else [initial, final])
+    assert all(entry["op"] == "workflow.late_rows" for entry in reads)
+    assert "late-rows-read" not in result["order"]
+    if unavailable:
+        assert result["halted"]["halted"] == "ledger-check"
+    else:
+        assert result["halted"] is None and result["verifyIds"] == ["R2"]
+        assert result["rows"] == ["C1", "C2"]
+
+
+def test_final_read_recovers_and_executes_the_owed_row(tmp_path):
+    out = _run_composed_late_legs([[]], tmp_path, final_replies=["receiver unavailable", {"late_rows": ["R2"]}])
+    assert out["halted"] is None and out["verifyIds"] == ["R2"]
+    assert out["rows"] == ["C1", "C2"]
 
 
 @pytest.mark.parametrize("reads", [[[], ["R2"]], [["R2"], ["R2"]]])

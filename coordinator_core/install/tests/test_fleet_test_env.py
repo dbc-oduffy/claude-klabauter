@@ -86,6 +86,7 @@ def test_collected_passes_with_count(tmp_path, fake):
     assert item.ok and item.line() == "PASS [fleet-test-env:mk] collected 3"
     argv = fake["calls"][0][0]
     assert argv[:3] == ["py", "-m", "pytest"] and "--collect-only" in argv
+    assert argv[argv.index("--confcutdir") + 1] == str(root.resolve())
 
 
 def test_nonmodule_collection_error_fails_with_first_error_line(tmp_path, fake):

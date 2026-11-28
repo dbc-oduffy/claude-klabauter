@@ -487,6 +487,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "ceremony.result":                        "coordinator_core.ops.session_ceremonies",
     "ceremony.hand_land":                     "coordinator_core.ops.ceremony.hand_land",
     "governed_by.ledger":                     "coordinator_core.ops.ceremony.governed_by",
+    "push.state":                             "coordinator_core.ops.push_state",
     "workflow.fire":                          "coordinator_core.ops.workflow_fire.op",
     "workflow.fire_status":                   "coordinator_core.ops.workflow_fire.op",
     "workflow.fire_wait":                     "coordinator_core.ops.workflow_fire.wait",

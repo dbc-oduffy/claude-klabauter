@@ -99,6 +99,14 @@ def _held_by_own_run(busy: LockTimeout, holder_label: str) -> bool:
     return bool(core.pid_alive(record.get("pid")))
 
 
+def sidecar_path(root: Path) -> Path:
+    """Return the machine lock to provision for a restricted repository landing."""
+    from coordinator_core.locked_write import _lock_key, _machine_lock_dir
+
+    target = Path(resolve_git_common_dir(root)) / _LOCK_NAME
+    return _machine_lock_dir() / f"{_lock_key(target)}.lock"
+
+
 @contextmanager
 def admit(
     root: Path,

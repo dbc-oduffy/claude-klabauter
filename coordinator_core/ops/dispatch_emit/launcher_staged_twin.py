@@ -391,6 +391,7 @@ def ensure_twin(
     max_bytes: int,
     refuse: Callable[[str], Exception],
     refuse_over_cap: Callable[[str], Exception] | None = None,
+    source_receipt: dict | None = None,
 ) -> str | None:
     """Leave the staged twin for a launcher child's manifest; return its repo-relative path when the
     twin on disk now holds the body, else None (any other sidecar, a standalone run: no script or no slot).
@@ -484,4 +485,6 @@ def ensure_twin(
     _land(target, body, refuse, twin_rel)
     _prune_run(Path(root), run_id, sha)
     _leave_receipt(target)
+    if source_receipt is not None:
+        source_receipt["twin_sha256"] = hashlib.sha256(body).hexdigest()
     return Path(twin_rel).as_posix()

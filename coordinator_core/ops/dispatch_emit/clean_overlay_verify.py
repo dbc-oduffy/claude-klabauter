@@ -903,7 +903,13 @@ def _build(root: Path, mroot: Path, leg: LegHook, scoped: bool = False) -> Path:
     _drop(mroot)
     mroot.mkdir(parents=True, exist_ok=True)
     with leg("clone"):
-        clone = run_git(["clone", "--shared", "--no-checkout", "-q", str(root), str(dest)], cwd=str(root))
+        args = ["--no-checkout", "-q", str(root), str(dest)]
+        clone = run_git(["clone", "--shared", *args], cwd=str(root))
+        if clone.returncode and "unable to normalize alternate object path:" in clone.stderr:
+            # A restricted process can read the repo without traversing its ancestors.
+            # Copy local objects, including unreferenced measured revisions, into the mirror.
+            _drop(dest)
+            clone = run_git(["clone", "--local", "--no-hardlinks", *args], cwd=str(root))
     if clone.returncode:
         why = "timed out" if clone.timed_out else clone.stderr.strip()[-_OUTPUT_TAIL:]
         raise ExportError(f"overlay clone failed: {why}")

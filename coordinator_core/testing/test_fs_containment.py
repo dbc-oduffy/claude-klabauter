@@ -244,6 +244,67 @@ def test_failing_run_is_kept_marked_and_capped_at_three(tmp_path, monkeypatch):
     assert marked == sorted([base.name, "103-aaaaa3", "102-aaaaa2"])
 
 
+def test_pass_tombstones_a_basetemp_rmtree_could_not_remove(tmp_path, monkeypatch):
+    cfg, base = _minted(monkeypatch, tmp_path)
+    monkeypatch.setattr(fc, "_rmtree", lambda path: None)
+    fc.pytest_sessionfinish(_Sess(cfg), 0)
+    assert not base.exists()
+    assert (base.parent / ".reap" / base.name).is_dir()
+
+
+def _plugin_pytest(tmp_path, body):
+    import subprocess
+    import sys
+
+    repo = Path(fc.__file__).resolve().parents[2]
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "test_case.py").write_text(body)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo)
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "pytest", "test_case.py", "-q",
+            "-p", "coordinator_core.testing.fs_containment",
+            "-p", "no:cacheprovider",
+            "--noconftest", "--rootdir", str(work), "--confcutdir", str(work),
+            "--override-ini", "addopts=",
+        ],
+        cwd=work,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    return proc, work
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_finished_subprocess_leaves_no_basetemp(tmp_path):
+    proc, work = _plugin_pytest(
+        tmp_path,
+        "def test_ok(tmp_path):\n    open('where.txt', 'w').write(str(tmp_path))\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    run = Path((work / "where.txt").read_text()).parent
+    assert not run.exists()
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_failing_subprocess_keeps_at_most_three(tmp_path):
+    proc, work = _plugin_pytest(
+        tmp_path,
+        "def test_bad(tmp_path):\n"
+        "    open('where.txt', 'w').write(str(tmp_path))\n"
+        "    assert False\n",
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    parent = Path((work / "where.txt").read_text()).parent.parent
+    kept = [p for p in parent.iterdir() if p.is_dir() and (p / fc._KEPT_MARKER).is_file()]
+    assert 1 <= len(kept) <= fc._KEEP_FAILING
+
+
 def test_explicit_basetemp_is_never_deleted(tmp_path, monkeypatch):
     explicit = tmp_path / "explicit"
     explicit.mkdir()

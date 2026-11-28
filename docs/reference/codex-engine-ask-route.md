@@ -67,7 +67,9 @@ coordinator-invoke workflow.fire '{"script_path": "<script_path>", "expected": "
 the script bytes changed since submit. The PM's ask is itself the authorization, so submit fires by
 default and step 1 does both calls: the reply carries
 `fire` (the registry record), or `fire_error` with the run handle kept when the fire failed
-after a good submit. Pass `"fire": false` to mint without starting, then run this step by hand.
+after a good submit. A requested fire failure exits 1, prints its cause on stderr, and keeps
+the mint receipt on stdout. Call `workflow.fire_wait` only with the returned `fire.fire_id`.
+An intentional mint-only submit exits 0. Pass `"fire": false` to mint without starting, then run this step by hand.
 When submit fires, `notify_to` defaults to `caller`; an explicit peer name overrides it.
 The warm engine observes driver exit and delivers the completion notice. The caller
 waits for that notice without polling or relaying the live run. After a terminal notice,

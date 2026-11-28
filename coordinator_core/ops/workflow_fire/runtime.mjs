@@ -39,6 +39,7 @@ export function workflowBody(source) {
 
 export async function executeWorkflow(source, requestAgent, emit = () => {}, args = {}, context = {}) {
   const depth = context.depth ?? 0;
+  const stagedDigests = context.stagedDigests ?? new Map();
   const binding = { depth, script_path: context.scriptPath,
     script_sha256: createHash('sha256').update(source).digest('hex') };
   if (depth >= MAX_WORKFLOW_DEPTH) throw new Error(`Workflow nesting exceeds ${MAX_WORKFLOW_DEPTH}`);
@@ -60,7 +61,7 @@ export async function executeWorkflow(source, requestAgent, emit = () => {}, arg
     // cannot represent (cycles, BigInts). Schema and labels remain intact.
     const encoded = JSON.parse(JSON.stringify(spec));
     emit({ event: 'agent-start', label: encoded.label ?? null, phase: encoded.phase ?? null });
-    const work = Promise.resolve().then(() => requestAgent(prompt, encoded)).then(result => {
+    const work = Promise.resolve().then(() => requestAgent(prompt, encoded, binding)).then(result => {
       emit({ event: 'agent-complete', label: encoded.label ?? null, phase: encoded.phase ?? null });
       return result;
     });
@@ -102,6 +103,10 @@ export async function executeWorkflow(source, requestAgent, emit = () => {}, arg
       throw new Error('Nested workflows do not own host operations');
     }
     const work = Promise.resolve().then(() => context.engineOp(op, encoded, binding)).then(result => {
+      if (op === 'gate.host_run' && result?.stage_reply?.twin_sha256) {
+        const stage = result.stage_reply;
+        stagedDigests.set(resolve(context.cwd ?? process.cwd(), stage.twin_path), stage.twin_sha256);
+      }
       emit({ event: 'invoke-complete', op });
       return result;
     });
@@ -110,6 +115,9 @@ export async function executeWorkflow(source, requestAgent, emit = () => {}, arg
     return work;
   } : undefined;
   if (engineOp) Object.defineProperty(engineOp, 'directRun', { value: depth === 0 });
+  if (engineOp && depth === 1 && stagedDigests.get(context.scriptPath) === binding.script_sha256) {
+    Object.defineProperty(engineOp, 'stagedLateRows', { value: true });
+  }
   if (engineOp) Object.defineProperty(engineOp, 'hostGateOwned', { value: depth === 0 && context.hostGateOwned === true });
   if (engineOp && depth === 0 && context.hostWorkflow === true && !context.hostGateOwned) {
     Object.defineProperty(engineOp, 'hostWorkflow', { value: async scriptPath => {
@@ -118,7 +126,7 @@ export async function executeWorkflow(source, requestAgent, emit = () => {}, arg
         throw new Error('Host root digest mismatch');
       }
       return executeWorkflow(root.source, requestAgent, emit, root.args,
-        { ...context, scriptPath: root.script_path, depth: 0, hostWorkflow: false, hostGateOwned: true });
+        { ...context, stagedDigests, scriptPath: root.script_path, depth: 0, hostWorkflow: false, hostGateOwned: true });
     } });
   }
   const workflow = async (options, positionalArgs) => {
@@ -139,8 +147,12 @@ export async function executeWorkflow(source, requestAgent, emit = () => {}, arg
     // concurrently and must never move one another's relative-path base.
     const scriptPath = resolve(context.cwd ?? process.cwd(), options.scriptPath);
     emit({ event: 'workflow-start', script_path: scriptPath, depth: depth + 1 });
-    const result = await executeWorkflow(readFileSync(scriptPath, 'utf8'), requestAgent, emit, nestedArgs,
-      { ...context, scriptPath, depth: depth + 1 });
+    const bytes = readFileSync(scriptPath);
+    if (stagedDigests.has(scriptPath) && createHash('sha256').update(bytes).digest('hex') !== stagedDigests.get(scriptPath)) {
+      throw new Error('Staged workflow differs from host-issued source');
+    }
+    const result = await executeWorkflow(bytes.toString('utf8'), requestAgent, emit, nestedArgs,
+      { ...context, stagedDigests, scriptPath, depth: depth + 1 });
     emit({ event: 'workflow-complete', script_path: scriptPath, depth: depth + 1 });
     return result;
   };
@@ -207,7 +219,7 @@ export async function main(argv = process.argv.slice(2)) {
     pending.set(id, { resolve, reject });
     write({ type, id, ...payload });
   });
-  const requestAgent = (prompt, options) => request('agent', { prompt, options });
+  const requestAgent = (prompt, options, binding) => request('agent', { prompt, options, binding });
   try {
     const result = await executeWorkflow(source, requestAgent, event => write({ type: 'event', ...event }), args,
       { scriptPath: resolve(argv[0]), cwd: process.cwd(),

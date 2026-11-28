@@ -81,6 +81,10 @@ RATE_PROVENANCE["gpt-6.2-astra"] = {
     "effective_from": None,
 }
 
+# Standard text rate card checked 2026-11-24. Retention is a subset of all writes.
+for _family in ("gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"):
+    PRICES[_family]["cache_write_12h_mult"] = 2.5
+
 # Gemini 3.8 Flash standard paid tier through 2026-12-31; Google schedules $1.50/$7.50 (cache read
 # $0.15) from 2027-01-01. Re-check the pricing page then. Cache writes carry no surcharge.
 PRICES["gemini-3.8-flash"] = {"input": 0.75, "output": 3.75, "cache_read_mult": 0.1, "cache_write_mult": 1.0}
@@ -151,6 +155,11 @@ def estimate_usd(model: str, usage: Mapping, speed: str | None = None) -> float 
     inp, out = p["input"], p["output"]
     cache_read = _n(usage, "cache_read_input_tokens")
     cache_write = _n(usage, "cache_creation_input_tokens")
+    long_writes = usage.get("ttl_12h_tokens", 0)
+    if type(long_writes) is not int or not 0 <= long_writes <= cache_write:
+        return None
+    if long_writes and ("cache_write_12h_mult" not in p or speed not in (None, "default", "standard")):
+        return None
     prompt = _n(usage, "input_tokens") + cache_read + cache_write
     if "tier_prompt_tokens" in p and prompt > p["tier_prompt_tokens"]:
         inp, out = p["tier_input"], p["tier_output"]
@@ -166,5 +175,6 @@ def estimate_usd(model: str, usage: Mapping, speed: str | None = None) -> float 
         _n(usage, "input_tokens") * inp
         + _n(usage, "output_tokens") * out
         + cache_read * inp * p.get("cache_read_mult", CACHE_READ_MULT)
-        + cache_write * inp * p.get("cache_write_mult", CACHE_WRITE_MULT)
+        + (cache_write - long_writes) * inp * p.get("cache_write_mult", CACHE_WRITE_MULT)
+        + long_writes * inp * p.get("cache_write_12h_mult", 0)
     ) / 1_000_000

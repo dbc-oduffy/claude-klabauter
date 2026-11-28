@@ -652,7 +652,24 @@ def test_grok_launch_defaults_auto_with_absolute_path_allow_per_engine_op(platfo
     rc = hel.launch("grok", ["-p", "hi"], which=lambda n: None, environ=env, platform=platform,
                     prepare_only=True, native_executable="grok.exe", session_id="s1")
     argv = json.loads(capsys.readouterr().out)["argv"]
-    assert rc == 0 and argv == ["grok.exe", *_grok_head(platform, env[g.SETTINGS_HOME_KEY]), "-p", "hi"]
+    head = _grok_head(platform, env[g.SETTINGS_HOME_KEY])
+    assert rc == 0 and argv[:len(head) + 1] == ["grok.exe", *head]
+    assert argv[len(head) + 1] == "--prompt-file" and len(argv) == len(head) + 3
+    prompt = Path(argv[-1])
+    try:
+        body = prompt.read_text(encoding="utf-8")
+        assert body == hel.GROK_XS_CARD + "hi"
+        assert "A code change in this workspace is done in this session, including one larger than an XS edit." in body
+        assert "Do not start a workflow for it." in body
+        assert "Finish that code change in one pass." in body
+        assert "When that change is in the workspace, stop." in body
+        assert "A workspace edit that names three files" not in body
+        assert "When the ask names the files to add in this workspace" not in body
+        assert "do not edit it again" not in body
+        assert "names the files to add" not in body
+    finally:
+        prompt.unlink(missing_ok=True)
+    assert "-p" not in argv
     assert argv[1:3] == ["--permission-mode", "auto"]
     rules = [argv[i + 1] for i, a in enumerate(argv) if a == "--allow"]
     assert len(rules) == len(_GROK_OPS) + 2
@@ -662,6 +679,40 @@ def test_grok_launch_defaults_auto_with_absolute_path_allow_per_engine_op(platfo
         assert Path(prefix).is_absolute() and Path(prefix).name.startswith("coordinator-invoke")
     assert not any("$HOME" in a or "~" in a for a in argv)
     assert not {"--always-approve", "--dangerously-skip-permissions", "--yolo"} & set(argv)
+
+
+def test_grok_prompt_file_keeps_the_sealed_bytes_and_codex_is_not_wrapped(tmp_path: Path, capsys) -> None:
+    sealed = tmp_path / "prompt.txt"
+    sealed.write_text("SEALED-BODY\n", encoding="utf-8")
+    before = sealed.read_bytes()
+    env = {"PATH": "x", g.SETTINGS_HOME_KEY: os.environ[g.SETTINGS_HOME_KEY], "HOME": str(tmp_path)}
+    rc = hel.launch("grok", ["--prompt-file", str(sealed)], which=lambda n: None, environ=env,
+                    platform="linux", prepare_only=True, native_executable="grok", session_id="s-card")
+    argv = json.loads(capsys.readouterr().out)["argv"]
+    assert rc == 0 and sealed.read_bytes() == before
+    wrapped = Path(argv[argv.index("--prompt-file") + 1])
+    assert wrapped != sealed
+    try:
+        assert wrapped.read_text(encoding="utf-8") == hel.GROK_XS_CARD + "SEALED-BODY\n"
+    finally:
+        wrapped.unlink(missing_ok=True)
+    rc = hel.launch("codex", ["exec", "-p", "hi"], which=lambda n: "/bin/codex", environ={"PATH": "x"},
+                    platform="linux", prepare_only=True, session_id="s-codex")
+    codex_argv = json.loads(capsys.readouterr().out)["argv"]
+    assert rc == 0 and codex_argv[codex_argv.index("-p") + 1] == "hi"
+    assert "--prompt-file" not in codex_argv
+
+
+def test_grok_cwd_becomes_the_working_dir_flag() -> None:
+    rc, calls, _ = _run("grok", extra=["x"], cwd="repo/sub")
+    argv = calls[0][1]
+    assert rc == 0 and argv.count("--cwd") == 1 and argv[argv.index("--cwd") + 1] == "repo/sub"
+
+
+def test_grok_caller_cwd_flag_is_not_doubled() -> None:
+    rc, calls, _ = _run("grok", extra=["--cwd", "mine", "x"], cwd="repo/sub")
+    argv = calls[0][1]
+    assert rc == 0 and argv.count("--cwd") == 1 and argv[argv.index("--cwd") + 1] == "mine"
 
 
 def test_grok_callers_permission_mode_and_allow_are_kept_not_doubled() -> None:
@@ -750,7 +801,12 @@ def test_codex_launch_refuses_naming_path_and_principal_when_scratch_cannot_be_m
 
 @pytest.mark.parametrize(("command", "expected"), [
     ("/bin/bash -lc 'coordinator-invoke engine_ask.submit --params-file p'", 17),
+    ("/bin/bash -lc '/opt/bin/coordinator-invoke workflow.fire --params-file p'", 17),
+    ("coordinator-invoke workflow.fire --params-file p && false", 0),
     ("coordinator-invoke workflow.fire_wait", 0),
+    ("/bin/bash -lc '/opt/bin/headless-em-launch --resume-mint receipt --cwd repo'", 17),
+    ("headless-em-launch --resume-mint receipt && false", 0),
+    ("headless-em-launch --help", 0),
     ("echo coordinator-invoke engine_ask.submit", 0),
     ("coordinator-invoke engine_ask.submit --params-file p && false", 0),
 ])
@@ -808,7 +864,7 @@ def test_diagnostic_install_rejects_peer_writable_members(home, unsafe):
         hel._diagnostic_install(os.environ)
 
 
-@pytest.mark.parametrize("case", ["registered", "unregistered", "indeterminate", "wrong_digest", "missing_handle", "script_outside_repo"])
+@pytest.mark.parametrize("case", ["registered", "unregistered", "grant_only", "indeterminate", "wrong_digest", "missing_handle", "wrong_reply_run", "wrong_reply_digest", "unbound_reply", "script_outside_repo", "changed_args", "pinned", "other_registered_em", "other_registered_workspace", "wrong_route"])
 def test_resume_mint_uses_existing_authority_and_exact_fire(case, tmp_path, monkeypatch, capsys):
     import hashlib
     from types import SimpleNamespace
@@ -833,17 +889,34 @@ def test_resume_mint_uses_existing_authority_and_exact_fire(case, tmp_path, monk
     args = {"repoRoot": str(root)}
     mint = dict(run_id=rid, script_path=str(script), sha256=digest, fire_args=args,
                 fire_error="SandboxedSpawnRefused: warm_disabled")
+    if case in ("pinned", "changed_args", "wrong_route"):
+        mint["fire_params"] = dict(run_id=rid, script_path=str(script), expected=digest, args=args,
+                                   backend="claude" if case == "wrong_route" else "codex", executor="headless",
+                                   notify_to="original-recipient", private_engine={"fixture": "selected"},
+                                   caller_session_id="original-sender")
     if case == "indeterminate":
         mint["fire"] = {"state": "indeterminate"}
     receipt = root / "submit.json"
     receipt.write_text(json.dumps({"jsonrpc": "2.0", "result": mint}))
-    if case != "unregistered":
+    if case == "grant_only":
+        principal = authority.Principal("launcher-session", "unknown", {}, grant_verified=True)
+        monkeypatch.setattr(authority, "require_fire_authority", lambda *a, **kw: principal)
+    elif case != "unregistered":
         monkeypatch.setattr(authority, "require_fire_authority", lambda *a, **kw: SimpleNamespace(role="em", session_id="registered"))
     calls = []
     fid = "b" * 32
     def dispatch(argv, cwd):
         calls.append((argv[0], json.loads(argv[1]), cwd))
-        return json.dumps({"result": {} if case == "missing_handle" else {"fire_id": fid}}), "", 0
+        record = {"fire_id": fid, "run_id": rid, "script_sha256": digest}
+        if case == "missing_handle":
+            record.pop("fire_id")
+        elif case == "wrong_reply_run":
+            record["run_id"] = "ask-other"
+        elif case == "wrong_reply_digest":
+            record["script_sha256"] = "0" * 64
+        elif case == "unbound_reply":
+            record = {"fire_id": fid}
+        return json.dumps({"result": record}), "", 0
     monkeypatch.setattr(invoke, "_dispatch_argv", dispatch)
     monkeypatch.setattr(g, "write_headless_em_grant", lambda *a: pytest.fail("unexpected grant creation"))
     monkeypatch.chdir(root)
@@ -853,12 +926,64 @@ def test_resume_mint_uses_existing_authority_and_exact_fire(case, tmp_path, monk
             raise PermissionError("ancestor metadata unavailable")
         return resolve(path, *args, **kwargs)
     monkeypatch.setattr(Path, "resolve", restricted_resolve)
-    code = hel.resume_mint(receipt, "0" * 64 if case == "wrong_digest" else digest, root)
-    assert (code == 0) == (case == "registered")
-    if case in ("registered", "missing_handle"):
+    if case in ("pinned", "changed_args", "other_registered_em", "other_registered_workspace"):
+        from coordinator_core.session import external_registry
+        monkeypatch.setattr(external_registry, "lookup", lambda sid: {
+            "role": "em", "provider": "codex", "cwd": str(tmp_path if case == "other_registered_workspace" else root),
+        })
+        receipt_digest = hashlib.sha256(receipt.read_bytes()).hexdigest()
+        if case == "changed_args":
+            mint["fire_args"] = {**args, "extra": "changed"}
+            receipt.write_text(json.dumps({"jsonrpc": "2.0", "result": mint}))
+        code = hel.main(["--resume-mint", str(receipt), "--expected", digest,
+                         "--receipt-sha256", receipt_digest, "--expected-session",
+                         "different" if case == "other_registered_em" else "registered", "--cwd", str(root)])
+    else:
+        code = hel.resume_mint(receipt, "0" * 64 if case == "wrong_digest" else digest, root)
+    assert (code == 0) == (case in ("registered", "pinned"))
+    if case in ("registered", "pinned", "missing_handle", "wrong_reply_run", "wrong_reply_digest", "unbound_reply"):
         assert calls == [("workflow.fire", dict(run_id=rid, script_path=str(script), expected=digest,
-                         args=args, backend="codex", executor="headless", caller_session_id="registered"), str(root))]
+                         args=args, backend="codex", executor="headless", caller_session_id="registered",
+                         **({"notify_to": "original-recipient", "private_engine": {"fixture": "selected"}}
+                            if case == "pinned" else {})), str(root))]
     else:
         assert not calls
     if case == "registered":
         assert json.loads(capsys.readouterr().out)["result"]["fire_id"] == fid
+    if case in ("wrong_reply_run", "wrong_reply_digest", "unbound_reply"):
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["result"]["fire_id"] == fid
+        assert "reconcile the returned fire ID" in captured.err
+    if case == "grant_only":
+        assert f"run {rid} remains minted: launcher grant verified" in capsys.readouterr().err
+        assert json.loads(stage.read_text()) == {"stage": "minted"}
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="darwin-only endpoint")
+def test_issued_submit_uses_separate_native_generation(home, tmp_path, monkeypatch):
+    root = home / "native-host-submit-v1"
+    generation = root / "build-fixture"
+    root.mkdir(mode=0o700)
+    generation.mkdir(mode=0o700)
+    (root / "current").symlink_to(generation)
+    (generation / "socket-directory").write_text(str(home / "sockets"))
+    for name in ("codex", "coordinator-invoke"):
+        (generation / name).touch(mode=0o700)
+    issue = tmp_path / "issued"
+    issue.mkdir(mode=0o700)
+    params = issue / "params.json"
+    params.write_text(json.dumps({"ask": "fixture", "ask_source": "relayed"}))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    calls = []
+    def capture(argv, env, *, allocation):
+        calls.append((argv, allocation.workspace))
+        return 0
+    monkeypatch.setattr(hel, "_spawn_codex_events", capture)
+    assert hel.launch("codex", ["exec", "--json"], cwd=str(workspace), issued_submit=params,
+                      open_runs=lambda *_: []) == 0
+    argv, selected_workspace = calls[0]
+    assert selected_workspace == workspace.resolve()
+    assert argv[0] == str(generation / "codex")
+    assert f'shell_environment_policy.set.COORDINATOR_HOST_SUBMIT_SOCKET="{home}/sockets/submit.sock"' in argv
+    assert any(word.startswith(f'shell_environment_policy.set.PATH="{generation}:') for word in argv)

@@ -112,7 +112,8 @@ def self_verify_constraint(
     return (
         "After implementation: (1) re-read the spec's `## Tasks` spine row "
         "for this item -- plus its `prime_exit_criterion` if the spec "
-        "carries one -- and confirm each is discharged; (2) run `git "
+        "carries one. Report the observed result on your working tree for each check in your scope. "
+        "Name any outstanding checks. The EM owns final verification on the delivered revision; (2) run `git "
         "status --porcelain -- <footprint paths> | cut -c4-` and confirm "
         "every changed AND created path is inside the declared footprint; "
         "(3) run verification scoped to the files/dirs you touched only — "

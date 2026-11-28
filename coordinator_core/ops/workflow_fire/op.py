@@ -188,6 +188,20 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
 
         guard_against_fired_drift(Path(script_path), expected)
 
+    script = Path(script_path)
+    if (params.get("backend") is None and params.get("executor") is None
+            and script.match("scratch/warp/ask-*.workflow.mjs")):
+        raise ValueError("Issued ask requires an explicit execution route. Use the submit receipt's "
+                         "fire_params or recover the backend and executor from the original submit.")
+    run_id = params.get("run_id")
+    if params.get("refire") is True and script.match("scratch/warp/ask-*.workflow.mjs"):
+        from coordinator_core.ops.dispatch_emit.run_token import is_ask_run_id
+
+        issued_id = script.name.removesuffix(".workflow.mjs")
+        if is_ask_run_id(issued_id):
+            if run_id is not None and run_id != issued_id:
+                raise ValueError("refire run_id differs from the issued ask script")
+            run_id = issued_id
     backend = params.get("backend")
     if backend is not None:
         check_backend(backend)
@@ -216,7 +230,7 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
             notify_to=notify_to, backend=params.get("backend", "codex"),
             concurrency_cap=params.get("concurrency_cap", fire.DEFAULT_CONCURRENCY_CAP),
             timeout_s=params.get("timeout_s", DEFAULT_TIMEOUT_S),
-            args=params.get("args"), run_id=params.get("run_id"),
+            args=params.get("args"), run_id=run_id,
             caller_session_id=fire_record_caller_session_id(principal),
             expected=expected, refire=params.get("refire") is True,
             **private_args,
@@ -231,7 +245,7 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
             concurrency_cap=params.get("concurrency_cap", fire.DEFAULT_CONCURRENCY_CAP),
             expected=expected,
             notify_to=notify_to.strip() if notify_to else None,
-            run_id=params.get("run_id"),
+            run_id=run_id,
             refire=params.get("refire") is True,
         )
     else:

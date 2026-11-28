@@ -74,5 +74,24 @@ def test_legacy_cache_replays_sources_to_build_execution_inventory(tmp_path):
     state['files']['owned.jsonl'] = {'offset': 1234, 'parent_override': 'root'}
     path.write_text(json.dumps(state))
     migrated = load(path, 'root')
-    assert migrated['version'] == 3
+    assert migrated['version'] == 6
     assert migrated['files']['owned.jsonl'] == {'offset': 0, 'parent_override': 'root'}
+
+
+@pytest.mark.parametrize("inputs", [(1000, 500, 1000), (500, 1000, 500)])
+def test_contradictory_canonical_request_is_unknown_and_preserves_other_charges(inputs):
+    state = empty("root")
+    intact = record()
+    intact["payload"]["request_id"] = "resp_intact"
+    intact["payload"]["provider"] = "codex"
+    ingest(state, intact, {})
+    known = summary(state)["usd"]
+    for count in inputs:
+        event = record()
+        event["payload"].update(provider="codex", request_id="resp_conflict")
+        event["payload"]["usage"]["input_tokens"] = count
+        ingest(state, event, {})
+    actual = summary(state)
+    assert actual["usd"] == pytest.approx(known)
+    assert (actual["priced_events"], actual["unpriced_events"]) == (1, 1)
+    assert any("resp_conflict" in warning for warning in actual["warnings"])

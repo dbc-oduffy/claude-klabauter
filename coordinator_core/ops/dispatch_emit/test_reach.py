@@ -12,6 +12,7 @@ import struct
 from pathlib import Path, PurePosixPath
 from typing import Collection, Dict, Iterable, List, Optional, Sequence, Set
 
+from coordinator_core.ops.dispatch_emit.landing_reach import seeds_for_landing as seeds_for_landing
 from coordinator_core.git import commit
 from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.git.git_index import (
@@ -260,25 +261,6 @@ def reach_paths(root: Path | str, seeds: Iterable[str], depth: int = DEFAULT_DEP
                 break
     seed_set = set(seed_list)
     return {p for p in reach if p in tracked or p in seed_set}
-
-
-def seeds_for_landing(root: Path | str, landing: Iterable[str]) -> List[str]:
-    """Test files a landing set verifies: a landed test file is its own seed; a landed module adds the
-    tracked sibling `tests/test_<stem>.py`."""
-    tracked = _tracked(Path(root))
-    seeds: Set[str] = set()
-    for raw in landing:
-        rel = raw.replace("\\", "/")
-        p = PurePosixPath(rel)
-        if p.suffix != ".py":
-            continue
-        if p.name.startswith("test_"):
-            seeds.add(rel)
-            continue
-        sibling = (p.parent / "tests" / f"test_{p.stem}.py").as_posix()
-        if sibling in tracked:
-            seeds.add(sibling)
-    return sorted(seeds)
 
 
 def _worktree_blob(root: Path, rel: str) -> Optional[str]:

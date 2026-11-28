@@ -31,6 +31,8 @@ def repo(tmp_path: Path) -> Path:
     (tmp_path / REL).write_text(yaml.safe_dump(_sizing(), sort_keys=False), encoding="utf-8")
     rl.start(tmp_path, RUN)
     rl.bind(tmp_path, RUN, REL)
+    # R1 represents a plan-derived task. The second row retains its original PM source.
+    rl._mutate_register(tmp_path, REL, lambda rows: [{**rows[0], "anchor": "plan-row:C1"}, *rows[1:]])
     return tmp_path
 
 

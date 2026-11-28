@@ -90,10 +90,11 @@ def _run(reads_by_served, restaged, brief_texts, tmp_path):
     script = _compose()
     read = _between(script, "const _lateRead = async (_final) => {", r"\n\s*};")
     serve = _between(script, "const _lateServedParam = () => {", r"\n\s*};")
+    launch = _between(script, "const _launchRow = (r) => {", r"\n  };")
     leg = _between(script, "_lateLeg = async (_ids) => {", r"\n\s*};")
     verify = _between(script, "_verifyLateIds = await _lateRead(true);", r"await Promise\.all\(_verifications\); \} \}")
     body = "\n".join([
-        "const _resumeLedger = false;", serve, read, leg,
+        "const _resumeLedger = false;", serve, read, launch, leg,
         "_lateIds = await _lateRead(); if (_lateIds.length) { await _lateLeg(_lateIds); }",
         verify,
         "S.order.push('verify');",

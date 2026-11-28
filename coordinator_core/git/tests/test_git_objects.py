@@ -617,3 +617,14 @@ def test_opening_a_store_records_it_only_under_the_isolated_settings_home(
     monkeypatch.setattr(git_objects, "_RECORDED_READ_STORES", set())
     git_objects._record_read_store(common)
     assert entry.stat().st_mtime > 1_000_000
+
+
+def test_pack_read_survives_registry_path_collision(tmp_path, monkeypatch):
+    from coordinator_core.git import git_objects
+
+    registry = tmp_path / "engine-read-stores"
+    registry.write_text("occupied")
+    monkeypatch.setattr(git_objects, "read_store_registry_dir", lambda: registry)
+    monkeypatch.setattr(git_objects, "_RECORDED_READ_STORES", set())
+    git_objects._record_read_store(tmp_path / "common")
+    assert registry.read_text() == "occupied"

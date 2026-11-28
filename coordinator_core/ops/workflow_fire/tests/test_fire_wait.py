@@ -66,6 +66,14 @@ def test_uncommitted_landing_falls_through_to_git_lookup(registry, git_calls):
     assert call()["commit_sha"] == "abc123" and len(git_calls) == 1
 
 
+def test_not_landed_run_never_claims_a_session_commit(registry, git_calls):
+    put(registry, state="exited", outcome="not_landed", driver_session_id="sid-9")
+    reply = call()
+    assert reply["commit_sha"] is None
+    assert reply["commit_sha_reason"] == "run did not land"
+    assert git_calls == []
+
+
 def test_exited_fire_with_nothing_to_look_up_names_a_reason(registry, git_calls):
     put(registry, state="exited")
     reply = call()
@@ -125,6 +133,13 @@ def test_failed_exit_carries_the_reason_in_the_result(registry, git_calls):
     assert reply["exit_code"] == 1
     assert "workflow exit_code=1" in reply["reason"] and "spawn_denied" in reply["reason"]
     assert "sandbox denied lock" in reply["reason"]
+
+
+def test_terminal_wait_preserves_the_executor_error(registry, git_calls):
+    error = "criterion not_met: The specified rebase was not observed."
+    put(registry, state="exited", exit_code=1, outcome="failed",
+        outcome_basis="headless executor error", error=error)
+    assert error in call()["reason"]
 
 
 def test_clean_exit_and_running_fire_have_no_reason(registry, git_calls):

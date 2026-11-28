@@ -168,6 +168,23 @@ def test_exec_thread_totals_resume_replay_and_fresh_child(tmp_path):
                                   cache_read_input_tokens=2000, cache_creation_input_tokens=400) for r in rows)
 
 
+def test_long_cache_write_retention_survives_worker_journal_replay(tmp_path):
+    from coordinator_core.codex_status.model import empty, ingest, summary
+
+    receipt = complete_receipt()
+    receipt.update(model='gpt-6.2-astra', service_tier='standard', usage_events=[dict(
+        input_tokens=272000, cached_input_tokens=10000, cache_write_input_tokens=10000,
+        ttl_12h_tokens=10000, output_tokens=1000)])
+    recorded = workflow._append_canonical_usage(receipt)
+    assert recorded['status'] == 'appended'
+    assert workflow._append_canonical_usage(receipt)['status'] == 'duplicate'
+    event = json.loads(Path(recorded['path']).read_text())
+    assert event['payload']['usage']['ttl_12h_tokens'] == 10000
+    state = empty(receipt['broker_root_session_id'])
+    ingest(state, event, {})
+    assert summary(state)['usd'] == pytest.approx(2.26)
+
+
 def test_multiple_turns_keep_individual_tier_thresholds_and_service_tier(tmp_path):
     receipt = complete_receipt()
     receipt.update(model='gpt-6.1-sol', service_tier='priority')
@@ -195,7 +212,8 @@ def test_event_provenance_retains_observed_service_tier(tmp_path):
     assert workflow._event_provenance(path, 'codex')['service_tier'] == 'ultrafast'
 
 
-def test_workflow_production_path_records_start_and_terminal_usage(tmp_path, monkeypatch):
+@pytest.mark.parametrize('usage_owner', [None, '00000000-0000-4000-8000-000000000002'])
+def test_workflow_production_path_records_start_and_terminal_usage(tmp_path, monkeypatch, usage_owner):
     receipt = complete_receipt()
     events = [
         {'type': 'thread.started', 'thread_id': receipt['native_thread_id'], 'model': 'gpt-6.1-sol'},
@@ -212,9 +230,16 @@ def test_workflow_production_path_records_start_and_terminal_usage(tmp_path, mon
     monkeypatch.setattr(sandboxed_spawn, 'caller_is_sandboxed', lambda: False)
     parent = receipt['broker_root_session_id']
     assert workflow.run_agent('work', {}, repo_root=tmp_path, artifact_dir=tmp_path / 'art',
-        parent_session_id=parent, fire_id='fire-a', request_id=1) == 'done'
+        parent_session_id=parent, usage_owner_session_id=usage_owner, fire_id='fire-a', request_id=1) == 'done'
     from coordinator_core.codex_status.__main__ import snapshot
-    value = snapshot({'session_id': parent})
+    if usage_owner:
+        # Another fire on the same launcher has no association with this native thread.
+        workflow._record_execution(parent, 'unrelated-fire', 1, 'started')
+        worker = json.loads((tmp_path / 'art' / 'process.json').read_bytes())
+        assert worker['broker_root_session_id'] == parent
+        assert worker['usage_owner_session_id'] == usage_owner
+        assert snapshot({'session_id': parent})['priced_events'] == 0
+    value = snapshot({'session_id': usage_owner or parent})
     assert value['coverage']['workflows']
     assert value['execution_inventory']['expected'] == 1
     assert value['priced_events'] == 1
@@ -277,6 +302,37 @@ def test_canonical_append_failure_is_recorded_without_worker_failure(tmp_path: P
     monkeypatch.setattr(workflow, 'held_lock', refused)
     result = workflow._append_canonical_usage(complete_receipt())
     assert result['status'] == 'failed' and 'test lock unavailable' in result['reason']
+
+
+def test_grok_worker_stream_joins_session_usage(tmp_path: Path) -> None:
+    """A grok stage stream names sessionId and per-turn usage, not a codex thread."""
+    child = "01a218c3-880e-7ca2-bff8-f613ba835762"
+    parent = "297d177f-957c-4221-bb61-50d53d2a8fea"
+    usage = {"input_tokens": 10, "output_tokens": 2, "cache_read_input_tokens": 4,
+             "cache_creation_input_tokens": 0, "reasoning_tokens": 1}
+    path = tmp_path / "stdout.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in [
+        {"type": "usage", "usage": usage},
+        {"type": "end", "sessionId": child, "stopReason": "end_turn",
+         "modelUsage": {"grok-4.7-build-fast": {
+             "inputTokens": 10, "outputTokens": 2, "cacheReadInputTokens": 4,
+             "cacheCreationInputTokens": 0, "modelCalls": 1}}},
+    ]) + "\n", encoding="utf-8")
+    observed = workflow._event_provenance(path, "grok")
+    assert observed["native_thread_id"] == child
+    assert observed["model"] == "grok-4.7-build-fast"
+    assert observed["usage_events"] == [usage]
+    receipt = {**observed, "backend": "grok", "broker_root_session_id": parent,
+               "broker_fire_id": "fire-grok-attr", "broker_request_id": 1}
+    result = workflow._append_canonical_usage(receipt)
+    assert result["status"] == "appended"
+    payload = json.loads(Path(result["path"]).read_text().splitlines()[-1])["payload"]
+    assert payload["provider"] == "grok"
+    assert payload["session_id"] == child
+    assert payload["parent_session_id"] == parent
+    assert payload["model"] == "grok-4.7-build-fast"
+    assert payload["usage"] == {"input_tokens": 10, "output_tokens": 2,
+                                 "cache_read_input_tokens": 4, "cache_creation_input_tokens": 0}
 
 
 def test_claude_counters_are_already_uncached_and_keep_cache_writes(tmp_path: Path) -> None:
@@ -429,7 +485,7 @@ def test_grok_stage_spawns_resolved_binary_and_parses_envelope(tmp_path: Path, m
     assert _run(tmp_path, 'grok') == {'a': 1}
     argv, stdin = calls[0]
     assert argv[0] == '/bin/grok-x' and stdin == ''
-    assert argv[argv.index('--permission-mode') + 1] == 'acceptEdits'
+    assert argv[argv.index('--permission-mode') + 1] == ('bypassPermissions' if os.name != 'nt' else 'acceptEdits')
     assert not {'--always-approve', '--dangerously-skip-permissions', '--yolo'} & set(argv)
     assert '"a"' in (tmp_path / 'art' / 'prompt.txt').read_text() and 'JSON Schema' in (tmp_path / 'art' / 'prompt.txt').read_text()
 
@@ -478,8 +534,11 @@ def test_family_schema_violation_and_nonzero_exit_fail(tmp_path: Path, monkeypat
     with pytest.raises(workflow.AgentFailed, match='no schema-valid result'):
         _run(tmp_path, backend)
     _stub_family(monkeypatch, tmp_path, stdout_text=body, returncode=3)
-    with pytest.raises(workflow.AgentFailed, match='exited 3'):
+    with pytest.raises(workflow.AgentFailed, match='exited 3') as failure:
         _run(tmp_path, backend)
+    for name in ("stdout.jsonl", "stderr.txt"):
+        artifact = tmp_path / "art" / name
+        assert artifact.is_file() and str(artifact) in str(failure.value)
 
 
 @pytest.mark.parametrize('backend', ['grok', 'agy'])
@@ -526,6 +585,91 @@ def _stub_codex(monkeypatch, tmp_path, *, response='{"a": 1}', responses=None):
 
     monkeypatch.setattr(workflow, '_run_admitted', fake)
     return calls
+
+
+def test_host_selected_worker_policy(tmp_path, monkeypatch):
+    repo = tmp_path / "product"
+    repo.mkdir()
+    policy = tmp_path / "policy.json"
+    rules = {":root": "read", str(tmp_path): "deny", ":workspace_roots": "write", str(repo / ".git"): "write"}
+    policy.write_text(json.dumps(rules))
+    monkeypatch.setenv("COORDINATOR_CODEX_WORKER_POLICY_FILE", str(policy))
+    monkeypatch.setenv("COORDINATOR_LOOPBACK_FIXTURE_URL", "http://127.0.0.1:8102/v1")
+    calls = _stub_codex(monkeypatch, repo)
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["codex"])
+    _run(repo, "codex")
+    argv = calls[0][0]
+    assert 'default_permissions="coordinator_worker"' in argv
+    assert 'approval_policy="never"' in argv
+    assert "--dangerously-bypass-approvals-and-sandbox" not in argv
+    assert "--ignore-user-config" in argv
+    assert 'model_provider="local_fixture"' in argv
+    assert 'model_providers.local_fixture.base_url="http://127.0.0.1:8102/v1"' in argv
+    disabled = {arg for flag, arg in zip(argv, argv[1:]) if flag == "--disable"}
+    assert {"multi_agent", "multi_agent_v2"} <= disabled
+    assert 'web_search="disabled"' in argv
+    assert str(repo / ".git") in next(arg for arg in argv if arg.startswith("permissions.coordinator_worker."))
+
+
+@pytest.mark.parametrize("access", ["read", "write", "deny", None])
+def test_restricted_shell_git_config_keeps_host_read_allocation(tmp_path, monkeypatch, access):
+    repo = tmp_path / "product"
+    repo.mkdir()
+    config = tmp_path / "worker.gitconfig"
+    config.write_text("[user]\n    name = Fixture\n")
+    rules = {":root": "deny", ":workspace_roots": "write"}
+    if access is not None:
+        rules[str(config)] = access
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps(rules))
+    monkeypatch.setenv("COORDINATOR_CODEX_WORKER_GIT_CONFIG", str(config))
+    if access != "read":
+        with pytest.raises(workflow.AgentFailed, match="Git config"):
+            workflow._restricted_worker_argv(["codex"], policy, repo, repo / "last.txt")
+        return
+    argv = workflow._restricted_worker_argv(["codex"], policy, repo, repo / "last.txt")
+    assert "shell_environment_policy.set.GIT_CONFIG_GLOBAL=" + json.dumps(str(config)) in argv
+    assert "--ignore-user-config" in argv
+
+
+def test_policy_selects_its_allocated_git_config_without_environment_override(tmp_path, monkeypatch):
+    repo = tmp_path / "product"
+    repo.mkdir()
+    policy = tmp_path / "executor.json"
+    config = policy.with_suffix(".gitconfig")
+    config.write_text("[user]\n    name = Local worker\n")
+    rules = {":root": "deny", ":workspace_roots": "write"}
+    monkeypatch.delenv("COORDINATOR_CODEX_WORKER_GIT_CONFIG", raising=False)
+    policy.write_text(json.dumps(rules))
+    argv = workflow._restricted_worker_argv(["codex"], policy, repo, repo / "last.txt")
+    assert not any("GIT_CONFIG_GLOBAL" in value for value in argv)
+    rules[str(config)] = "read"
+    policy.write_text(json.dumps(rules))
+    argv = workflow._restricted_worker_argv(["codex"], policy, repo, repo / "last.txt")
+    assert "shell_environment_policy.set.GIT_CONFIG_GLOBAL=" + json.dumps(str(config)) in argv
+
+
+@pytest.mark.parametrize("endpoint", ["https://example.org/v1", "http://127.0.0.1:99999/v1", ""])
+def test_local_fixture_refuses_invalid_endpoint(endpoint):
+    with pytest.raises(workflow.AgentFailed, match="loopback endpoint"):
+        workflow._loopback_provider_argv(endpoint)
+
+
+@pytest.mark.parametrize("value", [None, "", "{", "[]", '{":root":"write"}', '{":root":"read","typo":"deny"}'])
+def test_unusable_selected_policy_refuses_before_spawn(tmp_path, monkeypatch, value):
+    repo = tmp_path / "product"
+    repo.mkdir()
+    policy = tmp_path / "policy.json"
+    if value is not None:
+        policy.write_text(value)
+    monkeypatch.setenv("COORDINATOR_CODEX_WORKER_POLICY_FILE", str(policy))
+    calls = _stub_codex(monkeypatch, repo)
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["codex"])
+    with pytest.raises(workflow.AgentFailed, match="worker policy"):
+        _run(repo, "codex")
+    assert not calls
 
 
 @pytest.mark.parametrize("annotated", [False, True])
@@ -592,7 +736,12 @@ def test_windows_codex_gate_uses_native_command_with_original_payload(tmp_path, 
                  None, "Expecting ',' delimiter", id="retry-exhausted"),
 ])
 def test_codex_gate_reasks_once_then_returns_a_typed_halt(tmp_path, monkeypatch, initial, repair, arm, error):
-    calls = _stub_codex(monkeypatch, tmp_path, responses=[initial, repair])
+    repo = tmp_path / "product"
+    repo.mkdir()
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({":root": "read", ":workspace_roots": "write"}))
+    monkeypatch.setenv("COORDINATOR_CODEX_WORKER_POLICY_FILE", str(policy))
+    calls = _stub_codex(monkeypatch, repo, responses=[initial, repair])
     monkeypatch.setattr(workflow, 'preflight_auth', lambda **kw: None)
     monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-x'])
     schema = {
@@ -603,10 +752,13 @@ def test_codex_gate_reasks_once_then_returns_a_typed_halt(tmp_path, monkeypatch,
     folder = tmp_path / 'art'
     value = workflow.run_agent(
         'Run the gate once', {'label': 'gate', 'phase': 'gate', 'schema': schema},
-        repo_root=tmp_path, artifact_dir=folder, parent_session_id='sid',
+        repo_root=repo, artifact_dir=folder, parent_session_id='sid',
     )
     assert len(calls) == 2
+    assert 'default_permissions="coordinator_worker"' in calls[0][0]
     retry_argv, retry_prompt = calls[1]
+    assert retry_argv[retry_argv.index("--sandbox") + 1] == "read-only"
+    assert {"shell_tool", "unified_exec", "plugins", "apps", "mcp_servers={}"} <= set(retry_argv)
     assert error in retry_prompt and 'Do not run any tools' in retry_prompt
     retry_data = json.loads(next(line for line in retry_prompt.splitlines() if line.startswith('{"diagnostic":')))
     assert retry_data["allowed_arm_values"] == ["xs", "s", "m_plus", "roadmap", None]
@@ -940,3 +1092,98 @@ def test_reply_is_read_from_last_message_file_not_a_truncated_stream(tmp_path, m
         repo_root=tmp_path, artifact_dir=tmp_path / "art", parent_session_id="sid",
     )
     assert value["summary"] == "s" * 9000 and len(calls) == 1
+
+
+def test_only_commit_worker_receives_provisioned_repository_lock(tmp_path, monkeypatch):
+    import subprocess
+    from coordinator_core.ops.dispatch_emit.land_byte_gate import admit, sidecar_path
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    monkeypatch.setenv("COORDINATOR_LOCK_ROOT", str(tmp_path / "machine"))
+    policy = tmp_path / "workers.json"
+    policy.write_text(json.dumps({":root": "deny", str(repo): "write"}))
+    with admit(repo, wait_secs=0):
+        lock = sidecar_path(repo)
+    monkeypatch.setenv("COORDINATOR_CODEX_LANDING_LOCK", str(lock))
+    args = (["codex"], policy, repo, repo / "last")
+    assert str(lock) in " ".join(workflow._restricted_worker_argv(*args, commit_worker=True))
+    assert str(lock) not in " ".join(workflow._restricted_worker_argv(*args))
+    monkeypatch.setenv("COORDINATOR_CODEX_LANDING_LOCK", str(policy))
+    with pytest.raises(workflow.AgentFailed, match="repository sidecar"):
+        workflow._restricted_worker_argv(*args, commit_worker=True)
+
+
+@pytest.mark.parametrize("role,label,selected", [
+    ("coordinator:test-runner", "overlay-verify", True),
+    ("coordinator:test-runner", "verify-tests", False),
+    ("coordinator:git-commit-agent", "overlay-verify", False),
+])
+def test_overlay_allocation_only_reaches_issued_verifier(tmp_path, monkeypatch, role, label, selected):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    directory = tmp_path / "verifier-temp"
+    directory.mkdir()
+    base = tmp_path / "worker.json"
+    base.write_text(json.dumps({":root": "deny", str(repo): "write"}))
+    verifier = tmp_path / "verifier.json"
+    verifier.write_text(json.dumps({":root": "deny", str(repo): "write", str(directory): "write"}))
+    monkeypatch.setenv("COORDINATOR_CODEX_WORKER_POLICY_FILE", str(base))
+    monkeypatch.setenv("COORDINATOR_CODEX_VERIFY_POLICY_FILE", str(verifier))
+    monkeypatch.setenv("COORDINATOR_CODEX_VERIFY_TEMP", str(directory))
+    definitions = tmp_path / "agents"
+    definitions.mkdir()
+    (definitions / (role.split(":")[1] + ".md")).write_text("Perform the issued stage.")
+    monkeypatch.setattr("coordinator_core.content_root.read_content_root", lambda: str(tmp_path))
+    calls = _stub_codex(monkeypatch, repo)
+    monkeypatch.setattr(workflow, "preflight_auth", lambda **kw: None)
+    monkeypatch.setattr(workflow, "resolve_codex", lambda **kw: ["codex"])
+    workflow.run_agent("verify", {"agentType": role, "label": label, "schema": _SCHEMA},
+                       repo_root=repo, artifact_dir=repo / "art", parent_session_id="sid")
+    args = calls[0][0]
+    assert (f"shell_environment_policy.set.TMPDIR={json.dumps(str(directory))}" in args) == selected
+    assert (str(directory) in next(arg for arg in args if ".filesystem=" in arg)) == selected
+
+
+@pytest.mark.skipif(not hasattr(os, 'pread'), reason='positional read required')
+def test_native_identity_uses_child_descriptor_when_workspace_archive_disagrees(tmp_path):
+    import tempfile
+
+    archive = tmp_path / 'stdout.jsonl'
+    real = '01a1b826-0012-72a0-a4d0-eae0ae828f4c'
+    alternate = '01a1b826-0012-72a0-a4d0-eae0ae828f4d'
+    def started(sid):
+        return (json.dumps({'type': 'thread.started', 'thread_id': sid}) + '\n').encode()
+    archive.write_bytes(started(alternate))
+    calls = []
+    with tempfile.TemporaryFile(dir=tmp_path) as capture:
+        capture.write(started(real))
+        capture.flush()
+        observer = workflow._NativeThreadObserver(archive, {}, calls.append, lambda: None, capture=capture)
+        observer.start()
+        observer.finish()
+        assert capture.tell() == len(started(real))
+    assert calls == [{'session_id': real}]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(workflow.sys.platform != "darwin", reason="Darwin Seatbelt verifier policy")
+@pytest.mark.parametrize(("backend", "role", "restricted", "expected"), [
+    ("codex", "test-runner", True, 19),
+    ("codex", "test-runner", False, 10),
+    ("codex", "executor", True, 10),
+    ("agy", "test-runner", True, 10),
+])
+def test_worker_inherits_verifier_priority(monkeypatch, backend, role, restricted, expected):
+    import subprocess
+    monkeypatch.setattr(workflow.tenant_priority, "popen_kwargs", lambda _: {
+        "preexec_fn": lambda: os.setpriority(os.PRIO_PROCESS, 0, 10)})
+    if restricted:
+        monkeypatch.setenv("COORDINATOR_CODEX_WORKER_POLICY_FILE", "selected")
+    else:
+        monkeypatch.delenv("COORDINATOR_CODEX_WORKER_POLICY_FILE", raising=False)
+    argv = [workflow.sys.executable, "-c", "import os; print(os.getpriority(os.PRIO_PROCESS, 0))"]
+    result = subprocess.check_output(argv, **workflow._worker_priority(argv, backend, "coordinator:" + role))
+    assert int(result) == expected

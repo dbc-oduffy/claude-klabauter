@@ -122,14 +122,24 @@ def headless_argv(binary: str, cwd: str, text: str) -> list[str]:
             "--output-format", "json"]
 
 
-def session_for_pid(rows, pid: int):
-    """The registry row whose pid is the child, else None."""
+def session_for_pid(rows, pid: int) -> dict | None:
+    """The live registry row for this pid, else None.
+
+    A resumed Grok keeps the process pid and appends a row. The latest
+    ``opened_at`` wins, and a missing stamp loses to a later row.
+    """
     if not isinstance(rows, list):
         return None
-    for row in rows:
-        if isinstance(row, dict) and row.get("pid") == pid and isinstance(row.get("session_id"), str):
-            return row
-    return None
+    found = None
+    found_key = None
+    for index, row in enumerate(rows):
+        if not (isinstance(row, dict) and row.get("pid") == pid and isinstance(row.get("session_id"), str)):
+            continue
+        opened = row.get("opened_at")
+        key = (opened if isinstance(opened, str) else "", index)
+        if found is None or key >= found_key:
+            found, found_key = row, key
+    return found
 
 
 def load_grok_adapter():

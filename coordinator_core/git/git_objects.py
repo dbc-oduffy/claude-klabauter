@@ -710,14 +710,14 @@ def _record_read_store(common_dir: Path) -> None:
         registry = read_store_registry_dir()
         registry.mkdir(parents=True, exist_ok=True)
         entry = registry / hashlib.sha1(key.encode("utf-8", "surrogatepass"), usedforsecurity=False).hexdigest()
-        with open(entry, "x", encoding="utf-8") as fh:
-            fh.write(key + "\n")
-    except FileExistsError:
-        # The tick evicts the oldest-mtime entries past its cap: a store still read is refreshed.
         try:
+            fh = open(entry, "x", encoding="utf-8")
+        except FileExistsError:
+            # Refresh only an existing entry; failure to create its directory is advisory.
             os.utime(entry)
-        except OSError:
-            pass
+        else:
+            with fh:
+                fh.write(key + "\n")
     except Exception as exc:  # noqa: BLE001 -- a registry failure must not fail a read
         _log.warning("engine read-store registry not written (settings_home unresolved?): %s", exc)
 

@@ -3,6 +3,7 @@
 The grok binary is a stub script under tmp_path; the real CLI is never invoked.
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -131,9 +132,17 @@ def test_relay_child_gets_only_the_coordinator_invoke_allow_rule(tmp_path: Path,
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
     assert _run(tmp_path, "coordinator:op-relay") == {"a": 1}
     argv = seen[0]
-    assert _allow(argv) == "Bash(coordinator-invoke:*)"
+    assert _allow(argv) == _invoke_allow()
     assert argv.count("--allow") == 1
     assert not {"--always-approve", "--dangerously-skip-permissions", "--yolo"} & set(argv)
+
+
+def _invoke_allow() -> str:
+    """The one coordinator-invoke rule a POSIX grok child is given: the absolute launcher."""
+    if os.name == "nt":
+        return workflow._RELAY_ALLOW
+    launcher = (workflow.settings_home() / "bin" / "coordinator-invoke").as_posix()
+    return f"Bash({launcher}:*)"
 
 
 def _rule_matches(rule, command):
@@ -152,7 +161,7 @@ def test_commit_stage_child_gets_only_the_coordinator_invoke_allow_rule(tmp_path
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
     assert _run(tmp_path, "coordinator:git-commit-agent") == {"a": 1}
     argv = seen[0]
-    assert _allow(argv) == "Bash(coordinator-invoke:*)"
+    assert _allow(argv) == _invoke_allow()
     assert argv.count("--allow") == 1
     assert not {"--always-approve", "--dangerously-skip-permissions", "--yolo"} & set(argv)
 
@@ -250,6 +259,8 @@ def test_other_grok_stages_lead_with_the_incumbent_bash_allow(tmp_path: Path, st
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
     assert _run(tmp_path, "coordinator:executor") == {"a": 1}
     assert _allow(seen[0]) == "Bash"
+    mode = seen[0][seen[0].index("--permission-mode") + 1]
+    assert mode == ("bypassPermissions" if os.name != "nt" else "acceptEdits")
 
 
 def _allows(argv):
@@ -270,7 +281,9 @@ def test_headless_grok_code_stage_pre_approves_the_shell_tool_it_is_told_to_call
     assert _run(tmp_path, "coordinator:executor") == {"a": 1}
     assert {"Execute", "MCPTool(example_retrieval_repo__*)"} <= set(_allows(seen[0]))
     assert "--always-approve" not in seen[0]
-    assert "Execute for commands" in (tmp_path / "art" / "prompt.txt").read_text(encoding="utf-8")
+    prompt = (tmp_path / "art" / "prompt.txt").read_text(encoding="utf-8")
+    assert "Execute for commands" in prompt
+    assert "The working directory is already the repo. Never run cd or pushd, even where the task text says to." in prompt
 
 
 def test_windows_grok_prompt_carries_no_quoted_settings_home_invoke(
@@ -299,7 +312,8 @@ def test_invoke_only_children_get_no_example_retrieval_repo_allow(tmp_path: Path
     seen, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
     assert _run(tmp_path, agent_type) == {"a": 1}
-    assert _allows(seen[0]) == ["Bash(coordinator-invoke:*)"]
+    assert _allows(seen[0]) == [_invoke_allow()]
+    assert "MCPTool(example_retrieval_repo__*)" not in _allows(seen[0])
 
 
 def test_cancelled_stop_reason_fails_with_named_error_carrying_stderr(tmp_path: Path, stub) -> None:

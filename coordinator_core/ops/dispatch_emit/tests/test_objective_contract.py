@@ -136,3 +136,14 @@ def test_objective_roundtrip_and_defaults():
     back = oc.Objective.from_json(obj.to_json())
     assert back == obj and back.attempts_n == oc.MAX_REACHER_ITERATIONS
     assert back.falsifier_sha256 is None and back.pinned_at is None
+
+
+def test_numeric_measure_uses_sizing_threshold_even_when_script_claims_pass():
+    axis = oc.Axis("grading", threshold=15)
+    def check(observed):
+        record = {"axis": "grading", "pass": True, "now": observed, "threshold": observed,
+                  "comparator": "==", "command": "grade measurements"}
+        lines = [record, {"summary": True, "pass": True, "failing": []}]
+        return oc.parse_falsifier_lines("\n".join(map(json.dumps, lines)), [axis])[0]
+    assert not check(10).passed
+    assert check(15).passed

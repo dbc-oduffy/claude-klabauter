@@ -104,7 +104,8 @@ def test_unpriced_or_missing_workflow_receipt_is_incomplete(tmp_path, monkeypatc
     assert value['unpriced_events'] == 1
 
 
-def test_descendant_owned_journals_are_discovered_on_later_refresh(tmp_path, monkeypatch):
+@pytest.mark.parametrize("one_record_budget", [True, False])
+def test_descendant_journals_share_snapshot_budget(tmp_path, monkeypatch, one_record_budget):
     monkeypatch.setenv('COORDINATOR_SETTINGS_HOME', str(tmp_path))
     directory = tmp_path / 'state' / 'codex-usage'
     directory.mkdir(parents=True)
@@ -112,11 +113,19 @@ def test_descendant_owned_journals_are_discovered_on_later_refresh(tmp_path, mon
     nested = usage('nested')
     nested['payload'].update(session_id=OTHER, parent_session_id=CHILD)
     (directory / f'{CHILD}.jsonl').write_text(json.dumps(nested) + '\n')
-    first = snapshot({'session_id': ROOT})
-    assert not first['backlog_complete']
+    params = {'session_id': ROOT}
+    if one_record_budget:
+        params['byte_budget'] = (directory / f'{ROOT}.jsonl').stat().st_size
+    monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'native'))
+    first = snapshot(params)
+    assert first['backlog_complete'] == (not one_record_budget)
+    assert first['priced_events'] == (1 if one_record_budget else 2)
     assert not first['coverage']['workflows']
     value = snapshot({'session_id': ROOT})
+    assert value['backlog_complete']
     assert value['threads'] == 3 and value['priced_events'] == 2
+    assert value['usd'] == pytest.approx(.00410)
+    assert snapshot(params)['usd'] == value['usd']
 
 
 def test_default_snapshot_reconciles_registered_closed_and_resumed_children(tmp_path, monkeypatch):

@@ -71,14 +71,14 @@ def _stage(tmp_path, sizing: dict | None, *, run_token: bool = True):
 
 @pytest.fixture
 def staged(tmp_path):
-    register = {"rows": [_row("R1", "open"), _row("R2", "open"), _row("R3", "met")]}
+    register = {"rows": [_row("R1", "open"), {**_row("R2", "open"), "anchor": "plan-row:U1"}, _row("R3", "met")]}
     return tmp_path, _stage(tmp_path, _sizing(register))
 
 
 def test_manifest_lists_the_open_register_rows_and_not_a_gated_plan_row(staged):
     _, reply = staged
     assert "error" not in reply
-    assert StageManifest.from_json(reply).rulable_ids == ("R1", "R2")
+    assert StageManifest.from_json(reply).rulable_ids == ("R2",)
     assert "X1" not in reply["rulable_ids"]
     assert [g["id"] for g in reply["gated"]] == ["X1"]
 
@@ -86,7 +86,7 @@ def test_manifest_lists_the_open_register_rows_and_not_a_gated_plan_row(staged):
 def test_every_listed_id_is_accepted_by_revise(staged):
     root, reply = staged
     ids = reply["rulable_ids"]
-    rl.revise(root, RUN, verbatim="R2 is out of scope", out_of_scope=[ids[1]])
+    rl.revise(root, RUN, verbatim="R2 is out of scope", out_of_scope=list(ids))
 
 
 def test_revise_still_refuses_a_gated_plan_row_id(staged):

@@ -147,3 +147,20 @@ def test_rejudge_points_judge_at_sidecar_only_once_evidence_exists(tmp_path: Pat
     assert f"row_evidence: {evidence_sidecar_path(plan).name}" not in before
     record(_params(plan, out), repo_root=repo / ".git")
     assert f"row_evidence: {str(plan.with_name(evidence_sidecar_path(plan).name)).replace(chr(92), '/')}" in _rejudge(plan, repo)
+
+
+def test_review_rows_follow_the_registered_ask_spine(tmp_path):
+    repo, _, out = _setup(tmp_path)
+    run = repo / "state/warp/ask-20261125T135646-3a26bc"
+    run.mkdir(parents=True)
+    (run / "run.json").write_text('{"sizing_rel":"state/sizings/2026-11/elm.yaml"}')
+    plan = run / "elm.spine.md"
+    plan.write_text("issued plan")
+    other = run / "other.spine.md"
+    other.write_text("unrelated plan")
+    for path in (other, plan):
+        result = record({"plan_path": str(path), "reviews": [_review()]}, repo_root=repo)
+        assert result.get("recorded", False) == (path == plan)
+    assert "error" in record(_params(plan, out), repo_root=repo)
+    assert not evidence_sidecar_path(other).exists()
+    assert _load(plan)["reviews"][0]["leg"] == _review()["leg"]

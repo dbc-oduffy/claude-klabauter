@@ -46,6 +46,7 @@ STAGE_REPLY_SCHEMA = {
         # Trap: additionalProperties is False, so a reply key absent here is dropped by the
         # relaying agent's structured output and the launcher falls back to a stale handle sha.
         "twin_path": {"type": "string"},
+        "twin_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "error": {"type": "string"},
         "owed_em_ids": {"type": "array", "items": {"type": "string"}},
         "owed_plan": {"type": ["string", "null"]},
@@ -251,10 +252,10 @@ def _ensure_reader(root: Path, raw: bytes, body: bytes) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def _ensure_twin(root: Path, rel: str, raw: bytes) -> str | None:
+def _ensure_twin(root: Path, rel: str, raw: bytes, source_receipt: dict | None = None) -> str | None:
     # Trap: the twin inlines the run's escrowed token while its record is live; once the token is claimed or
     # expired the next call rewrites the twin tokenless (the bytes differ); the running copy is unaffected.
-    return _twin.ensure_twin(root, rel, raw, _handle(rel, raw), max_bytes=READER_MAX_BYTES, refuse=_refuse, refuse_over_cap=_refuse_over_cap)
+    return _twin.ensure_twin(root, rel, raw, _handle(rel, raw), max_bytes=READER_MAX_BYTES, refuse=_refuse, refuse_over_cap=_refuse_over_cap, source_receipt=source_receipt)
 
 
 def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
@@ -281,7 +282,7 @@ def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
     return _handle(rel, raw)
 
 
-def handle_and_twin(root: Path, path: Path) -> tuple[dict, str | None]:
+def handle_and_twin(root: Path, path: Path, *, source_receipt: dict | None = None) -> tuple[dict, str | None]:
     """The handle over the file's current bytes and the repo-relative staged twin written for those bytes.
 
     Trap: the twin is None for a sidecar with no run script/slot; never derive its path from a cached handle.
@@ -296,7 +297,7 @@ def handle_and_twin(root: Path, path: Path) -> tuple[dict, str | None]:
         body = _reader_body_for(rel, raw)
         if body is not None:
             _ensure_reader(root, raw, body)
-        twin =_ensure_twin(root, rel, raw)
+        twin = _ensure_twin(root, rel, raw, source_receipt)
     except UnicodeDecodeError:
         pass
     return _handle(rel, raw), twin

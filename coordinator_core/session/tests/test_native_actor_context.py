@@ -1,4 +1,4 @@
-"""Pure fixtures only: these tests do not prove protected native execution."""
+"""Actor-context controls, including real Darwin process freshness. Enrollment is separate."""
 from dataclasses import replace
 import json
 import os
@@ -25,6 +25,7 @@ def actor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         exe=lambda:str(exe), is_running=lambda:True)
     monkeypatch.setattr(psutil, 'Process', lambda pid:process)
     module=ModuleType('coordinator_core.warm.workflow_peer')
+    monkeypatch.setattr(native, '_kernel_live_pid', lambda pid: module.kernel_live_pid(pid))
     module.kernel_live_pid=lambda pid:True
     monkeypatch.setitem(sys.modules, module.__name__, module)
     monkeypatch.setattr(core, 'git_root', lambda cwd:str(tmp_path))
@@ -138,3 +139,27 @@ def test_actor_ensure_rejects_failed_init_or_missing_metadata(actor,tmp_path: Pa
     with native.bind_verified_native_actor(value):
         with pytest.raises(native.NativeActorMismatch,match='did not produce metadata'):
             core.ensure_session(SID,cwd=str(tmp_path),sessions_base=str(base))
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason='Darwin process-generation check')
+def test_darwin_host_rechecks_live_native_process_and_rejects_reaped_child(tmp_path):
+    import psutil
+    import subprocess
+
+    with subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.buffer.read()'],
+                          stdin=subprocess.PIPE, cwd=tmp_path) as child:
+        try:
+            proc = psutil.Process(child.pid)
+            actor = native.VerifiedCodexExecActor(SID, str(tmp_path), proc.pid, proc.create_time(),
+                                                   proc.exe(), 'a'*64, PARENT, 'b'*32, 1)
+            assert native.validate_actor(actor, SID, tmp_path) == actor
+            assert native.precise_pid_alive(actor.pid, actor.start_epoch)
+            with pytest.raises(native.NativeActorMismatch):
+                native.validate_actor(replace(actor, start_epoch=actor.start_epoch - 1), SID, tmp_path)
+            with pytest.raises(native.NativeActorMismatch):
+                native.validate_actor(replace(actor, exe=str(tmp_path)), SID, tmp_path)
+        finally:
+            child.communicate(timeout=2)
+    assert not native.precise_pid_alive(actor.pid, actor.start_epoch)
+    with pytest.raises(native.NativeActorMismatch):
+        native.validate_actor(actor, SID, tmp_path)

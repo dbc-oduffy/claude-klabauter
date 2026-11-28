@@ -240,6 +240,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             raise MutateAbort(
                 f"a deferred/waived row needs ruling {{source, quote, ref, on}}: {', '.join(unruled)}"
             )
+        proposed = {row[rr.ROW_ID]: row for row in wanted[rr.ROWS_KEY] if rr.ROW_ID in row}
+        for old in existing.rows if existing is not None else ():
+            if rr.pm_obligation(old.get(rr.ROW_ANCHOR)):
+                row = proposed.get(old[rr.ROW_ID], {})
+                if any(old.get(k) != row.get(k) for k in (rr.ROW_TEXT, rr.ROW_ANCHOR)):
+                    raise MutateAbort(f"{old[rr.ROW_ID]}: {rr.PM_DISPOSITION_REASON}")
+        for row in wanted[rr.ROWS_KEY]:
+            if rr.pm_obligation(row.get(rr.ROW_ANCHOR)) and row.get(rr.ROW_STATUS) in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED):
+                raise MutateAbort(f"{row.get(rr.ROW_ID)}: {rr.PM_DISPOSITION_REASON}")
         state["rows"] = len(wanted[rr.ROWS_KEY])
         if isinstance(current, dict):
             would_be = {**current, rr.REGISTER_KEY: wanted}

@@ -77,26 +77,23 @@ def snapshot(params: dict) -> dict:
         return _snapshot_locked(params, sid, cache)
 
 
-def _advance_descendant_journals(state: dict, sid: str, budget: int) -> None:
-    """Read the owned journal of every thread already attributed to this root's tree.
-
-    A workflow worker that fires its own workflow journals that usage under its own id; the tree
-    reaches it only through the parent link recorded in an ancestor's journal.
-    """
+def _snapshot_sources(paths, state):
+    """Discover descendants as their parent records are consumed by one bounded read."""
+    seen_paths = set(paths)
+    yield from dict.fromkeys(paths)
     journals = settings_home() / "state" / "codex-usage"
-    read = {sid}
-    complete = state.get("backlog_complete", True)
-    while True:
-        pending = [t for t in descendants(state) - read if (journals / f"{t}.jsonl").is_file()]
-        read |= descendants(state)
-        if not pending:
-            state["backlog_complete"] = complete
-            return
-        paths = [journals / f"{t}.jsonl" for t in pending]
-        # A journal first registered by this refresh was unread when the refresh began.
-        fresh = any(str(p.resolve()) not in state["files"] for p in paths)
-        advance(state, paths, byte_budget=budget)
-        complete = complete and state["backlog_complete"] and not fresh
+    checked = set()
+    while pending := descendants(state) - checked:
+        checked.update(pending)
+        for sid in sorted(pending):
+            try:
+                uid = uuid.UUID(sid)
+            except (ValueError, TypeError, AttributeError):
+                continue
+            journal = journals / f"{uid}.jsonl"
+            if journal not in seen_paths and journal.is_file():
+                seen_paths.add(journal)
+                yield journal
 
 
 def _snapshot_locked(params, sid, cache) -> dict:
@@ -126,18 +123,9 @@ def _snapshot_locked(params, sid, cache) -> dict:
     # A producer may supply a durable native event journal from workflows whose
     # backend persisted the actual child UUID, parent UUID and observed usage.
     paths.extend(Path(journal) for journal in params.get("event_journals", []))
-    for owned_sid in descendants(state):
-        try:
-            owned_sid = str(uuid.UUID(owned_sid))
-        except (ValueError, TypeError, AttributeError):
-            continue
-        owned_journal = settings_home() / "state" / "codex-usage" / f"{owned_sid}.jsonl"
-        if owned_journal.is_file():
-            paths.append(owned_journal)
-    # Presence is evidence of observed records, never proof of workflow coverage.
+    # One cumulative budget covers known sources and journals discovered during this refresh.
     budget = params.get("byte_budget", 4 * 1024 * 1024)
-    advance(state, list(dict.fromkeys(paths)), byte_budget=budget)
-    _advance_descendant_journals(state, sid, budget)
+    advance(state, _snapshot_sources(paths, state), byte_budget=budget)
     manifest = params.get("coverage_manifest")
     if manifest:
         data = json.loads(Path(manifest).read_text(encoding="utf-8"))

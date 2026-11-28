@@ -71,6 +71,44 @@ def test_default_invocation_blocks_through_running_then_prints_one_final_json_li
     )
 
 
+def test_failed_fire_returns_nonzero_with_terminal_receipt(monkeypatch):
+    failed = dict(_reply("exited"), outcome="failed", exit_code=1, commit_sha=None,
+                  reason="criterion not_met: The specified rebase was not observed.")
+    calls, sleeps = _install_fake_engine(monkeypatch, [_reply("running"), failed])
+
+    stdout, _stderr, code = _run({"fire_id": FIRE_ID})
+
+    assert code == 1
+    assert json.loads(stdout) == failed
+    assert len(calls) == 2 and len(sleeps) == 1
+
+
+@pytest.mark.parametrize(("outcome", "reason", "expected"), [
+    ("not_landed", "run stopped at staged", 1),
+    ("denied", "driver refused", 1),
+    ("truncated", "driver stopped early", 1),
+    ("clean", None, 0),
+])
+def test_terminal_disposition_without_driver_exit(monkeypatch, outcome, reason, expected):
+    terminal = dict(_reply("exited"), outcome=outcome, reason=reason, commit_sha=None, exit_code=None)
+    _install_fake_engine(monkeypatch, [terminal])
+
+    stdout, _, code = _run({"fire_id": FIRE_ID})
+
+    assert json.loads(stdout) == terminal
+    assert code == expected
+
+
+def test_terminal_failure_sets_process_exit_and_keeps_final_receipt(monkeypatch):
+    failed = {**_reply("exited"), "exit_code": 7, "outcome": "failed", "commit_sha": None}
+    calls, sleeps = _install_fake_engine(monkeypatch, [failed])
+    stdout, stderr, code = _run({"fire_id": FIRE_ID})
+    assert code == 1
+    assert json.loads(stdout) == failed
+    assert "process exit 1" in stderr
+    assert len(calls) == 1 and not sleeps
+
+
 def test_poll_interval_is_clamped_to_one_to_sixty(monkeypatch):
     _calls, sleeps = _install_fake_engine(monkeypatch, [_reply("running"), _reply("running"), _reply("exited")])
     _run({"fire_id": FIRE_ID, "poll_interval_s": 0.01})
@@ -153,8 +191,9 @@ def test_invoke_from_argv_op_propagates_the_refusal_marker():
         )
 
 
-def test_other_ops_on_the_warm_server_leg_are_still_served():
-    stdout, _stderr, code = invoke_main._dispatch_argv(["ping"], REPO, allow_warm=False)
+def test_other_ops_on_the_warm_server_leg_are_still_served(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    stdout, _stderr, code = invoke_main._dispatch_argv(["ping"], str(tmp_path), allow_warm=False)
 
     assert code == 0
     assert stdout.strip()

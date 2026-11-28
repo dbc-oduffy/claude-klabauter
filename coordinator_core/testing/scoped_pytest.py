@@ -56,8 +56,13 @@ def ancestor_chain(pid: Optional[int] = None) -> list:
     try:
         proc = psutil.Process(pid or os.getpid())
         while True:
-            parent = proc.parent()
-            if parent is None:
+            # Process.parent() can enumerate the entire PID table on Darwin.
+            # A parent PID and its creation time suffice to reject PID reuse.
+            parent_pid = proc.ppid()
+            if parent_pid <= 0 or parent_pid == proc.pid:
+                break
+            parent = psutil.Process(parent_pid)
+            if parent.create_time() > proc.create_time():
                 break
             created = watch_parent.process_create_time(parent.pid)
             chain.append((parent.pid, float("nan") if created is None else created))

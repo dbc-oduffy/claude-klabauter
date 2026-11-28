@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -75,6 +76,25 @@ def _text(params: dict, key: str) -> Optional[str]:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _review_plan_file(plan_path: str, worktree: Path) -> Path:
+    from coordinator_core.ops.dispatch_emit.ask_contract import SPINE_SUFFIX
+    from coordinator_core.ops.dispatch_emit.run_token import is_ask_run_id
+    from coordinator_core.session.record_homes import home_rel
+
+    candidate = worktree / plan_path
+    run_dir = candidate.parent
+    if (run_dir.parent == worktree / home_rel("warp") and is_ask_run_id(run_dir.name)
+            and candidate.name.endswith(SPINE_SUFFIX) and candidate.resolve() == candidate):
+        try:
+            run = json.loads((run_dir / "run.json").read_bytes())
+        except (OSError, ValueError):
+            run = None
+        sizing = run.get("sizing_rel") if isinstance(run, dict) else None
+        if isinstance(sizing, str) and candidate.name == Path(sizing).stem + SPINE_SUFFIX:
+            return candidate
+    return _resolve_path(plan_path, worktree)
+
+
 @register_op("criterion_evidence.record")
 def _criterion_evidence_record(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "criterion_evidence.record" handler.
@@ -122,7 +142,7 @@ def _criterion_evidence_record(params: dict, repo_root: Optional[Path] = None) -
 
     worktree = main_worktree_root(repo_root)
     try:
-        plan_file = _resolve_path(plan_path, worktree)
+        plan_file = _review_plan_file(plan_path, worktree) if reviews_mode else _resolve_path(plan_path, worktree)
     except _PathNotContained as exc:
         return _fail(str(exc))
     if not plan_file.is_file():

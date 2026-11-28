@@ -258,7 +258,7 @@ def reach_paths(root: Path | str, seeds: Iterable[str], depth: int = DEFAULT_DEP
 
 def seeds_for_landing(root: Path | str, landing: Iterable[str]) -> List[str]:
     """Test files a landing set verifies: a landed test file is its own seed; a landed module adds the
-    tracked sibling `tests/test_<stem>.py`."""
+    tracked `test_<stem>.py` files beside it and in its sibling tests directory."""
     tracked = _tracked(Path(root))
     seeds: Set[str] = set()
     for raw in landing:
@@ -269,9 +269,11 @@ def seeds_for_landing(root: Path | str, landing: Iterable[str]) -> List[str]:
         if p.name.startswith("test_"):
             seeds.add(rel)
             continue
-        sibling = (p.parent / "tests" / f"test_{p.stem}.py").as_posix()
-        if sibling in tracked:
-            seeds.add(sibling)
+        test_name = f"test_{p.stem}.py"
+        for directory in (p.parent, p.parent / "tests"):
+            sibling = (directory / test_name).as_posix()
+            if sibling in tracked:
+                seeds.add(sibling)
     return sorted(seeds)
 
 

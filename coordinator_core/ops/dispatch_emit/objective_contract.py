@@ -150,6 +150,7 @@ class LoopLine:
     check_cost_usd: float = 0.0
     check_llm_calls: int = 0
     falsifier_lines: list = field(default_factory=list)
+    measured_sha: Optional[str] = None
     delta_plan_path: Optional[str] = None
     reason: str = ""
 
@@ -210,6 +211,20 @@ def _axis_id(axis: Any) -> str:
     return axis.id if isinstance(axis, Axis) else str(axis.get("id") if isinstance(axis, Mapping) else axis)
 
 
+def measure_matches(line: Mapping, threshold: Any) -> bool:
+    """Recompute numeric measures against the declared threshold, including old loop records."""
+    import math
+    import operator
+
+    compare = {"==": operator.eq, "<=": operator.le, ">=": operator.ge}.get(str(line.get("comparator")))
+    if compare is None:
+        return False
+    now = line.get("now")
+    def number(value):
+        return type(value) is int or (type(value) is float and math.isfinite(value))
+    return number(now) and number(threshold) and compare(now, threshold)
+
+
 def parse_falsifier_lines(stdout: str, axes: Sequence[Any]) -> list:
     """One AxisResult per declared axis, in declared order; any doubt gives `passed=False` with a reason.
 
@@ -256,6 +271,12 @@ def parse_falsifier_lines(stdout: str, axes: Sequence[Any]) -> list:
                 threshold=obj.get("threshold"), comparator=str(obj.get("comparator") or "bool"),
                 evidence=str(obj.get("evidence") or ""),
             ))
+
+    for axis, result in zip(axes, results):
+        threshold = axis.get("threshold") if isinstance(axis, Mapping) else getattr(axis, "threshold", None)
+        if type(threshold) in (float, int) and result.passed:
+            if not measure_matches(result.to_line(), threshold):
+                _failed(result, "measurement contradicts declared threshold")
 
     if summary is None:
         return [_failed(r, REASON_NO_SUMMARY) for r in results]

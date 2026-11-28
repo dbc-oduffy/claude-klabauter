@@ -29,6 +29,8 @@ BIN = Path(__file__).resolve().parent.parent
 BROKER_IDLE_SECONDS = 600.0
 RESTART_FLOOR_SECONDS = 20.0
 BROKER_START_WAIT_SECONDS = 8.0
+DRAIN_JOIN_SECONDS = 5.0
+_USAGE_LINE = re.compile(rb"^\s*usage:", re.MULTILINE)
 _IP_HOSTS = {}
 IP_HOSTS_TTL_SECONDS = 300.0
 ADDRESS_TTL_SECONDS = 30.0
@@ -36,6 +38,11 @@ _VERIFIED = {}
 MAX_SSH_PER_HOST = 4
 _HOST_SLOTS = {}
 _HOST_SLOTS_LOCK = threading.Lock()
+
+
+def is_usage_refusal(stderr: bytes) -> bool:
+    """True when a far relay refused the verb with a `usage:` line, even behind ssh banner lines."""
+    return _USAGE_LINE.search(stderr) is not None
 
 
 def host_slot(host):
@@ -195,6 +202,37 @@ def lock_live(rec):
         return False
 
 
+def _is_publish_working_dir(path) -> bool:
+    """True when `path` sits inside a publish round dir; a ModuleNotFoundError reads as not a round (older engine)."""
+    try:
+        from coordinator_core import publish_round
+    except ImportError:
+        return False
+    return publish_round.is_round_path(path)
+
+
+def _engine_root() -> Path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        from cc_invoke import _resolve_claude_klabauter_root
+    finally:
+        sys.path.pop(0)
+    return Path(_resolve_claude_klabauter_root())
+
+
+def broker_script() -> Path:
+    """This module's file, or the engine root's copy when this one was loaded from a publish working dir; the broker
+    is a fleet daemon and never runs unpublished bytes."""
+    here = Path(__file__).resolve()
+    if not _is_publish_working_dir(here):
+        return here
+    root = _engine_root()
+    script = (root / "coordinator" / "bin" / "lib" / here.name).resolve()
+    if _is_publish_working_dir(script) or not script.is_file():
+        raise RuntimeError(f"unimatrix broker: no engine-root copy of {here.name} outside a publish working dir (resolved {script})")
+    return script
+
+
 class BrokerChannel(DirectChannel):
     """`run` rides the box's broker (started on demand); `subscribe` stays one stream per call."""
 
@@ -207,7 +245,7 @@ class BrokerChannel(DirectChannel):
         # Trap: never DETACHED_PROCESS. It overrides CREATE_NO_WINDOW, leaving the broker without a console,
         # so every console grandchild opens a visible window.
         flags = _no_window() | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        subprocess.Popen([_roster().console_python(), str(Path(__file__).resolve()), "broker", "--box", self.box, "--host", self.host,
+        subprocess.Popen([_roster().console_python(), str(broker_script()), "broker", "--box", self.box, "--host", self.host,
                           "--key", self.key, "--home", str(self.home), *[f"--extra={e}" for e in self.extra]],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          creationflags=flags, close_fds=True)
@@ -413,7 +451,7 @@ class Broker:
         self._sock = None
         self._stderr = bytearray()
 
-    def _ensure_carrier(self):
+    def _ensure_carrier(self) -> subprocess.Popen:
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 return self._proc
@@ -424,8 +462,9 @@ class Broker:
             p = subprocess.Popen([*self._factory(), "mux"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, creationflags=_no_window())
             self._proc = p
-            threading.Thread(target=self._drain_stderr, args=(p, self._stderr), daemon=True).start()
-            threading.Thread(target=self._read_replies, args=(p,), daemon=True).start()
+            drain = threading.Thread(target=self._drain_stderr, args=(p, self._stderr), daemon=True)
+            drain.start()
+            threading.Thread(target=self._read_replies, args=(p, drain), daemon=True).start()
             return p
 
     @staticmethod
@@ -434,7 +473,7 @@ class Broker:
             if len(sink) < 4096:
                 sink.extend(raw)
 
-    def _read_replies(self, p):
+    def _read_replies(self, p, drain=None) -> None:
         for line in p.stdout:
             try:
                 reply = json.loads(line)
@@ -445,8 +484,10 @@ class Broker:
                 slot["result"] = reply
                 slot["event"].set()
         p.wait()
+        if drain is not None:
+            drain.join(DRAIN_JOIN_SECONDS)
         # An old far relay answers `usage:` to `mux`: serve every request one-shot from here on.
-        if bytes(self._stderr).lstrip().startswith(b"usage:"):
+        if is_usage_refusal(bytes(self._stderr)):
             self.degraded = True
         for slot in list(self._pending.values()):
             slot["event"].set()

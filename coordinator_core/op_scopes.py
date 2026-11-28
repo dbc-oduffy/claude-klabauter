@@ -1131,6 +1131,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # repo.setup — "none": the target is the caller-supplied `root` param, never the worktree
     # the engine runs in.
     "repo.setup":                                "none",
+    # governed_by.ledger — handler derives worktree root from main_worktree_root(repo_root) when
+    # params["repo_root"] is omitted, reading git history for a repo-relative path.
+    "governed_by.ledger":                        "common_dir",
+    # push.state — handler derives worktree root via main_worktree_root(repo_root), matching push.outstanding.
+    "push.state":                                "common_dir",
 }
 
 # ---------------------------------------------------------------------------

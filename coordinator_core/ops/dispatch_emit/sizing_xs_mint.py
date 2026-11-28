@@ -307,7 +307,7 @@ def mint_xs_spine(
                 "body": (
                     f"Spec: {sizing_rel} ({XS_ROW_ID})\n"
                     f"Intent:\n{intent}\n"
-                    f"Verification (this row is DONE only when this holds): {statement}\n"
+                    f"Verification (run acceptance criterion): {statement}\n"
                     + post_commit
                     + "".join(
                         f"{body} is routed to {sidecar}: record plan evidence with coordinator-invoke "

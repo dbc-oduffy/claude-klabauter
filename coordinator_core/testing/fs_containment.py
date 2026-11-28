@@ -280,8 +280,16 @@ def _sweep_dead_runs(parent: Path) -> None:
 
     A run killed before sessionfinish (suite ceiling, ENOSPC) never deletes or marks its
     basetemp. Marked dirs belong to `_prune_kept`; a live or unreadable pid is kept, so a
-    concurrent run is never reaped.
+    concurrent run is never reaped. A pytest dir is only renamed into `.reap` (no rmtree).
     """
+    if parent.name == "pytest":
+        try:
+            from coordinator_core.ops.fleet.pytest_basetemp_sweep import tombstone_dead_runs
+
+            tombstone_dead_runs(roots=[parent.parent.parent], check=lambda: False)
+        except (ImportError, OSError):
+            return
+        return
     try:
         from coordinator_core.group_em.session_registry import pid_alive
         from coordinator_core.temp_layout import parse_pytest_run_dir
@@ -400,6 +408,10 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus) -> None:
         if exitstatus in (0, 5):
             if minted.exists():
                 _rmtree(minted)
+            if minted.exists():
+                from coordinator_core.ops.fleet.pytest_basetemp_sweep import tombstone_one
+
+                tombstone_one(minted)
         elif minted.is_dir():
             (minted / _KEPT_MARKER).touch()
             _prune_kept(minted.parent)

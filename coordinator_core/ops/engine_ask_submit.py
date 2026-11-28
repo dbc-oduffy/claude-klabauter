@@ -200,19 +200,29 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
             "refused": "no-run",
             "reason": "Submission returned no emitted script and hash. Check existing run records before resubmitting.",
         }
-    if params.get("fire", True) is not False and "refused" not in reply:
+    if "refused" in reply:
+        return reply
+    if backend == "codex":
+        from coordinator_core.ops.workflow_fire.headless_em_grant import registered_launch_observation
+        from coordinator_core.session.caller_env import effective_caller_env
+
+        observation = registered_launch_observation(effective_caller_env(), params.get("session_id"), params.get("cwd"))
+        if observation:
+            reply["launch_observation"] = observation
+    fire_params = {"script_path": reply["script_path"], "expected": reply["sha256"], "notify_to": target,
+                   "executor": executor, "backend": backend, "caller_session_id": params.get("session_id")}
+    if private_spec is not None:
+        fire_params["private_engine"] = private_spec
+    if reply.get("fire_args"):
+        fire_params["args"] = reply["fire_args"]
+    if reply.get("run_id"):
+        fire_params["run_id"] = reply["run_id"]
+    reply["fire_params"] = fire_params
+    if params.get("fire", True):
         from coordinator_core.ops.workflow_fire.op import _workflow_fire
         from coordinator_core.warm.sandboxed_spawn import SpawnIndeterminate
 
         try:
-            fire_params = {"script_path": reply["script_path"], "expected": reply["sha256"], "notify_to": target,
-                           "executor": executor, "backend": backend, "caller_session_id": params["session_id"]}
-            if private_spec is not None:
-                fire_params["private_engine"] = private_spec
-            if reply.get("fire_args"):
-                fire_params["args"] = reply["fire_args"]
-            if reply.get("run_id"):
-                fire_params["run_id"] = reply["run_id"]
             reply["fire"] = _workflow_fire(
                 fire_params, Path(params["cwd"])
             )
@@ -221,6 +231,15 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
                 reply["fire_error"] = f"{fired['refused']}: {fired.get('reason', '')}"
             elif not isinstance(fired, dict) or not isinstance(fired.get("fire_id"), str) or not fired["fire_id"].strip():
                 reply["fire_error"] = "Requested fire returned no fire_id; reconcile the minted run before retrying."
+            elif executor == "headless":
+                # Keep the returned handle for reconciliation even when it names another delivery.
+                for field, minted in (("run_id", reply.get("run_id")), ("script_sha256", reply["sha256"])):
+                    if field in fired and minted is not None and fired[field] != minted:
+                        reply["fire_error"] = (
+                            f"Headless fire receipt {field} differs from the mint. "
+                            "Reconcile the returned fire ID before retrying."
+                        )
+                        break
         except SpawnIndeterminate as exc:
             reply["fire_error"] = str(exc)
             reply["fire"] = {"state": "indeterminate", "run_id": exc.run_id, "error": exc.error}

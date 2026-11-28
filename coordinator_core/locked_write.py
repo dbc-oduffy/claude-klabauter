@@ -1243,7 +1243,9 @@ def _held_lock_gen(
     lock_path = lock_dir / f"{key}.lock"
 
     def _mkdir_lock_dir() -> "Path":
-        lock_dir.mkdir(parents=True, exist_ok=True)
+        # A restricted caller can share a provisioned sidecar without directory access.
+        if not lock_path.is_file():
+            lock_dir.mkdir(parents=True, exist_ok=True)
         return lock_dir
 
     _open_flags = os.O_CREAT | (os.O_WRONLY if _FCNTL_AVAILABLE else os.O_RDWR)

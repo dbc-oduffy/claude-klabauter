@@ -70,6 +70,15 @@ def test_seeds_for_landing_adds_sibling_tests(repo: Path) -> None:
     assert tr.seeds_for_landing(repo, ["pkg/tests/test_other.py"]) == ["pkg/tests/test_other.py"]
 
 
+def test_colocated_test_seed_must_be_tracked(repo: Path) -> None:
+    for path in ("test_records.py", "pkg/test_mod.py", "pkg/test_dep.py"):
+        _write(repo, path, "")
+    _git(repo, "add", "test_records.py", "pkg/test_mod.py")
+    assert tr.seeds_for_landing(repo, ["records.py", "pkg/mod.py", "pkg/dep.py"]) == [
+        "pkg/test_mod.py", "pkg/tests/test_mod.py", "test_records.py",
+    ]
+
+
 def test_dirty_fixture_outside_landing_is_returned_and_clean_is_not(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reach = tr.reach_paths(repo, [SEED])
     assert tr.foreign_dirt(repo, reach, ["pkg/mod.py"]) == {}

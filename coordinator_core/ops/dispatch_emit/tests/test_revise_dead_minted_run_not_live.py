@@ -158,3 +158,26 @@ def test_a_real_own_token_past_the_grace_with_no_launch_is_not_live(tmp_path: Pa
     record["minted_at"] = record["minted_at"] - warp_live.MINTED_RUNNER_GRACE_SECONDS - 60
     token.write_text(json.dumps(record), encoding="utf-8")
     assert _revise(root)["run_live"] is False
+
+
+def test_unstarted_raw_ask_keeps_emitted_handle(tmp_path, monkeypatch):
+    import hashlib
+    import json
+
+    root = _repo(tmp_path)
+    raw = "ask-20261124T124801-52a3c8"
+    rl.start(root, raw)
+    run_dir = record_dir(root, raw)
+    (run_dir / "run-stage.json").write_text(json.dumps({"stage": "minted"}))
+    script = root / "scratch" / "warp" / (raw + ".workflow.mjs")
+    script.parent.mkdir(parents=True)
+    script.write_text("// original issued script")
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    script.with_suffix(".mjs.emitted.json").write_text(json.dumps({"sha256": digest}))
+    _tokens(monkeypatch, own=False, sibling=False)
+
+    out = rl._handler({"run_id": raw, "verbatim": "keep the original run"}, repo_root=root)
+    assert out["run_live"] is False
+    assert out["next"] == {"kind": "reconcile_mint", "run_id": raw,
+                           "script_path": str(script), "expected": digest}
+    assert out["item"] == "Q1"

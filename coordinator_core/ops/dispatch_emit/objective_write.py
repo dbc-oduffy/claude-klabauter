@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.dispatch_emit import objective_contract as oc
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
@@ -184,7 +185,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     bad = validate_params(oc.OP_WRITE, params, _FIELDS)
     if bad:
         return _refuse(bad["error"])
-    root = Path(repo_root) if repo_root is not None else Path.cwd()
+    root = main_worktree_root(repo_root) if repo_root is not None else Path.cwd()
 
     from coordinator_core.atomic_replace import atomic_write_bytes
     from coordinator_core.ops.dispatch_emit import requirements_ledger as rl

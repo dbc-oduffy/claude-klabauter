@@ -2412,6 +2412,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "ceremony.hand_land": OpClass.MUTATING,
     # governed_by.ledger — COMPUTE_ONLY: one `git log` over a path, listing its Governed-By trailers; writes nothing (ops/ceremony/governed_by.py).
     "governed_by.ledger": OpClass.COMPUTE_ONLY,
+    # push.state — COMPUTE_ONLY: read-only ref/log comparison reporting whether HEAD is pushed on its owned remote; never pushes or mutates state (ops/push_state.py).
+    "push.state": OpClass.COMPUTE_ONLY,
     # dispatch.terminal_commit — MUTATING: lands the run's terminal commit via
     # ONE in-process `ceremony.commit_v2` call (ops/dispatch_emit/terminal_commit.py).
     # DR-208 five-question affirmation (citing dispatch.terminal_commit handler):

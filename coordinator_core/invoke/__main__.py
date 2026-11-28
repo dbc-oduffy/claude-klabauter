@@ -967,8 +967,8 @@ def _wait_for_fire(
 ) -> Tuple[dict, Optional[int]]:
     """Re-dispatch the non-blocking `workflow.fire_wait` read until the fire exits.
 
-    Returns ``(response, exit_code)``: exit 0 on ``exited``, 1 on ``timed_out`` or
-    ``found: false``; ``exit_code`` is None when the response is an error envelope
+    Returns ``(response, exit_code)``: exit 1 on ``timed_out`` or
+    ``found: false``; ``exit_code`` is None for a terminal result or an error envelope
     (the caller's usual exit-code mapping applies). Each tick is one in-process
     dispatch; the client deadline is ``timeout_s`` of ``time.monotonic()`` from the
     first tick, a backstop for a record with no start stamp.
@@ -1010,7 +1010,8 @@ def _wait_for_fire(
             if result.get("found") is False:
                 return response, 1
             if result.get("state") == "exited":
-                return response, 0
+                # The wait handler supplies a failure reason even when the driver left no exit code.
+                return response, 1 if result.get("reason") else None
             timeout_s = result.get("timeout_s")
             remaining = None
             if isinstance(timeout_s, (int, float)) and not isinstance(timeout_s, bool):
@@ -1363,6 +1364,8 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #    For all other scopes (none, central) repo_root stays None — git is never invoked.
     if args.op in WORKTREE_SCOPED_OPS:
         repo_root: Optional[Path] = _resolve_repo_root(args.repo, cwd, params)
+        if args.op == "engine_ask.submit" and params:
+            params.setdefault("cwd", str(repo_root))
     else:
         repo_root = None
 

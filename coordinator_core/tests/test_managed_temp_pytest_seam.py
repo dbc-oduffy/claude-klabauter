@@ -60,6 +60,32 @@ def _run(pytester):
     return pytester.runpytest_inprocess("--basetemp", str(pytester.path / "bt"))
 
 
+def test_default_basetemp_is_gone_after_a_passing_finish(tmp_path, monkeypatch):
+    import types
+
+    from coordinator_core import conftest as seam
+    from coordinator_core import temp_layout
+
+    monkeypatch.setattr(temp_layout, "_inside_worktree", lambda path: False)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(temp_layout.tempfile, "gettempdir", lambda: str(tmp_path))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = types.SimpleNamespace(
+        option=types.SimpleNamespace(basetemp=None),
+        rootpath=repo,
+        _tmp_path_factory=None,
+    )
+    seam.default_basetemp_to_temp_layout(config)
+    path = Path(config.option.basetemp)
+    path.mkdir()
+    (path / "f.txt").write_text("x")
+    session = types.SimpleNamespace(config=config, exitstatus=0)
+    seam.managed_temp_session_finish(session, 0)
+    assert not path.exists()
+    assert not any(path.parent.glob(f"{os.getpid()}-*"))
+
+
 def test_tempfile_tempdir_is_a_managed_session_dir():
     session_dir = Path(tempfile.gettempdir())
     assert RUN_TEMP_DIRNAME in session_dir.parts

@@ -96,3 +96,49 @@ def test_sweep_reaps_a_dead_run_under_a_disk_fallback_root(temp, registry, dead_
     run = _mk(disk / "repo" / "pytest" / f"{dead_pid}-a1b2c3")
     sweep.sweep_dead_runs(registry_dir=registry)
     assert not run.exists()
+
+
+def test_tombstone_renames_without_a_walk(temp, dead_pid, monkeypatch) -> None:
+    import shutil
+
+    run = _mk(temp / "repo" / "pytest" / f"{dead_pid}-a1b2c3")
+    monkeypatch.setattr(os, "walk", lambda *a, **k: (_ for _ in ()).throw(AssertionError("walk")))
+    monkeypatch.setattr(shutil, "rmtree", lambda *a, **k: (_ for _ in ()).throw(AssertionError("rmtree")))
+    try:
+        assert sweep.tombstone_dead_runs(roots=[temp]) == 1
+        assert not run.exists()
+        assert (temp / "repo" / "pytest" / ".reap" / run.name).is_dir()
+    finally:
+        monkeypatch.undo()
+
+
+def test_expired_kept_marker_is_tombstoned_fresh_one_is_not(temp, dead_pid) -> None:
+    from coordinator_core.temp_layout import PYTEST_KEPT_MARKER, _KEPT_MAX_AGE_S
+
+    fresh = _mk(temp / "repo" / "pytest" / f"{dead_pid}-a1b2c3", files=(PYTEST_KEPT_MARKER,))
+    stale = _mk(temp / "repo" / "pytest" / f"{dead_pid}-d4e5f6", files=(PYTEST_KEPT_MARKER,))
+    old = time.time() - _KEPT_MAX_AGE_S - 10
+    os.utime(stale / PYTEST_KEPT_MARKER, (old, old))
+    assert sweep.tombstone_dead_runs(roots=[temp]) == 1
+    assert fresh.exists()
+    assert not stale.exists()
+    assert (temp / "repo" / "pytest" / ".reap" / stale.name).is_dir()
+
+
+def test_drain_stops_at_check_and_resumes(temp) -> None:
+    reap = temp / "repo" / "pytest" / ".reap" / "9-abc123"
+    reap.mkdir(parents=True)
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (reap / name).write_text("x")
+    names = ("a.txt", "b.txt", "c.txt")
+
+    def check() -> bool:
+        return sum((reap / name).exists() for name in names) < len(names)
+
+    first = sweep.drain_tombstones(roots=[temp], check=check)
+    assert first >= 1
+    left = list(reap.rglob("*")) if reap.exists() else []
+    assert left
+    rest = sweep.drain_tombstones(roots=[temp], check=lambda: False)
+    assert rest >= 1
+    assert not reap.exists()

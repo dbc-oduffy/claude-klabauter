@@ -594,7 +594,7 @@ def _cap_leg(
     typecheck: bool = False,
     snapshot_out: Optional[List[Any]] = None,
     warn_out: Optional[List[str]] = None,
-):
+) -> Tuple[Optional[Any], Optional[Any], Optional[Any], int]:
     """Returns (deny_record_or_None, anchor_or_None, census_or_None, launch_ctime).
     The background-shell cap never denies: it appends an advisory to `warn_out`. Only live shells
     that are direct children of this session's anchor are counted.
@@ -640,8 +640,8 @@ def _cap_leg(
             _deny_text(
                 LEG_SESSION_CAP,
                 "no session anchor found above pid %d" % caller,
-                _retry("launch from inside a Claude or Codex session", "the launching session"),
-                legacy="Launch from inside a Claude or Codex session",
+                _retry("launch from inside a Claude, Codex, or Grok session", "the launching session"),
+                legacy="Launch from inside a Claude, Codex, or Grok session",
             ),
             None,
             None,

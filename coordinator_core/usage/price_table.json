@@ -16,14 +16,16 @@
         "input": 16.0,
         "output": 60.0,
         "cache_read": 0.8,
-        "cache_creation": 20.0
+        "cache_creation": 20.0,
+        "cache_creation_12h_standard": 40.0
       },
       "provenance": {
         "source": "https://developers.openai.com/api/docs/pricing",
         "verified_at": "2026-11-20",
         "basis": "API-equivalent estimate; current Ultrafast rate; not an invoice",
         "effective_from": null
-      }
+      },
+      "cache_creation_12h_standard": 20.0
     },
     "claude-opus-5-5": {
       "input": 4.0,
@@ -65,14 +67,16 @@
         "input": 4.0,
         "output": 15.0,
         "cache_read": 0.2,
-        "cache_creation": 5.0
+        "cache_creation": 5.0,
+        "cache_creation_12h_standard": 10.0
       },
       "provenance": {
         "source": "https://developers.openai.com/api/docs/pricing",
         "verified_at": "2026-11-19",
         "basis": "API list prices; 30m cache writes",
         "effective_from": null
-      }
+      },
+      "cache_creation_12h_standard": 5.0
     },
     "gpt-6.1-sol": {
       "input": 2.0,
@@ -88,14 +92,16 @@
         "input": 4.0,
         "output": 15.0,
         "cache_read": 0.2,
-        "cache_creation": 5.0
+        "cache_creation": 5.0,
+        "cache_creation_12h_standard": 10.0
       },
       "provenance": {
         "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
         "verified_at": "2026-11-07",
         "basis": "API list prices; 30m cache writes",
         "effective_from": null
-      }
+      },
+      "cache_creation_12h_standard": 5.0
     },
     "gpt-6.1-terra": {
       "input": 1.0,
@@ -133,14 +139,16 @@
         "input": 20.0,
         "output": 75.0,
         "cache_read": 2.0,
-        "cache_creation": 25.0
+        "cache_creation": 25.0,
+        "cache_creation_12h_standard": 50.0
       },
       "provenance": {
         "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
         "verified_at": "2026-11-07",
         "basis": "API list prices; 30m cache writes",
         "effective_from": null
-      }
+      },
+      "cache_creation_12h_standard": 25.0
     },
     "gpt-6-luna": {
       "input": 0.1,
@@ -155,14 +163,16 @@
         "input": 0.2,
         "output": 0.75,
         "cache_read": 0.020000000000000004,
-        "cache_creation": 0.25
+        "cache_creation": 0.25,
+        "cache_creation_12h_standard": 0.5
       },
       "provenance": {
         "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
         "verified_at": "2026-11-07",
         "basis": "API list prices; 30m cache writes",
         "effective_from": null
-      }
+      },
+      "cache_creation_12h_standard": 0.25
     },
     "gemini-3.8-flash": {
       "input": 0.75,

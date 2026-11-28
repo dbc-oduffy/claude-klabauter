@@ -61,6 +61,24 @@ def resolve_codex(platform: Optional[str] = None, env: Optional[dict] = None) ->
         raise CodexUnavailable(f"{fnm_miss}; codex not on PATH either") from fnm_miss
 
 
+def darwin_observed_exec(prefix: list[str]) -> list[str]:
+    """Spawn the native exec directly so the broker observes the worker PID, not npm's shim."""
+    import platform
+
+    entry = Path(prefix[-1]).resolve(strict=True)
+    if entry.name != 'codex.js':
+        if len(prefix) == 1:
+            return [str(entry)]
+        raise CodexUnavailable('cannot identify native Codex behind launcher')
+    package = entry.parent.parent
+    arch = {'arm64': ('arm64', 'aarch64'), 'x86_64': ('x64', 'x86_64')}[platform.machine()]
+    native = (package / 'node_modules' / '@openai' / ('codex-darwin-' + arch[0]) /
+              'vendor' / (arch[1] + '-apple-darwin') / 'bin' / 'codex')
+    if not native.is_file() or not os.access(native, os.X_OK):
+        raise CodexUnavailable('native Codex executable absent beside npm launcher')
+    return [str(native.resolve(strict=True))]
+
+
 def codex_family_stage_argv(prefix: list[str], *tail: str) -> list[str]:
     """argv for a codex family-stage write run, unrestricted: `--dangerously-bypass-approvals-and-sandbox`, no `--sandbox`.
 

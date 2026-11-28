@@ -4,6 +4,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 import math
 import os
+import sys
 import uuid
 
 BIRTH_TOLERANCE = 0.000001  # Existing workflow_peer observer contract.
@@ -39,6 +40,17 @@ def bind_verified_native_actor(actor):
     finally:
         _ACTOR.reset(token)
 
+def _kernel_live_pid(pid):
+    """Probe existence only. Callers separately check generation and terminal status."""
+    if type(pid) is not int or pid <= 0:
+        return False
+    if sys.platform == 'darwin':
+        os.kill(pid, 0)
+        return True
+    from coordinator_core.warm.workflow_peer import kernel_live_pid
+    return kernel_live_pid(pid)
+
+
 def validate_actor(actor, sid, cwd):
     """Recheck target/process freshness, not the owner's protected proof protocol."""
     try:
@@ -49,8 +61,7 @@ def validate_actor(actor, sid, cwd):
         if type(actor.pid) is not int or actor.pid <= 0 or isinstance(actor.start_epoch, bool) or not math.isfinite(actor.start_epoch) or actor.start_epoch <= 0:
             raise ValueError("process generation mismatch")
         import psutil
-        from coordinator_core.warm.workflow_peer import kernel_live_pid
-        if not kernel_live_pid(actor.pid):
+        if not _kernel_live_pid(actor.pid):
             raise ValueError("kernel process is not live")
         process = psutil.Process(actor.pid)
         if process.status() in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
@@ -61,7 +72,8 @@ def validate_actor(actor, sid, cwd):
             raise ValueError("executable mismatch")
         # A second read closes generation changes while inspecting executable metadata.
         fresh = psutil.Process(actor.pid)
-        if (not kernel_live_pid(actor.pid) or not fresh.is_running()
+        if (not _kernel_live_pid(actor.pid) or not fresh.is_running()
+                or fresh.status() in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD)
                 or abs(fresh.create_time() - actor.start_epoch) > BIRTH_TOLERANCE):
             raise ValueError("process birth changed")
         return actor
@@ -74,12 +86,11 @@ def precise_pid_alive(pid, birth):
         value = float(birth)
         if not math.isfinite(value) or value <= 0:
             return False
-        from coordinator_core.warm.workflow_peer import kernel_live_pid
-        if not kernel_live_pid(pid):
+        if not _kernel_live_pid(pid):
             return False
         process = psutil.Process(pid)
         fresh = psutil.Process(pid)
-        return (kernel_live_pid(pid) and fresh.is_running()
+        return (_kernel_live_pid(pid) and fresh.is_running()
                 and abs(fresh.create_time() - value) <= BIRTH_TOLERANCE
                 and process.status() not in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD)
                 and abs(process.create_time() - value) <= BIRTH_TOLERANCE)

@@ -10,7 +10,7 @@ import pytest
 
 from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import land_run, run_token
-from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, read_run_outcome
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.session import core as session_core
@@ -98,6 +98,10 @@ def test_an_unlanded_credited_row_demotes_a_met_judge_to_not_met(repo):
     assert out["committed"] is True, out
     assert "C2" in out["incomplete_reasons"]
     assert out["criterion_status"] == "not_met"
+    persisted = read_run_outcome(repo, RUN_A)["inline_review"]["criterion"]
+    assert persisted["status"] == "not_met"
+    assert persisted["judge_at_landing"] == MET
+    assert persisted["unlanded_rows"] == ["C2"]
 
 
 def test_with_every_row_landed_a_met_judge_is_still_met(repo):
@@ -106,3 +110,4 @@ def test_with_every_row_landed_a_met_judge_is_still_met(repo):
     assert out["committed"] is True, out
     assert not out.get("incomplete_reasons")
     assert out["criterion_status"] == "met"
+    assert read_run_outcome(repo, RUN_A)["inline_review"]["criterion"] == MET

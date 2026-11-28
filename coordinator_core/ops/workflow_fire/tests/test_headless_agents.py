@@ -149,8 +149,11 @@ def test_open_map_fallback_still_rejects_invalid_original_schema_result(tmp_path
 
 def test_nonzero_exit_fails_even_with_valid_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_cli(tmp_path, monkeypatch, exit_code=7)
-    with pytest.raises(agents.AgentFailed, match="exited 7"):
+    with pytest.raises(agents.AgentFailed, match="exited 7") as failure:
         agents.run_agent("x", {"schema": SCHEMA}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
+    for name in ("stdout.jsonl", "stderr.txt"):
+        artifact = tmp_path / "agent" / name
+        assert artifact.is_file() and str(artifact) in str(failure.value)
 
 
 def test_timeout_kills_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

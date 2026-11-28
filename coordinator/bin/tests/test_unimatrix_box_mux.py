@@ -34,6 +34,8 @@ def b64(b):
     return base64.b64encode(b).decode()
 if sys.argv[1:2] == ["mux"]:
     if os.environ.get("FAKE_OLD_RELAY"):
+        if os.environ.get("FAKE_BANNER"):
+            sys.stderr.write("Warning: Permanently added 'farbox' to the list of known hosts.\n")
         sys.stderr.write("usage: roster | send <pid> | inbox <name>\n")
         sys.exit(2)
     open(log, "a").write("carrier\n")
@@ -102,6 +104,55 @@ def test_an_old_far_relay_without_mux_is_served_one_shot_single_flight(world, mo
     assert lines(world.log).count("oneshot") == 4
 
 
+def test_a_usage_refusal_behind_an_ssh_banner_is_served_one_shot(world, monkeypatch):
+    monkeypatch.setenv("FAKE_OLD_RELAY", "1")
+    monkeypatch.setenv("FAKE_BANNER", "1")
+    r = world.chan().run("roster 1", b"x")
+    assert (r.returncode, r.stdout) == (0, b"roster 1|x")
+    assert lines(world.log) == ["oneshot"]
+
+
+def test_a_usage_line_arriving_after_stdout_closes_still_degrades_the_broker(mux):
+    class Slow:
+        stdout = iter(())
+
+        def wait(self):
+            return 2
+
+    def slow_stderr():
+        yield b"Warning: banner\n"
+        threading.Event().wait(0.3)
+        yield b"usage: roster | send <pid>\n"
+
+    p = Slow()
+    p.stderr = slow_stderr()
+    b = mux.Broker("farbox", "key", "farbox", "home")
+    drain = threading.Thread(target=b._drain_stderr, args=(p, b._stderr), daemon=True)
+    drain.start()
+    b._read_replies(p, drain)
+    assert b.degraded is True
+
+
+def test_a_carrier_ending_without_a_usage_line_stays_a_fault_and_is_not_retried(mux):
+    class Dead:
+        stdout = iter(())
+        stderr = iter([b"ssh: connect to host farbox port 22: Connection refused\n"])
+
+        def wait(self):
+            return 255
+
+    p = Dead()
+    b = mux.Broker("farbox", "key", "farbox", "home")
+    drain = threading.Thread(target=b._drain_stderr, args=(p, b._stderr), daemon=True)
+    drain.start()
+    b._read_replies(p, drain)
+    assert b.degraded is False
+
+
+def test_a_usage_refusal_is_a_usage_line_at_a_line_start_not_a_mention(mux):
+    assert mux.is_usage_refusal(b"banner\nusage: x\n") and not mux.is_usage_refusal(b"no usage: here\n")
+
+
 def test_a_dead_pid_lock_is_replaced_by_a_fresh_broker(world, mux):
     path = mux.lock_path(world.home, "farbox")
     path.parent.mkdir(parents=True)
@@ -115,14 +166,13 @@ def test_a_lock_naming_a_reused_pid_is_not_a_live_broker(mux):
     assert not mux.lock_live({"pid": os.getpid(), "procStart": "not-my-start-stamp", "port": 1, "token": "t"})
 
 
-def test_every_ssh_argv_carries_the_host_key_alias_and_a_host_name(mux):
+def test_every_ssh_argv_carries_the_host_key_alias_and_a_host_name(mux, monkeypatch):
     argv = mux.ssh_argv("farbox", "k", "me@farbox.local", ["-o", "ConnectTimeout=5"])
     assert "HostKeyAlias=farbox" in argv and argv[-1] == "me@farbox.local" and not mux.is_ip_literal("farbox.local")
     seen = []
     ch = mux.channel("farbox", key="k", host="farbox", direct=True, mux_options=lambda h: [])
-    import unittest.mock as m
-    with m.patch.object(mux.subprocess, "run", lambda a, **kw: seen.append(a) or subprocess.CompletedProcess(a, 0, b"", b"")):
-        ch.run("roster")
+    monkeypatch.setattr(mux.subprocess, "run", lambda a, **kw: seen.append(a) or subprocess.CompletedProcess(a, 0, b"", b""))
+    ch.run("roster")
     assert "HostKeyAlias=farbox" in seen[0] and seen[0][-2] == "farbox" and seen[0][-1] == "roster"
 
 
@@ -134,9 +184,8 @@ def test_every_ssh_leg_pins_the_key_and_refuses_any_agent(mux, monkeypatch):
     assert argv[argv.index("-i") + 1] == "k"
     seen = []
     ch = mux.channel("farbox", key="k", host="farbox", direct=True, mux_options=lambda h: [])
-    import unittest.mock as m
-    with m.patch.object(mux.subprocess, "run", lambda a, **kw: seen.append(a) or subprocess.CompletedProcess(a, 0, b"", b"")):
-        ch.run("roster")
+    monkeypatch.setattr(mux.subprocess, "run", lambda a, **kw: seen.append(a) or subprocess.CompletedProcess(a, 0, b"", b""))
+    ch.run("roster")
     assert "IdentityAgent=none" in seen[0]
 
 
@@ -192,14 +241,13 @@ def test_a_reachable_host_name_is_dialled_with_no_key_read_and_no_probe(mux):
     assert ch.host == "me@farbox.local" and read == [] and probed == []
 
 
-def test_an_unreachable_name_dials_the_first_verified_listed_address_with_the_box_host_key_alias(mux):
+def test_an_unreachable_name_dials_the_first_verified_listed_address_with_the_box_host_key_alias(mux, monkeypatch):
     ch, probed, read = _fallback(mux, answering={"192.0.2.2", "192.0.2.3"})
     assert read == ["unimatrix.addresses.farbox"]
     assert ch.host == "me@192.0.2.2" and ch.box == "farbox" and probed == ["me@192.0.2.2"]
     seen = []
-    import unittest.mock as m
-    with m.patch.object(mux.subprocess, "run", lambda a, **kw: seen.append(a) or subprocess.CompletedProcess(a, 0, b"sent", b"")):
-        r = ch.run("send hello")
+    monkeypatch.setattr(mux.subprocess, "run", lambda a, **kw: seen.append(a) or subprocess.CompletedProcess(a, 0, b"sent", b""))
+    r = ch.run("send hello")
     assert r.returncode == 0 and r.stdout == b"sent"
     assert "HostKeyAlias=farbox" in seen[0] and seen[0][-2:] == ["me@192.0.2.2", "send hello"]
 
@@ -439,3 +487,98 @@ def test_broker_spawn_is_windowless_never_detached(mux, monkeypatch, tmp_path):
     ch._spawn_detached()
     assert not seen["creationflags"] & 0x8
     assert seen["creationflags"] & mux._no_window() == mux._no_window()
+
+
+def test_broker_script_is_this_file_outside_a_publish_working_dir(mux, monkeypatch):
+    monkeypatch.setattr(mux, "_is_publish_working_dir", lambda p: False)
+    assert mux.broker_script() == Path(mux.__file__).resolve()
+
+
+def test_a_mirror_loaded_module_spawns_the_engine_root_copy(mux, monkeypatch, tmp_path):
+    engine = tmp_path / "engine"
+    copy = engine / "coordinator" / "bin" / "lib" / Path(mux.__file__).name
+    copy.parent.mkdir(parents=True)
+    copy.write_text("", encoding="utf-8")
+    monkeypatch.setattr(mux, "_is_publish_working_dir", lambda p: Path(p).resolve() == Path(mux.__file__).resolve())
+    monkeypatch.setattr(mux, "_engine_root", lambda: engine)
+    seen = {}
+    monkeypatch.setattr(mux.subprocess, "Popen", lambda argv, **kw: seen.update(argv=argv))
+    mux.BrokerChannel("box", "key", "host", tmp_path, spawn_broker=None)._spawn_detached()
+    assert seen["argv"][1] == str(copy.resolve())
+
+
+def test_a_mirror_path_engine_root_candidate_is_refused(mux, monkeypatch, tmp_path):
+    engine = tmp_path / "engine"
+    copy = engine / "coordinator" / "bin" / "lib" / Path(mux.__file__).name
+    copy.parent.mkdir(parents=True)
+    copy.write_text("", encoding="utf-8")
+    monkeypatch.setattr(mux, "_is_publish_working_dir", lambda p: True)
+    monkeypatch.setattr(mux, "_engine_root", lambda: engine)
+    spawned = []
+    monkeypatch.setattr(mux.subprocess, "Popen", lambda argv, **kw: spawned.append(argv))
+    with pytest.raises(RuntimeError):
+        mux.BrokerChannel("box", "key", "host", tmp_path, spawn_broker=None)._spawn_detached()
+    assert spawned == []
+
+
+def test_is_publish_working_dir_recognises_a_round_path(mux, monkeypatch, tmp_path):
+    publish_round = pytest.importorskip("coordinator_core.publish_round")
+
+    monkeypatch.setattr(publish_round, "round_root", lambda: tmp_path)
+    assert mux._is_publish_working_dir(tmp_path / "publish-round-1-abc" / "mirror-x" / "f.py")
+    assert not mux._is_publish_working_dir(tmp_path / "engine" / "f.py")
+
+
+def test_is_publish_working_dir_is_false_when_the_engine_has_no_publish_round(mux, monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "coordinator_core.publish_round", None)
+    monkeypatch.delattr("coordinator_core.publish_round", raising=False)
+    assert not mux._is_publish_working_dir(tmp_path / "publish-round-1-abc" / "f.py")
+
+
+FAR_SID = "5a1f0c2e-1111-4222-8333-444455556666"
+
+
+@pytest.fixture
+def bridge(tmp_path, monkeypatch):
+    import os
+    mod = _load(BIN / "unimatrix-bridge.py", "unimatrix_bridge_usage_gate")
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / f"{os.getpid()}.json").write_text(json.dumps(
+        {"pid": os.getpid(), "messagingSocketPath": "/tmp/cc-socks/mirror.sock", "macSocketPath": "/far/4242.sock",
+         "name": "far-session", "unimatrixFarName": "far-session", "sessionId": FAR_SID}))
+    monkeypatch.setattr(mod, "SESSIONS", str(sessions))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setattr(mod._box_mux(), "IS_WIN", False)
+    mod.cfg = types.SimpleNamespace(endpoint="/tmp/cc-socks/mirror.sock", key="k", remote="farbox", port=None)
+    mod.log = open(tmp_path / "bridge.log", "a", encoding="utf-8")
+    mod.written = []
+    monkeypatch.setattr(mod, "write_local", lambda ep, data: mod.written.append((ep, data)))
+    yield mod
+    mod.log.close()
+
+
+def _send_with_ssh_255(bridge, monkeypatch, stderr):
+    calls = []
+
+    def run(argv, **k):
+        calls.append(argv[-1])
+        return subprocess.CompletedProcess([], 255, b"", stderr)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    line = json.dumps({"from": "uds:/tmp/cc-socks/sender.sock", "message": "m"}).encode() + b"\n"
+    conn = types.SimpleNamespace(chunks=[line, b""], read=lambda: conn.chunks.pop(0), close=lambda: None)
+    bridge.relay_send(conn)
+    return calls
+
+
+def test_a_255_behind_an_ssh_banner_that_carries_a_usage_line_asks_capabilities_and_names_the_skew(bridge, monkeypatch):
+    calls = _send_with_ssh_255(bridge, monkeypatch, b"Warning: Permanently added 'farbox'.\nusage: roster | send <pid>\n")
+    assert [c.split()[0] for c in calls] == ["send-session", "capabilities"]
+    assert "lacks send-session" in bridge.delivery_status()[0]
+
+
+def test_a_255_without_a_usage_line_is_a_transport_fault_and_never_asks_capabilities(bridge, monkeypatch):
+    calls = _send_with_ssh_255(bridge, monkeypatch, b"ssh: connect to host farbox port 22: Connection refused\n")
+    assert "capabilities" not in [c.split()[0] for c in calls]
+    assert "lacks send-session" not in bridge.delivery_status()[0]

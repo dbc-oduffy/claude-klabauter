@@ -45,7 +45,7 @@ index 4b56255..e24606e 100644
 +    let diagnostic_endpoint = diagnostic_directory
 +        .map(Path::new)
 +        .filter(|directory| profile == MacosSeatbeltProfile::Command && directory.is_absolute())
-+        .map(|directory| directory.join("diagnostic.sock"));
++        .map(|directory| directory.join(if option_env!("CODEX_BUILD_HOST_SUBMIT_V1").is_some() { "submit.sock" } else { "diagnostic.sock" }));
 +    if diagnostic_endpoint.is_some() {
 +        policy_sections.push("(deny system-socket (require-all (socket-domain AF_UNIX) (socket-type SOCK_DGRAM)))".to_string());
 +        policy_sections.push("(allow system-socket (require-all (socket-domain AF_UNIX) (socket-type SOCK_STREAM)))".to_string());

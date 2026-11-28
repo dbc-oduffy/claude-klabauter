@@ -169,3 +169,26 @@ def test_malformed_private_contract_releases_reservation_before_any_worker(nativ
     assert record['outcome'] == 'failed' and record['execution_started'] is False
     assert 'malformed private terminal contract' in record['error']
     assert fire.count_live_fires(str(script.parent), notify=False) == 0
+
+
+def test_legacy_ask_continuation_requires_route_before_spawn(tmp_path: Path) -> None:
+    from coordinator_core.ops.workflow_fire import op
+    script = tmp_path / "scratch/warp/ask-20261124T124801-52a3c8.workflow.mjs"
+    with pytest.raises(ValueError, match="explicit execution route"):
+        op._workflow_fire({"script_path": str(script)}, tmp_path)
+
+
+def test_refire_issued_ask_keeps_run_id_in_fire_record(native, tmp_path):
+    original, digest, registry, calls = native
+    run_id = "ask-20261124T233013-8ba37e"
+    script = tmp_path / "scratch" / "warp" / f"{run_id}.workflow.mjs"
+    script.parent.mkdir(parents=True)
+    original.rename(script)
+    params = {"backend": "codex", "executor": "headless", "script_path": str(script),
+              "expected": digest, "refire": True}
+    result = op._workflow_fire(params, tmp_path)
+    assert result["run_id"] == run_id
+    assert fire.fire_status(result["fire_id"], cwd=str(tmp_path))["run_id"] == run_id
+    with pytest.raises(ValueError, match="run_id"):
+        op._workflow_fire({**params, "run_id": "other-run"}, tmp_path)
+    assert len(calls) == 1

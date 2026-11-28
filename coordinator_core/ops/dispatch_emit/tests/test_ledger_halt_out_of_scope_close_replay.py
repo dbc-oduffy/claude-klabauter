@@ -82,7 +82,10 @@ def _sizing_doc() -> dict:
         "xl_exit": None, "status": "routed", "plan": PLAN,
         "premise": {"provenance": "read", "evidence": "test fixture, no real premise verified"},
         "deliverable_id": "dlv-replay-000001",
-        "pm_verbatims": [{"turn": 1, "text": "lint the thing"}],
+        "requirement_register": {"sources": [{"doc": PLAN, "ref": "C1"}], "rows": [
+            {"id": "R1", "source_text": "lint the thing", "anchor": "plan-row:C1",
+             "surface": "internal", "claimed_by": [], "status": "open"},
+        ]},
     }
 
 

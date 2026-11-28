@@ -28,6 +28,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Collection, Iterable, Mapping, Optional, Sequence
 
@@ -200,7 +201,7 @@ class Item:
 
 @dataclass(frozen=True)
 class Ledger:
-    """The rows a run is judged against: every register row not already ruled deferred/waived.
+    """The rows a run is judged against, including original obligations with unverified rulings.
     `withheld` (`{id, reason}`) are the rows a `workflow.revise` ruled out of scope: not judged,
     always carried open."""
 
@@ -208,6 +209,7 @@ class Ledger:
     all_of_pm_ask: bool
     sizing_rel: Optional[str] = None
     withheld: tuple[dict, ...] = ()
+    unauthenticated_dispositions: tuple[str, ...] = ()
     run_id: Optional[str] = None
 
     def to_json(self) -> dict:
@@ -1046,7 +1048,10 @@ def _withheld_revision(row: Mapping) -> Optional[str]:
 
 def ruled_out_ids(rows: Sequence[Mapping]) -> tuple[str, ...]:
     """Ids of the rows a recorded `workflow.revise` ruling withholds, in register order."""
-    return tuple(str(r.get(rr.ROW_ID)) for r in rows if _withheld_revision(r))
+    return tuple(
+        str(r.get(rr.ROW_ID)) for r in rows
+        if not rr.pm_obligation(r.get(rr.ROW_ANCHOR)) and _withheld_revision(r)
+    )
 
 
 def _blocking_runs(value: object) -> list[str]:
@@ -1090,16 +1095,20 @@ def _deferral_reason(row: Mapping) -> Optional[str]:
 def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str]) -> Ledger:
     items = []
     withheld = []
+    disputed = []
     for row in rows:
         if row.get(rr.ROW_STATUS) in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED):
-            revision = _withheld_revision(row)
-            deferral = _deferral_reason(row)
-            if revision:
-                reason = "withheld by out-of-scope ruling" if revision == OUT_OF_SCOPE_REF else f"withheld by revision {revision}"
-                withheld.append({"id": str(row.get(rr.ROW_ID)), "reason": reason})
-            elif deferral:
-                withheld.append({"id": str(row.get(rr.ROW_ID)), "reason": deferral})
-            continue
+            if rr.pm_obligation(row.get(rr.ROW_ANCHOR)):
+                disputed.append(str(row.get(rr.ROW_ID)))
+            else:
+                revision = _withheld_revision(row)
+                deferral = _deferral_reason(row)
+                if revision:
+                    reason = "withheld by out-of-scope ruling" if revision == OUT_OF_SCOPE_REF else f"withheld by revision {revision}"
+                    withheld.append({"id": str(row.get(rr.ROW_ID)), "reason": reason})
+                elif deferral:
+                    withheld.append({"id": str(row.get(rr.ROW_ID)), "reason": deferral})
+                continue
         origin, at = _origin(row.get(rr.ROW_ANCHOR))
         anchor = row.get(rr.ROW_ANCHOR)
         items.append(Item(
@@ -1107,7 +1116,7 @@ def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str])
             anchor if isinstance(anchor, str) else "", _sender(anchor),
         ))
     all_of = all_of or any(i.origin == ORIGIN_PM_VERBATIMS for i in items)  # PM words are never optional
-    return Ledger(tuple(items), all_of, sizing_rel, tuple(withheld))
+    return Ledger(tuple(items), all_of, sizing_rel, tuple(withheld), tuple(disputed))
 
 
 def ledger_ids(rows: Sequence[Mapping]) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -1411,6 +1420,9 @@ def _append_rows(
         unknown = [i for i in dict.fromkeys(named) if i not in by_id]
         if unknown:
             raise MutateAbort(f"out_of_scope names no register row: {', '.join(unknown)}")
+        for rid in named:
+            if rr.pm_obligation(by_id[rid].get(rr.ROW_ANCHOR)):
+                raise MutateAbort(f"out_of_scope {rid}: {rr.PM_DISPOSITION_REASON}; a PM verbatim quote alone is insufficient")
         closed = [i for i in dict.fromkeys(named) if by_id[i].get(rr.ROW_STATUS) in (rr.STATUS_MET, rr.STATUS_WAIVED)]
         if closed:
             raise MutateAbort(f"out_of_scope names a row already {by_id[closed[0]].get(rr.ROW_STATUS)}: {', '.join(closed)}")
@@ -1460,6 +1472,7 @@ def _append_rows(
                 raise MutateAbort(f"retract_row {retract_row} is claimed by {', '.join(rr.claimants(target))}: release the claim first")
             rows = [r for r in rows if str(r.get(rr.ROW_ID)) != retract_row]
         have = {str(r.get(rr.ROW_TEXT) or "").strip() for r in rows}
+        pm_texts = {str(r.get(rr.ROW_TEXT) or "").strip() for r in rows if rr.pm_obligation(r.get(rr.ROW_ANCHOR))}
         live_revisions = {
             str(r.get(rr.ROW_TEXT) or "").strip(): str(r.get(rr.ROW_ID))
             for r in reversed(rows)
@@ -1478,6 +1491,12 @@ def _append_rows(
                 if _origin(held_row.get(rr.ROW_ANCHOR))[0] == ORIGIN_REVISION:
                     held_row[rr.ROW_ANCHOR] = ORIGIN_PM_VERBATIMS
                 reuse["id"] = str(held_row.get(rr.ROW_ID))
+                continue
+            if rr.pm_obligation(anchor):
+                if t in pm_texts:
+                    continue
+                pm_texts.add(t)
+            elif method_step.split_anchor(anchor)[0] == ORIGIN_RELAYED and t in have:
                 continue
             if not t or (method_step.split_anchor(anchor)[0] in (ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_RELAYED) and t in have):
                 continue
@@ -2133,7 +2152,7 @@ def _inherited_revisions(
 ) -> list[tuple[str, str]]:
     """`(text, anchor)` of each revision row still open or partial on a sizing other than `target_rel`
     that this run inherits: `rebound_from` (the sizing it was bound to before), and the sizing each
-    run of its `resumed_from` chain was bound to. A met, deferred or waived row is not carried;
+    run of its `resumed_from` chain was bound to. An unresolved original PM obligation also carries over, including a deferred row;
     a sizing that cannot be read carries nothing."""
     target = run_token.normalize_sizing_rel(root, target_rel)
     sources: list[str] = []
@@ -2152,7 +2171,7 @@ def _inherited_revisions(
         visited.add(prev)
         cur = read_run(run_dir(root, prev)) or {}
         add(cur.get("sizing_rel"))
-    out: dict[str, str] = {}
+    out: dict[tuple[str, bool], str] = {}
     for rel in sources:
         try:
             register = rr.read_register(_sizing_path(root, rel).read_text(encoding="utf-8"))
@@ -2161,12 +2180,17 @@ def _inherited_revisions(
         for row in register.rows if register is not None else ():
             text = str(row.get(rr.ROW_TEXT) or "").strip()
             anchor = row.get(rr.ROW_ANCHOR)
-            if (
-                text and isinstance(anchor, str) and _origin(anchor)[0] == ORIGIN_REVISION
-                and row.get(rr.ROW_STATUS) in (rr.STATUS_OPEN, rr.STATUS_PARTIAL)
-            ):
-                out.setdefault(text, anchor)
-    return [(text, anchor) for text, anchor in out.items()]
+            if not text or not isinstance(anchor, str):
+                continue
+            status = row.get(rr.ROW_STATUS)
+            original = rr.pm_obligation(anchor)
+            if original:
+                if status == rr.STATUS_MET and row.get(rr.ROW_WIRED) is True:
+                    continue
+            elif _origin(anchor)[0] != ORIGIN_REVISION or status not in (rr.STATUS_OPEN, rr.STATUS_PARTIAL):
+                continue
+            out.setdefault((text, original), anchor)
+    return [(text, anchor) for (text, _), anchor in out.items()]
 
 
 def bind(
@@ -3028,6 +3052,33 @@ HAND_BUILT_REASON = (
 )
 
 
+# A bare numeric return value is checkable without interpreting units, ranges or prose.
+_RETURN_NUMBER = r"[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
+_EXACT_RETURN = re.compile(r"\bmust return (" + _RETURN_NUMBER + r")\s*[.!]?\s*$", re.I)
+
+
+def exact_return(item: Item) -> Optional[str]:
+    if not rr.pm_obligation(item.anchor):
+        return None
+    match = _EXACT_RETURN.search(item.text)
+    return match.group(1) if match else None
+
+
+def matches_return(expected: str, value: object) -> bool:
+    observed = str(value).strip()
+    try:
+        return bool(re.fullmatch(_RETURN_NUMBER, observed)) and Decimal(observed) == Decimal(expected)
+    except InvalidOperation:
+        return False
+
+
+def _return_value_refusal(item: Item, row: Mapping) -> Optional[str]:
+    expected = exact_return(item)
+    if expected is None or matches_return(expected, row.get("observed")):
+        return None
+    return f"public caller must return {expected}; recorded result: {str(row.get('observed'))[:160]}"
+
+
 def _hand_built(row: Mapping) -> bool:
     return row.get(rr.JUDGE_EVIDENCE_ENTRY_POINT) == rr.EVIDENCE_HAND_BUILT
 
@@ -3142,7 +3193,7 @@ def judge(
     wave_reviews: Sequence[Mapping] = (), noted_paths: Sequence[str] = (),
     code_paths: Sequence[str] = (), review_verdicts: Optional[int] = None,
     note_ids: Collection[str] = (), mended: Collection[str] = (), run_id: Optional[str] = None,
-    inline_review: Optional[Mapping] = None,
+    measured_ids: Collection[str] = (), inline_review: Optional[Mapping] = None,
 ) -> dict:
     """`{"pass": bool, "failures": [{"id", "reason"}], "open": [{"id", "reason"}]}` for a checker
     `verdict` (`{"items": [{"id", "status", "essential"?, "withheld_by"?, "superseded_by"?,
@@ -3238,6 +3289,11 @@ def judge(
         criterion = None
     credited = _criterion_credited(plan_text) if criterion is not None else frozenset()
     for item in ledger.items:
+        if item.id in ledger.unauthenticated_dispositions or (
+            rr.pm_obligation(item.anchor) and by_id.get(item.id, {}).get("status") == "superseded"
+        ):
+            failures.append({"id": item.id, "reason": rr.PM_DISPOSITION_REASON})
+            continue
         row = by_id.get(item.id)
         if item.text.lstrip().startswith(EM_CONTEXT_MARKER) and not _is_design(item.anchor):
             if row is None or row.get("status") != "met":
@@ -3263,6 +3319,11 @@ def judge(
                     "capture_age_s": blocked["capture_age_s"],
                 })
                 status = "not_met"
+        if status == "met":
+            refusal = _return_value_refusal(item, row)
+            if refusal:
+                failures.append({"id": item.id, "reason": refusal})
+                continue
         if status == "met" and _hand_built(row):
             failures.append({"id": item.id, "reason": HAND_BUILT_REASON})
             status = "not_met"
@@ -3308,7 +3369,7 @@ def judge(
                     "deferred": True, DEFERRER_KEY: who, BLOCKING_RUNS_KEY: blocking,
                 })
         elif status == "met":
-            if not design and item.origin in PM_SOURCED_ORIGINS and not _names_evidence(row):
+            if not design and item.origin in PM_SOURCED_ORIGINS and item.id not in measured_ids and not _names_evidence(row):
                 failures.append({
                     "id": item.id,
                     "reason": "met without evidence: name met_by or evidence, or judge it departed with a reason",
@@ -3370,13 +3431,21 @@ def judge(
                 open_rows.append({
                     "id": item.id, "reason": f"{label} {', '.join(owed)}", "row": owed[0], "command": operator[owed[0]],
                 })
-            elif design or ledger.all_of_pm_ask or row.get("essential", True) is not False:
+            elif design or ledger.all_of_pm_ask or rr.pm_obligation(item.anchor) or row.get("essential", True) is not False:
                 failures.append({
                     "id": item.id,
-                    "reason": "not met" + (" (all_of_pm_ask: every row is mandatory)" if ledger.all_of_pm_ask else ""),
+                    "reason": "not met" + (" (all_of_pm_ask: every row is mandatory)" if ledger.all_of_pm_ask and not design else ""),
                 })
             else:
                 open_rows.append({"id": item.id, "reason": "non-essential"})
+    required = {
+        item.id for item in ledger.items
+        if rr.pm_obligation(item.anchor) or (ledger.all_of_pm_ask and item.origin != ORIGIN_PLAN_ROW and not _is_design(item.anchor))
+    }
+    failures.extend(
+        {"id": row["id"], "reason": row["reason"]} for row in open_rows
+        if row["id"] in required and row["reason"] != "em-context" and not row.get("departed")
+    )
     withheld_ids = {w["id"] for w in ledger.withheld}
     own_notes = set(note_ids) - set(order)
     unknown = sorted(set(by_id) - set(order) - withheld_ids - gated_ids - set(operator) - own_notes)
@@ -3495,6 +3564,8 @@ def apply_verdict(
                 else:
                     row[rr.ROW_STATUS] = rr.STATUS_PARTIAL
             elif status == "superseded" and text_of.get(str(got.get("superseded_by"))):
+                if rr.pm_obligation(row.get(rr.ROW_ANCHOR)):
+                    continue
                 row[rr.ROW_STATUS] = rr.STATUS_WAIVED
                 row[rr.ROW_RULING] = {
                     rr.RULING_SOURCE: "pm", rr.RULING_QUOTE: text_of[str(got["superseded_by"])],
@@ -3852,6 +3923,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["note"] = idle_refusal
     elif unproven:
         out.update(_recheck_unproven(params["run_id"]))
+    elif not live and not halted and not ledger.sizing_rel and (
+        retained := _retained_raw_mint(root, dir_, params["run_id"])
+    ):
+        out["next"] = retained
+        out["note"] = "Revision recorded. Reconcile the original submit receipt and fire registry before continuing this mint."
     elif not live:
         out.update(_refire(ledger.sizing_rel, root, unclaimed=refire_claims, halted=halted))
     elif verify_staged(dir_):
@@ -4340,6 +4416,24 @@ def _own_token_unproven(root: Path, run_id: str, run_token) -> bool:
 
 
 RECHECK_AFTER_SECONDS = 120
+
+
+def _retained_raw_mint(root: Path, directory: Path, run_id: str) -> dict | None:
+    """A minted stage with an emitted handle can precede the first fire record."""
+    script = root / "scratch" / "warp" / (run_id + ".workflow.mjs")
+    try:
+        stage = json.loads((directory / "run-stage.json").read_bytes())
+        if not isinstance(stage, dict) or stage.get("stage") != "minted":
+            return None
+        receipt = json.loads(script.with_suffix(".mjs.emitted.json").read_bytes())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(receipt, dict) or receipt.get("fire") is not None:
+        return None
+    digest = receipt.get("sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return None
+    return {"kind": "reconcile_mint", "run_id": run_id, "script_path": str(script), "expected": digest}
 
 
 def _recheck_unproven(run_id: str) -> dict:

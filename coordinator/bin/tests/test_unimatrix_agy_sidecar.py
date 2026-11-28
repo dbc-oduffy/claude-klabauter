@@ -43,6 +43,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_CONVERSATION_ID", raising=False)
     spawned = []
     monkeypatch.setattr(launch.subprocess, "Popen", lambda cmd, **kw: spawned.append((cmd, kw["env"])) or FakeProc())
+    monkeypatch.setattr(launch.os, "kill", lambda pid, sig: None)
     yield spawned
     ls.close()
 

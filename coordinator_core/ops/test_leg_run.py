@@ -11,7 +11,8 @@ re-runs the reds at `--base-sha`, and reports `new_red`: red post-land, not red 
 
 Without `--touched` the targets run in the same mirror at HEAD plus the run-owned blobs, never in the live
 checkout, so another session's uncommitted edit cannot change the verdict (`own_tree`; `own_tree_skipped` when
-the mirror cannot be prepared and the leg runs in place).
+the mirror cannot be prepared and the leg runs in place). With --measured-tree, existing candidate files
+come from --head-sha; only explicit test targets absent from that tree may be added. A mirror failure is reported.
 
 Usage: python -m coordinator_core.ops.test_leg_run [--base-sha <sha>] [--head-sha <sha>]
        [--base-export-out <path>] [--budget-s N] [--touched <path>]... [--repo-root <path>] --out <path> -- <ids and test files...>
@@ -84,6 +85,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--touched", action="append", default=[])
     p.add_argument("--repo-root")
     p.add_argument("--run-id")
+    p.add_argument("--measured", action="store_true")
+    p.add_argument("--measured-tree", action="store_true", help="test the measured commit without subsequent run edits")
     p.add_argument("--out", required=True)
     return p
 
@@ -836,28 +839,37 @@ def _recorded_sources(root: Path, run_id: Optional[str]) -> tuple[list[str], dic
 
 
 def _own_tree(stack: contextlib.ExitStack, root: Path, head_sha: Optional[str], result: dict,
-              run_id: Optional[str] = None, targets: Sequence[str] = (), declared_run: Optional[str] = None) -> str:
+              run_id: Optional[str] = None, measured: bool = False,
+              targets: Sequence[str] = (), declared_run: Optional[str] = None) -> str:
     """The directory the no-touched leg runs pytest in: the shared-clone mirror at `head_sha` (default HEAD) plus
     the run-owned blobs, held under `stack`, so another session's uncommitted edit in `root` never reaches the
     verdict. A non-git `root` has no foreign dirt to exclude and runs in place; a mirror that cannot be prepared
     runs in place too, noted as `own_tree_skipped` (the leg never refuses over it). `own_tree` records the
     commit and the overlaid paths."""
     if not (root / ".git").exists():
+        if measured:
+            raise OSError("measured test requires a Git repository")
         return str(root)
     try:
         mroot = stack.enter_context(cov._mirror_lock(root, "test-leg-run"))
         sha = cov._commit_sha(root, head_sha or "HEAD")
-        owned, overrides = _declared_overlay(root, declared_run)
-        recorded, recorded_overrides = _recorded_sources(root, declared_run)
-        overrides = {**recorded_overrides, **overrides}
-        overlay = list(dict.fromkeys([*_run_blob_paths(root, "", run_id), *owned, *recorded, *overrides]))
-        dest = _prepare_live(root, mroot, sha, overlay, overrides)
-        live = _live_only(root, dest, targets, _reviewed_scope(root, declared_run))
-        if live:
-            overlay = [*overlay, *live]
+        if measured:
+            overlay = []
+            dest = cov._prepare_guarded(root, mroot, sha, cov._no_leg, overlay)
+        else:
+            owned, overrides = _declared_overlay(root, declared_run)
+            recorded, recorded_overrides = _recorded_sources(root, declared_run)
+            overrides = {**recorded_overrides, **overrides}
+            overlay = list(dict.fromkeys([*_run_blob_paths(root, "", run_id), *owned, *recorded, *overrides]))
             dest = _prepare_live(root, mroot, sha, overlay, overrides)
+            live = _live_only(root, dest, targets, _reviewed_scope(root, declared_run))
+            if live:
+                overlay = [*overlay, *live]
+                dest = _prepare_live(root, mroot, sha, overlay, overrides)
     except (cov.ExportError, OSError, ValueError, subprocess.SubprocessError) as exc:
         stack.close()
+        if measured:
+            raise OSError(f"measured test tree unavailable: {exc}") from exc
         result["own_tree_skipped"] = f"{type(exc).__name__}: {exc}"[:300]
         return str(root)
     _MIRRORS.add(str(dest))
@@ -938,12 +950,14 @@ def _stamp_slow(result: dict, slow: list[dict]) -> None:
 
 def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
         base_export_out: Optional[str], budget_s: float, cwd: str, touched: Sequence[str] = (),
-        run_id: Optional[str] = None, declared_run: Optional[str] = None) -> dict:
+        run_id: Optional[str] = None, measured: bool = False, measured_tree: bool = False,
+        declared_run: Optional[str] = None) -> dict:
     """The `test`-shaped verdict for `targets`; `over_budget` true when the deadline expired. With `touched`
     (the landing's changed paths) the leg runs in the shared-clone mirror instead of `cwd` and adds `new_red`,
     `importer_targets`, `targets_run`; `head_sha` is then the post-land rev (default HEAD). `run_id` limits the run-owned overlay to that run's
     record; None overlays every run record. The untracked paths the manifest of `declared_run` (default `run_id`)
     declares are overlaid too, sources and tests alike."""
+    measured = measured or measured_tree
     decl = declared_run or run_id
     started = time.monotonic()
     _LEG_ROOT[:] = [Path(cwd)]
@@ -974,7 +988,9 @@ def run(targets: list[str], *, base_sha: Optional[str], head_sha: Optional[str],
             result["elapsed_s"] = round(time.monotonic() - started, 3)
             result["budget_s"] = budget_s
             return result
-        run_cwd = _own_tree(stack, Path(cwd), head_sha, result, run_id, targets, decl)
+        run_cwd = _own_tree(
+            stack, Path(cwd), head_sha, result, run_id,
+            measured=measured, targets=targets, declared_run=decl)
         targets, result["not_a_test"] = _split_not_a_test(targets, Path(run_cwd))
         if not targets:
             _tally(result, 5, ())
@@ -1215,6 +1231,9 @@ def main(argv: list[str]) -> int:
     if args is None or (not targets and not args.base_sha):
         print(f"test_leg_run: bad arguments\n{USAGE}", file=sys.stderr)
         return EXIT_USAGE
+    if args.measured_tree and (args.touched or not re.fullmatch(r"[0-9a-f]{40}", args.head_sha or "")):
+        print("--measured-tree requires a full --head-sha and a test leg without --touched", file=sys.stderr)
+        return EXIT_USAGE
     budget_s = args.budget_s if args.budget_s is not None else TEST_LEG_MINUTES_BUDGET * 60.0
     root, root_error = _leg_root(args.repo_root)
     if root is None:
@@ -1226,6 +1245,24 @@ def main(argv: list[str]) -> int:
         print(json.dumps(refused))
         return EXIT_USAGE
     cwd = str(root)
+    if args.measured:
+        from coordinator_core.ops._path_guard import safe_id
+        from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+
+        try:
+            if not args.run_id or not safe_id(args.run_id) or args.touched or args.head_sha:
+                raise ValueError("expected --run-id with no conflicting revision or touched-path override")
+            record = json.loads(measured_rev_record_path(root, args.run_id).read_bytes())
+            sha = record.get("sha") if isinstance(record, dict) else None
+            if not isinstance(sha, str) or not re.fullmatch("[0-9a-f]{40}", sha):
+                raise ValueError("missing measured commit SHA")
+            args.head_sha = sha
+        except (OSError, ValueError) as exc:
+            error = {"status": "error", "tests_run": 0, "tests_failed": 0, "summary": str(exc)}
+            dest = Path(args.out)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(json.dumps(error) + "\n", encoding="utf-8")
+            return EXIT_USAGE
     derived = not targets
     if derived:
         targets = _derive_targets(args.base_sha, args.head_sha, cwd)
@@ -1243,7 +1280,7 @@ def main(argv: list[str]) -> int:
     prior = _prior_record(Path(args.out))
     result = run(targets, base_sha=args.base_sha, head_sha=args.head_sha,
                  base_export_out=args.base_export_out, budget_s=budget_s, cwd=cwd, touched=args.touched,
-                 run_id=_run_id(args), declared_run=_declared_run(args))
+                 run_id=_run_id(args), measured=args.measured or args.measured_tree, declared_run=_declared_run(args))
     if derived:
         result["derived_targets"] = targets
     _flag_fixture_edits(result, prior, root, _run_id(args) or _declared_run(args), measured_at)

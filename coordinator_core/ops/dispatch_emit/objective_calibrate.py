@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.git.run import run_git_stream
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.dispatch_emit import objective_contract as oc
 from coordinator_core.win_portability import no_console_creationflags
@@ -205,4 +206,4 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     Runs the falsifier at the current tree (base) and at each credited sha; appends a wave-0
     calibration loop line; pins falsifier_sha256 and pinned_at only on a passing verdict.
     """
-    return calibrate(params, Path(repo_root) if repo_root else Path.cwd())
+    return calibrate(params, main_worktree_root(repo_root) if repo_root else Path.cwd())

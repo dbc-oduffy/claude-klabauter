@@ -310,7 +310,12 @@ def _posix_background_preexec(prior):
     def preexec() -> None:
         if prior is not None:
             prior()
-        os.nice(POSIX_BACKGROUND_NICE)
+        try:
+            os.nice(POSIX_BACKGROUND_NICE)
+        except PermissionError:
+            # At Darwin nice 19, lowering priority further is already a no-op.
+            if sys.platform != "darwin" or os.getpriority(os.PRIO_PROCESS, 0) != 19:
+                raise
         if cpus:
             os.sched_setaffinity(0, cpus)
 

@@ -217,5 +217,41 @@ def test_codex_anchors_tool_shell_and_owns_its_heavy_processes():
 
 
 def test_codex_helper_image_is_not_a_session_anchor():
+    from coordinator_core.bash_guards._session_census import _is_claude
+
     rows = [R(1, 0, 10, "codex-windows-sandbox-service.exe"), R(2, 1, 20, "pwsh.exe")]
     assert resolve_anchor({"pid": 2}, _Prims(rows)) is None
+    assert _is_claude("codex.exe")
+    assert _is_claude("codex-aarch64-apple-darwin")
+    assert not _is_claude("codex-windows-sandbox-service.exe")
+    assert not _is_claude("codex-helper")
+    triple = [R(1, 0, 10, "codex-aarch64-apple-darwin"), R(2, 1, 20, "bash")]
+    assert resolve_anchor({"pid": 2}, _Prims(triple)).pid == 1
+
+
+def test_grok_binary_anchors_its_shell_and_not_the_launcher():
+    rows = [R(1, 0, 10, "grok-coordinator"), R(2, 1, 20, "Python"),
+            R(3, 2, 30, "grok-1.0.92-macos-aarch64"), R(4, 3, 40, "bash"),
+            R(5, 4, 50, "Python")]
+    p = _Prims(rows)
+    assert resolve_anchor({"pid": 5}, p) == rows[2]
+    assert [row.pid for row in session_census(rows[2], p).heavy] == [5]
+
+
+def test_plain_grok_image_is_a_session_anchor():
+    rows = [R(1, 0, 10, "grok.exe"), R(2, 1, 20, "bash.exe"), R(3, 2, 30, "python.exe")]
+    assert resolve_anchor({"pid": 3}, _Prims(rows)).pid == 1
+
+
+def test_a_later_grok_version_is_still_the_anchor():
+    rows = [R(1, 0, 10, "grok-9.0.1-linux-x64"), R(2, 1, 20, "bash"), R(3, 2, 30, "python")]
+    assert resolve_anchor({"pid": 3}, _Prims(rows)).pid == 1
+
+
+def test_grok_launcher_and_helper_are_not_session_anchors():
+    assert resolve_anchor(
+        {"pid": 2}, _Prims([R(1, 0, 10, "grok-coordinator"), R(2, 1, 20, "bash")])
+    ) is None
+    assert resolve_anchor(
+        {"pid": 2}, _Prims([R(1, 0, 10, "grok-helper"), R(2, 1, 20, "bash")])
+    ) is None

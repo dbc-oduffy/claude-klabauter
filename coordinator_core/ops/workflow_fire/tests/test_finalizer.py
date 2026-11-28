@@ -57,6 +57,7 @@ def test_host_commit_keeps_live_codex_author_not_host_ancestry(host, monkeypatch
     approve(host)
     commit(host.repo, ['a.py'], 'Scoped product')
     assert len(calls) == 1
+    assert calls[0][2].splitlines().count('Session-Id: ' + SID) == 1
     assert host.state['commits'][0]['session_id'] == SID
     assert host.state['commits'][0]['vendor'] == 'codex'
     assert F.review_owner(SID) == PARENT
@@ -414,3 +415,91 @@ def test_approved_deletions_remain_absence_guards_not_content_hash_entries(host,
 
     writer(host.repo, ['receipt.json'], 'Scoped product', deleted_paths=['a.py'])
     assert seen == [(['a.py'], {'receipt.json': digest(host, 'receipt.json')})]
+
+
+def test_observed_landing_uses_only_bound_command_actor_and_assignment(host, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import land_run
+    from coordinator_core.session import native_actor
+    import json
+    import shlex
+
+    action = F.ObservedLanding.__new__(F.ObservedLanding)
+    action.repo, action.position, action.contract = host.repo, host.position.copy(), host.contract
+    action.parent = PARENT
+    action.request_id = host.actor.request_id
+    action.fire_id = host.actor.fire_id
+    action.params = {'run_id': 'fixture', 'session_id': PARENT}
+    action.sizing_session = 'observed-scout'
+    action.command = 'python3 /installed/wait.py /host/issued'
+    action.consumed, action.result = False, None
+    actor = native_actor.VerifiedCodexExecActor(SID, str(host.repo), 22, 1.0, 'codex', '0'*64,
+                                                 PARENT, action.fire_id, action.request_id)
+    calls = []
+
+    def handler(params, repo):
+        assert native_actor.current_verified_native_actor() == actor
+        assert F.require_session(params) == SID
+        assert F.review_owner(SID) == PARENT
+        assert 'observed-scout' in land_run._firing_sessions(repo, 'fixture', SID)
+        assert 'foreign-worker' not in land_run._firing_sessions(repo, 'fixture', SID)
+        assert 'observed-scout' not in land_run._firing_sessions(repo, 'other', SID)
+        calls.append(params)
+        F._ACTIVE.get()['commits'].append({'sha': 'c'*40})
+        return {'committed': True, 'sha': 'c'*40}
+
+    monkeypatch.setattr(land_run, '_handler', handler)
+    command = shlex.join(['/bin/bash', '-c', action.command])
+    action.acknowledge(actor, command + ' extra')
+    assert not calls
+    from dataclasses import replace
+    with pytest.raises(F.FinalizerRefused, match='does not own'):
+        action.acknowledge(replace(actor, fire_id='other'), command)
+    with (host.repo/'reply.json').open('w+b') as stream:
+        action.reply_stream = stream
+        action.acknowledge(actor, command)
+        stream.seek(0)
+        assert json.load(stream) == action.result
+    with pytest.raises(F.FinalizerRefused, match='already consumed'):
+        action.acknowledge(actor, command)
+    assert calls == [{'run_id': 'fixture', 'session_id': SID}]
+
+
+def test_durable_scope_survives_twin_retirement_and_rejects_changed_root(tmp_path):
+    root = tmp_path / 'root.mjs'
+    twin = tmp_path / 'twin.mjs'
+    root.write_text('original\n')
+    twin.write_text('staged\n')
+    staged = F.snapshot_contract(tmp_path, twin)
+    issued = {'script_path': str(root), 'script_sha256': hashlib.sha256(root.read_bytes()).hexdigest()}
+    durable = F.durable_landing_contract(tmp_path, staged, issued)
+    twin.unlink()
+    F.verify_contract(tmp_path, durable)
+    root.write_text('changed\n')
+    with pytest.raises(F.FinalizerRefused, match='changed after fire'):
+        F.verify_contract(tmp_path, durable)
+
+
+def test_only_unchanged_issued_sizing_can_accompany_reviewed_product(host):
+    sizing = 'state/sizings/2026-11/original.yaml'
+    file = host.repo / sizing
+    file.parent.mkdir(parents=True)
+    file.write_text('original')
+    contract = host.state['assignment']['terminal_contract']
+    contract['declared_paths'].append(sizing)
+    contract.update(issued_sizing=sizing, files={sizing: digest(host, sizing)})
+    host.state['observed_landing'] = True
+    F.authorize_product(host.repo, ['a.py', sizing], [], {'a.py': digest(host)})
+    assert host.state['approved_commit']['host_metadata']['gate-issued-sizing'] == [sizing]
+    file.write_text('rewritten')
+    with pytest.raises(F.FinalizerRefused, match='issued sizing bytes changed'):
+        F.authorize_product(host.repo, ['a.py', sizing], [], {'a.py': digest(host)})
+    contract['manifest_declared_paths'] = [sizing]
+    with pytest.raises(F.FinalizerRefused, match='missing reviewed product'):
+        F.authorize_product(host.repo, ['a.py', sizing], [], {'a.py': digest(host)})
+
+def test_foreign_trailer_refuses_before_git_write(host, monkeypatch):
+    commit, calls = operation(monkeypatch, host)
+    approve(host)
+    with pytest.raises(F.FinalizerRefused, match='conflicts'):
+        commit(host.repo, ['a.py'], 'Product\n\nSession-Id: ' + PARENT)
+    assert calls == []

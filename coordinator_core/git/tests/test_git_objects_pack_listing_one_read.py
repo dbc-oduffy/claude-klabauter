@@ -56,7 +56,9 @@ def _count_scandir(monkeypatch) -> dict[str, int]:
     counts: dict[str, int] = {}
     real = os.scandir
 
-    def counting(path: str = ".") -> _ScandirIterator[str]:
+    def counting(path: str | int = ".") -> _ScandirIterator[str]:
+        if isinstance(path, int):
+            return real(path)
         key = os.path.normcase(os.path.abspath(os.fspath(path)))
         counts[key] = counts.get(key, 0) + 1
         return real(path)

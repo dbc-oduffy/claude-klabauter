@@ -155,6 +155,7 @@
 
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
+#include <libproc.h>
 #endif
 
 extern char **environ;
@@ -392,7 +393,10 @@ static void resolve_own_basename(void) {
     char raw[PATH_MAX];
     uint32_t raw_size = (uint32_t)sizeof(raw);
     if (_NSGetExecutablePath(raw, &raw_size) != 0) return;
-    if (realpath(raw, exe_path) == NULL) return;
+    /* Seatbelt can deny traversal of an ancestor of a readable executable.
+     * The kernel image path still identifies this process's executable. */
+    if (realpath(raw, exe_path) == NULL &&
+        proc_pidpath(getpid(), exe_path, sizeof(exe_path)) <= 0) return;
 #else
     ssize_t n = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
     if (n <= 0 || (size_t)n >= sizeof(exe_path) - 1) return;
@@ -1737,6 +1741,58 @@ static int fall_through(int argc, char **argv, const char *engine_root) {
 }
 
 
+
+#ifdef __APPLE__
+/* A launcher-selected submit never falls through to another engine. Only the
+ * command and its cwd cross this socket. The host has its own launch identity. */
+static int issued_host_submit(const char *address, int argc, char **argv) {
+    char dir[PATH_MAX], cwd[PATH_MAX];
+    if (argc != 4 || strcmp(argv[2], "--params-file") != 0 ||
+        strcmp(argv[3], ".coordinator-local/em-submit.json") != 0 ||
+        address[0] != '/' || !path_parent(address, dir, sizeof(dir)) ||
+        !dir_is_private(dir) || !getcwd(cwd, sizeof(cwd))) {
+        fputs("host submit requires its issued socket and canonical params file\n", stderr);
+        return 1;
+    }
+    int fd = connect_socket(address);
+    uid_t uid;
+    gid_t gid;
+    if (fd < 0 || getpeereid(fd, &uid, &gid) != 0 || uid != getuid()) {
+        if (fd >= 0) close(fd);
+        fputs("issued host submit endpoint unavailable\n", stderr);
+        return 1;
+    }
+    buf_t frame = {0}, response = {0};
+    int rc = 1;
+    if (buf_init(&frame, 256) && buf_init(&response, 4096) &&
+        buf_append_cstr(&frame, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"invoke.from_argv\","
+                             "\"params\":{\"argv\":[\"engine_ask.submit\",\"--params-file\","
+                             "\".coordinator-local/em-submit.json\"],\"cwd\":\"") &&
+        buf_append_json_escaped(&frame, cwd, strlen(cwd)) &&
+        buf_append_cstr(&frame, "\"}}\n") && write_frame_bounded(fd, frame.data, frame.len) &&
+        read_line_bounded(fd, &response, DOOR_READ_DEADLINE_MS) == READ_GOT_LINE) {
+        result_fields_t fields;
+        int have_error;
+        long error_code;
+        if (parse_response_envelope(response.data, response.len, &fields, &have_error, &error_code)) {
+            write_all_fd(STDOUT_FILENO, fields.stdout_buf.data, fields.stdout_buf.len);
+            write_all_fd(STDERR_FILENO, fields.stderr_buf.data, fields.stderr_buf.len);
+            rc = (int)fields.exit_code;
+        } else {
+            fputs("invalid host submit reply; reconcile the original request\n", stderr);
+        }
+        free(fields.stdout_buf.data);
+        free(fields.stderr_buf.data);
+    } else {
+        fputs("host submit outcome unconfirmed; reconcile the original request\n", stderr);
+    }
+    free(frame.data);
+    free(response.data);
+    close(fd);
+    return rc;
+}
+#endif
+
 int main(int argc, char **argv) {
     
     signal(SIGPIPE, SIG_IGN);
@@ -1804,6 +1860,18 @@ int main(int argc, char **argv) {
 
     resolve_own_basename();
 
+#ifdef __APPLE__
+    const char *issued_socket = getenv("COORDINATOR_HOST_SUBMIT_SOCKET");
+    if (issued_socket && !g_door_hook_mode && argc >= 2  &&
+        strcmp(argv[1], "engine_ask.submit") == 0) {
+        if (!g_own_basename_ok || strcmp(door_entrypoint_basename(), DOOR_DEFAULT_ENTRYPOINT) != 0) {
+            fputs("issued submit requires the verified coordinator-invoke image\n", stderr);
+            return 1;
+        }
+        return issued_host_submit(issued_socket, argc, argv);
+    }
+#endif
+
     /* ---- -2. THE INSTALL-CLASS GATE (door_core.h ::
      * door_basename_is_install_class) -- checked immediately after this
      * image's own basename resolves, before engine-root resolution and
@@ -1822,6 +1890,7 @@ int main(int argc, char **argv) {
     if (!g_own_basename_ok || door_basename_is_install_class(door_entrypoint_basename())) {
         return fall_through(argc, argv, NULL);
     }
+
 
     /* ---- -1. THE PER-INVOCATION ESCAPE HATCH (COORDINATOR_WARM) -- checked
      * before engine-root resolution and before the socket dial, matching the

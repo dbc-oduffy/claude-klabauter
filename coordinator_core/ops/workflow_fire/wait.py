@@ -46,6 +46,8 @@ def _deadline(record: dict) -> tuple[Optional[float], Optional[float]]:
 
 
 def _commit_sha(record: dict, cwd: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    if record.get("outcome") == "not_landed":
+        return None, "run did not land"
     landing = record.get("landing")
     if isinstance(landing, dict) and landing.get("sha") and landing.get("committed") is not False:
         return str(landing["sha"]), None
@@ -66,7 +68,7 @@ def _failure_reason(record: dict) -> Optional[str]:
     """Why an exited fire failed, from the record's own evidence; None when it did not fail.
 
     Failed means a nonzero ``exit_code`` or a non-clean settled ``outcome``. The parts are
-    the outcome, its failure subtype and basis, the execution note, then the last startup-log
+    the outcome, its recorded error, failure subtype and basis, the execution note, then the last startup-log
     line, so a nonzero exit never reaches the caller as a bare number.
     """
     if record.get("state") != "exited":
@@ -81,7 +83,7 @@ def _failure_reason(record: dict) -> Optional[str]:
         parts.append(f"workflow exit_code={code}")
     if outcome:
         parts.append(f"outcome={outcome}")
-    for key in ("failure_subtype", "outcome_basis", "execution_note"):
+    for key in ("error", "failure_subtype", "outcome_basis", "execution_note"):
         value = record.get(key)
         if isinstance(value, str) and value.strip():
             parts.append(f"{key}={value.strip()}")

@@ -29,7 +29,8 @@ def test_the_leg_runs_test_leg_run_in_the_background_and_reads_its_out_file():
     assert "PowerShell:" in call and "Run once using the native shell" in call
     assert 'PYTHONPATH=' not in call
     assert "(_manifest.test_targets ?? []).map(" in call
-    assert "Read /run/test-leg.json" in call and "verbatim as the test_result" in call
+    assert "--measured --run-id r1" in call
+    assert "Read /run/test-leg.json" in call and "copy status, tests_run, and tests_failed" in call
 
 
 def test_the_leg_carries_no_deadline_clause_and_no_bash_timeout():

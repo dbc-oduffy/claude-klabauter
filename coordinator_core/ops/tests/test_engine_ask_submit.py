@@ -73,7 +73,11 @@ def _dispatch(params):
 
 def test_submit_returns_run_handle_through_dispatch(params, script, seen) -> None:
     result = _dispatch({**params, "fire": False})
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
     assert result == {
+        "fire_params": {"script_path": str(script), "expected": digest, "notify_to": "sess-1",
+                        "executor": "headless", "backend": "codex", "caller_session_id": "sess-1",
+                        "run_id": "run-abc123"},
         "run_id": "run-abc123",
         "script_path": str(script),
         "sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
@@ -236,6 +240,11 @@ def test_fire_false_mints_without_firing(params, seen, monkeypatch: pytest.Monke
     )
     result = _dispatch({**params, "fire": False})
     assert result["run_id"] == "run-abc123" and "fire" not in result and "fire_error" not in result
+    continuation = result["fire_params"]
+    assert continuation["executor"] == "headless"
+    assert continuation["backend"] == "codex"
+    assert continuation["caller_session_id"] == params["session_id"]
+    assert continuation["expected"] == result["sha256"]
 
 
 @pytest.mark.parametrize("fire", ["false", "", 0, 1, None])
@@ -554,3 +563,56 @@ def test_native_codex_submit_identity(tmp_path, monkeypatch, actual_sid, role, s
     with bind_caller_env(env):
         params = op._with_bound_identity({}, tmp_path)
     assert params == ({"session_id": "thread", "caller": "codex-em", "cwd": str(tmp_path)} if supplied else {})
+
+
+def test_submit_correlates_launcher_and_live_native_em(tmp_path, launcher_env, seen, monkeypatch):
+    import os
+    import uuid
+
+    import psutil
+    from coordinator_core.ops.workflow_fire import headless_em_grant as grant
+    from coordinator_core.session import external_registry
+
+    native = str(uuid.uuid4())
+    launcher_env["CODEX_THREAD_ID"] = native
+    process = psutil.Process(os.getpid())
+    observed = dict(native_session_id=native, launcher_session_id="sess-1", pid=process.pid,
+                    start_epoch=int(process.create_time()), cwd=str(tmp_path.resolve()))
+    row = dict(session_id=native, pid=process.pid, start_epoch=observed["start_epoch"],
+               cwd=str(tmp_path), role="em", provider="codex")
+    monkeypatch.setattr(external_registry, "lookup", lambda thread: row if thread == native else None)
+    assert grant.observe_codex_registration(launcher_env, native, process.pid, str(tmp_path))
+
+    params = {**_no_args(tmp_path), "fire": False}
+    assert op._engine_ask_submit(params, tmp_path)["launch_observation"] == observed
+    row["start_epoch"] -= 1
+    assert "launch_observation" not in op._engine_ask_submit(params, tmp_path)
+
+
+@pytest.mark.parametrize("changed", [None, "run_id", "script_sha256"])
+def test_default_fire_preserves_handle_and_reports_conflicting_identity(params, seen, monkeypatch, changed):
+    from coordinator_core.invoke.__main__ import _dispatch_argv
+
+    from coordinator_core.testing.tmp_git_repo import init_tmp_git_repo
+
+    init_tmp_git_repo(Path(params["cwd"]))
+    calls = []
+
+    def fire(request, repo_root):
+        receipt = {"fire_id": "b" * 32, "run_id": request["run_id"], "script_sha256": request["expected"]}
+        if changed:
+            receipt[changed] = "other"
+        calls.append(receipt)
+        return receipt
+
+    monkeypatch.setattr("coordinator_core.ops.workflow_fire.op._workflow_fire", fire)
+    stdout, _, code = _dispatch_argv([OP, json.dumps(params)], params["cwd"], allow_warm=False)
+    assert "result" in json.loads(stdout), stdout
+    result = json.loads(stdout)["result"]
+    assert calls == [result["fire"]]
+    assert result["run_id"] == "run-abc123"
+    if changed:
+        assert changed in result["fire_error"]
+    else:
+        assert "fire_error" not in result
+    assert code == int(bool(changed))

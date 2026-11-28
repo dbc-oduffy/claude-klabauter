@@ -158,6 +158,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.session_ceremonies", "six provider-neutral session ceremony doors"),
     ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),
     ("coordinator_core.ops.ceremony.commit_v2", 'registers "ceremony.commit_v2"'),
+    ("coordinator_core.ops.push_state", 'registers "push.state"'),
     ("coordinator_core.ops.ceremony.hand_land", 'registers "ceremony.hand_land"'),
     ("coordinator_core.ops.ceremony.governed_by", 'registers "governed_by.ledger"'),
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),

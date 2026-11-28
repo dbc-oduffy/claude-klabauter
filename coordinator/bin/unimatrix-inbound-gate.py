@@ -22,6 +22,7 @@ Boxes probe one at a time, so a digest new since the baseline is that box's prob
 from __future__ import annotations
 
 import argparse
+import base64
 import importlib.util
 import re
 import shlex
@@ -157,6 +158,35 @@ def far_send_command() -> str:
             'exec "$PY" "$F" "$@"; fi; exec "$F" "$@"); s')
 
 
+def _windows_probe_command(addressed: str, name: str, text: str) -> str:
+    """Carry literal arguments across either Windows SSH login shell."""
+    def literal(value):
+        return "'" + value.replace("'", "''") + "'"
+
+    recipients = ", ".join(literal(target) for target in dict.fromkeys((addressed, name)))
+    script = f"""
+$root = $env:COORDINATOR_SETTINGS_HOME
+if (!$root) {{ $root = Join-Path $HOME '.coordinator-claude-settings' }}
+$sender = Join-Path $root 'unimatrix/unimatrix-send.py'
+foreach ($python in 'py', 'python', 'python3') {{
+    $exe = Get-Command $python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (!$exe) {{ continue }}
+    $prefix = @()
+    if ($python -eq 'py') {{ $prefix = @('-3') }}
+    & $exe.Source @prefix -c 'import sys; sys.exit(sys.version_info < (3, 11))'
+    if ($LASTEXITCODE -ne 0) {{ continue }}
+    foreach ($recipient in @({recipients})) {{
+        & $exe.Source @prefix $sender --to $recipient {literal(text)}
+        if ($LASTEXITCODE -eq 0) {{ exit 0 }}
+    }}
+    exit $LASTEXITCODE
+}}
+exit 127
+"""
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    return f"powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}"
+
+
 def probe_box(member: dict, target: tuple[str, str], *, run_ssh: Any, fetch_receipts: Any, key: str,
               send_command: str | None = None, timeout: float = DEFAULT_TIMEOUT_S,
               interval: float = DEFAULT_INTERVAL_S, sleep: Any = time.sleep, now: Any = time.time,
@@ -172,12 +202,16 @@ def probe_box(member: dict, target: tuple[str, str], *, run_ssh: Any, fetch_rece
     since = now() - 1
     baseline = _digests(fetch_receipts(sid, since))
     addressed = f"{name}.{_fold(local_box)}" if local_box else name
-    text = shlex.quote(new_probe(box))
-    base = send_command or far_send_command()
-    command = f"{base} --to {shlex.quote(addressed)} {text}"
-    if addressed != name:
-        # A far box may know this box under another label (an address, `<box>-lan`): fall back to the bare name.
-        command += f" || {'s' if send_command is None else base} --to {shlex.quote(name)} {text}"
+    probe = new_probe(box)
+    if send_command is None and _sibling("lib/unimatrix_box_mux.py", "unimatrix_inbound_gate_mux").far_platform(box) == "win32":
+        command = _windows_probe_command(addressed, name, probe)
+    else:
+        text = shlex.quote(probe)
+        base = send_command or far_send_command()
+        command = f"{base} --to {shlex.quote(addressed)} {text}"
+        if addressed != name:
+            # A far box may know this box under another label (an address, `<box>-lan`): fall back to the bare name.
+            command += f" || {'s' if send_command is None else base} --to {shlex.quote(name)} {text}"
     res = run_ssh(member, key, command)
     retried = False
     if res.returncode == 255 and _CONNECT_TIMEOUT.search(_text(res.stderr)):
@@ -265,7 +299,7 @@ def main(argv=None, out=None, run_ssh=None, fetch_receipts=None, route_for=None,
     except Exception as ex:
         print(f"inbound gate: membership unusable: {type(ex).__name__}: {ex}", file=sys.stderr)
         return 2
-    far = [m for m in members if m.get("box") != local_box]
+    far = [m for m in members if _fold(m.get("box")) != _fold(local_box)]
     if not far:
         print("inbound gate: no far box is enrolled; nothing to probe", file=out)
         return 0

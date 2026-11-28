@@ -32,6 +32,24 @@ def test_mint_round_trips_to_one_dispatchable_row(tmp_path: Path) -> None:
     assert "the thing passes" in rows[0].body
 
 
+@pytest.mark.parametrize("criterion", [
+    "On the detached implementation commit the public caller sums 3 and 4 to 7.",
+    "The public caller sums 3 and 4 to 7 under pytest.",
+])
+def test_executor_proves_local_behavior_and_em_owns_delivery(tmp_path: Path, criterion: str) -> None:
+    sizing = dict(SIZING, exit_criterion={"statement": criterion})
+    text, path = mint_xs_spine(sizing, sizing_rel=SIZING_REL, writes=["records.py"], out_dir=tmp_path)
+    path.write_text(text, encoding="utf-8")
+    row, = read_spine(path)
+    assert f"Verification (run acceptance criterion): {criterion}" in row.body
+    from coordinator_core.ops.dispatch_emit.emit import _row_prompt
+    brief = _row_prompt(row, str(path))
+    assert "Report the observed result on your working tree" in brief
+    assert "The EM owns final verification on the delivered revision" in brief
+    assert "this row is DONE only when this holds" not in row.body
+    assert list(row.writes) == ["records.py"]
+
+
 def test_plan_body_beside_code_routes_to_sidecar_and_body_says_so(tmp_path: Path) -> None:
     text, path = mint_xs_spine(
         SIZING,

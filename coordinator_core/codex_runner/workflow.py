@@ -6,9 +6,7 @@ configured default. Caller identity is lineage, never a child's own session ID.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
-import sys
-import tempfile
+from contextlib import nullcontext
 import json
 import hashlib
 import stat
@@ -17,6 +15,9 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+from contextlib import contextmanager
+import tempfile
 import time
 import threading
 import uuid
@@ -26,9 +27,9 @@ from typing import Any, Callable
 
 import jsonschema
 
-from coordinator_core.codex_runner.capture_provider import spawn_collector
 from coordinator_core.codex_runner.agy import AgyUnavailable, resolve_agy
 from coordinator_core.codex_runner.grok import GrokUnavailable, resolve_grok
+from coordinator_core.codex_runner.capture_provider import captured_usage, spawn_collector
 from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child, writeback_codex_auth
 from coordinator_core.codex_runner.resolve import codex_family_stage_argv, preflight_auth, resolve_codex
 from coordinator_core.codex_runner.sandbox_preflight import (
@@ -350,8 +351,10 @@ def _native_child_facts(proc, repo_root, parent_session_id, fire_id, request_id,
 
 class _NativeThreadObserver:
     """Bounded regular-file observer; does not manufacture lifecycle evidence."""
-    def __init__(self, path, facts, callback, abort):
+    def __init__(self, path, facts, callback, abort, *, capture=None, command_started=None):
         self.path, self.facts, self.callback, self.abort = Path(path), facts, callback, abort
+        self.capture = capture
+        self.command_started = command_started
         self.stop = threading.Event()
         self.error = None
         self.join_attempted = False
@@ -365,12 +368,18 @@ class _NativeThreadObserver:
         pending = b''
         total = events = 0
         try:
-            info = self.path.lstat()
-            if not stat.S_ISREG(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
-                raise AgentFailed('native identity stdout must be an ordinary regular file')
-            with self.path.open('rb') as stream:
+            if self.capture is None:
+                info = self.path.lstat()
+                if not stat.S_ISREG(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+                    raise AgentFailed('native identity stdout must be an ordinary regular file')
+                source = self.path.open('rb')
+            else:
+                source = nullcontext(self.capture)
+            with source as stream:
                 while True:
-                    chunk = stream.read(8192 if self.session_id is not None else min(8192, 1024*1024-total))
+                    size = 8192 if self.session_id is not None else min(8192, 1024*1024-total)
+                    # pread leaves the child's inherited stdout offset untouched.
+                    chunk = stream.read(size) if self.capture is None else os.pread(stream.fileno(), size, total)
                     total += len(chunk)
                     pending += chunk
                     while b'\n' in pending:
@@ -392,6 +401,11 @@ class _NativeThreadObserver:
                             if self.session_id is None:
                                 self.session_id = sid
                                 self.callback({**self.facts, 'session_id': sid})
+                        if self.command_started is not None and event.get('type') == 'item.started':
+                            item = event.get('item')
+                            if (isinstance(item, dict) and item.get('type') == 'command_execution'
+                                    and self.session_id is not None):
+                                self.command_started(self.session_id, item.get('command'))
                         if events >= 100 and self.session_id is None:
                             raise AgentFailed('native identity event budget exhausted')
                     if len(pending) > 65536:
@@ -418,9 +432,25 @@ class _NativeThreadObserver:
             raise AgentFailed(f'native identity observation failed: {self.error}') from self.error
 
 
+def _worker_priority(argv, backend, agent_type) -> dict:
+    kwargs = tenant_priority.popen_kwargs(argv)
+    if (sys.platform == "darwin" and backend == "codex" and agent_type == "coordinator:test-runner"
+            and os.environ.get("COORDINATOR_CODEX_WORKER_POLICY_FILE")):
+        prior = kwargs.get("preexec_fn")
+
+        def prepare_verifier() -> None:
+            if prior is not None:
+                prior()
+            # Seatbelt denies nice() inside the verifier. Its capped children must inherit nice 19.
+            os.setpriority(os.PRIO_PROCESS, 0, 19)
+
+        kwargs = {**kwargs, "preexec_fn": prepare_verifier}
+    return kwargs
+
+
 def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
                   options, parent_session_id, timeout_s, on_spawn, stdout, stderr,
-                  request_id=None, fire_id=None, on_native_thread=None, stall_window_s=None):
+                  request_id=None, fire_id=None, on_native_thread=None, stall_window_s=None, on_native_command=None, usage_owner_session_id=None) -> subprocess.Popen:
     """Reserve checked memory for this worker until its actual child exits.
 
     A stall_window_s kills the child with StageStalled once its stdout and stderr
@@ -463,6 +493,7 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
         raise AgentFailed(f"Workflow memory admission refused: {admitted.reason}")
     proc = None
     observer = None
+    observed_output = None
     watchdog = None
     try:
         remaining()
@@ -484,11 +515,19 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
         env.pop("COORDINATOR_SESSION_ID", None)
         env["COORDINATOR_PARENT_SESSION_ID"] = sid
         remaining()  # A late grant must never start work after its broker deadline.
+        if on_native_thread is not None and sys.platform == 'darwin':
+            # The worker-visible archive is never the source of an authenticated UUID.
+            git_dir = Path(repo_root) / '.git'
+            _protected_observer_path(repo_root, git_dir / 'native-observation')
+            observed_output = tempfile.TemporaryFile(dir=git_dir)
+            capture = observed_output
+        else:
+            capture = stdout
         proc = subprocess.Popen(
             argv, cwd=repo_root, env=env, stdin=subprocess.PIPE,
-            stdout=stdout, stderr=stderr, shell=False,
+            stdout=capture, stderr=stderr, shell=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            **tenant_priority.popen_kwargs(argv),
+            **_worker_priority(argv, backend, options.get("agentType")),
         )
         posted = admission_post.post("START", sid, pids=[proc.pid], run=key,
                                      declared_peak_mb=actual_peak_mb)
@@ -497,7 +536,8 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
             on_spawn(proc.pid)
         if on_native_thread is not None:
             facts = _native_child_facts(proc, repo_root, sid, fire_id, request_id, argv)
-            observer = _NativeThreadObserver(artifact_dir / 'stdout.jsonl', facts, on_native_thread, proc.kill)
+            observer = _NativeThreadObserver(artifact_dir / 'stdout.jsonl', facts, on_native_thread, proc.kill,
+                                             capture=observed_output, command_started=on_native_command)
             observer.start()
         stalled = threading.Event()
         watchdog_done = threading.Event()
@@ -506,7 +546,7 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
                 seen, last_growth = -1, time.monotonic()
                 while not watchdog_done.wait(_STALL_POLL_S):
                     try:
-                        size = _stream_bytes(stdout, stderr)
+                        size = _stream_bytes(capture, stderr)
                     except OSError:
                         return
                     if size != seen:
@@ -539,19 +579,30 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
             if not observer.join_attempted:
                 observer.join_attempted = True
                 observer.thread.join(timeout=2)
-        if proc is not None:
-            _cleanup(_save_process, artifact_dir, proc, backend, options,
-                     argv[argv.index("--model") + 1] if "--model" in argv else None,
-                     broker_root_session_id=sid, broker_request_id=request_id, broker_fire_id=fire_id)
-            _cleanup(admission_post.post, "END", sid, pids=[proc.pid], run=key)
-        _cleanup(capacity.release_spawn, key, supervisor_pid, host=host)
+        try:
+            if observed_output is not None:
+                with observed_output:
+                    observed_output.seek(0)
+                    stdout.seek(0)
+                    shutil.copyfileobj(observed_output, stdout)
+                    stdout.truncate()
+                    stdout.flush()
+        finally:
+            if proc is not None:
+                _cleanup(_save_process, artifact_dir, proc, backend, options,
+                         argv[argv.index("--model") + 1] if "--model" in argv else None,
+                         broker_root_session_id=sid, broker_request_id=request_id, broker_fire_id=fire_id,
+                         usage_owner_session_id=usage_owner_session_id,
+                         pending_capture=backend == 'codex' and bool(os.environ.get('COORDINATOR_PROVIDER_EVIDENCE_DIR')))
+                _cleanup(admission_post.post, "END", sid, pids=[proc.pid], run=key)
+            _cleanup(capacity.release_spawn, key, supervisor_pid, host=host)
 
 
 @contextmanager
 def _provider_stream(env, backend, repo, stderr, fire_id, request_id, attempt, on_spawn):
     destination = os.environ.get("COORDINATOR_PROVIDER_EVIDENCE_DIR")
     if backend != "codex" or not destination:
-        yield env, stderr, on_spawn
+        yield env, stderr, on_spawn, None
         return
     root = Path(destination)
     if not root.is_absolute() or not root.is_dir() or root.resolve().is_relative_to(repo):
@@ -577,7 +628,7 @@ def _provider_stream(env, backend, repo, stderr, fire_id, request_id, attempt, o
                 on_spawn(pid)
 
         try:
-            yield dict(env, RUST_LOG="tungstenite::protocol=trace,codex_api::sse::responses=trace"), writer, start_collector
+            yield dict(env, RUST_LOG="tungstenite::protocol=trace,codex_api::sse::responses=trace"), writer, start_collector, Path(evidence.name)
         finally:
             writer.close()
             if collector is not None:
@@ -792,7 +843,14 @@ def _event_provenance(path: Path, backend: str) -> dict:
         if backend in _FAMILY_BACKENDS and result["model"] == "unknown":
             result["model"] = _family_event_model(event) or "unknown"
         kind = event.get("type")
-        identity = event.get("thread_id") if kind == "thread.started" else event.get("session_id") if backend == "claude" else None
+        if kind == "thread.started":
+            identity = event.get("thread_id")
+        elif backend == "claude":
+            identity = event.get("session_id")
+        elif backend == "grok":
+            identity = event.get("sessionId") or event.get("session_id")
+        else:
+            identity = None
         if isinstance(identity, str):
             try:
                 result["native_thread_id"] = str(uuid.UUID(identity))
@@ -807,7 +865,7 @@ def _event_provenance(path: Path, backend: str) -> dict:
                     if isinstance(value, str) and value.strip():
                         result[target] = value
                         break
-        if (kind == "turn.completed" or backend == "claude") and isinstance(event.get("usage"), dict):
+        if (kind == "turn.completed" or backend == "claude" or (backend == "grok" and kind == "usage")) and isinstance(event.get("usage"), dict):
             usages.append(event["usage"])
             result.setdefault("usage_observations", []).append({
                 "usage": event["usage"], "model": event.get("model", result["model"]),
@@ -874,7 +932,7 @@ def _append_canonical_usage(receipt: dict) -> dict:
     """
     try:
         child = str(uuid.UUID(receipt['native_thread_id']))
-        parent = str(uuid.UUID(receipt['broker_root_session_id']))
+        parent = str(uuid.UUID(receipt.get('usage_owner_session_id') or receipt['broker_root_session_id']))
     except (ValueError, TypeError, KeyError, AttributeError):
         return {'status': 'incomplete', 'reason': 'actual child/root UUID unavailable'}
     fire, request = receipt.get('broker_fire_id'), receipt.get('broker_request_id')
@@ -882,7 +940,7 @@ def _append_canonical_usage(receipt: dict) -> dict:
         return {'status': 'incomplete', 'reason': 'stable broker fire/request identity unavailable'}
     backend = receipt.get('backend')
     events = receipt.get('usage_events')
-    if backend not in ('codex', 'claude') or not isinstance(events, list) or not events:
+    if backend not in ('codex', 'claude', 'grok') or not isinstance(events, list) or not events:
         return {'status': 'incomplete', 'reason': 'native usage events unavailable'}
     cached_key, written_key = ('cached_input_tokens', 'cache_write_input_tokens') if backend == 'codex' else (
         'cache_read_input_tokens', 'cache_creation_input_tokens')
@@ -902,9 +960,14 @@ def _append_canonical_usage(receipt: dict) -> dict:
             return {'status': 'incomplete', 'reason': 'native cache count exceeds input'}
         totals = {'input_tokens': uncached, 'output_tokens': usage['output_tokens'],
                   'cache_read_input_tokens': usage[cached_key], 'cache_creation_input_tokens': usage[written_key]}
+        if backend == 'codex' and 'ttl_12h_tokens' in usage:
+            long_writes = usage['ttl_12h_tokens']
+            if type(long_writes) is not int or not 0 <= long_writes <= usage[written_key]:
+                return {'status': 'incomplete', 'reason': 'invalid 12h cache write count'}
+            totals['ttl_12h_tokens'] = long_writes
         payload = {
             'session_id': child, 'parent_session_id': parent,
-            'request_id': stable_request if index == 0 else f'{stable_request}:turn:{index}',
+            'request_id': observation.get('provider_response_id') or (stable_request if index == 0 else f'{stable_request}:turn:{index}'),
             'provider': backend, 'model': None if observation.get('model') == 'unknown' else observation.get('model'),
             'effort': None if observation.get('effort') == 'unknown' else observation.get('effort'),
             'service_tier': observation.get('service_tier'), 'usage_format': 'coordinator-canonical-v1', 'usage': totals,
@@ -912,7 +975,7 @@ def _append_canonical_usage(receipt: dict) -> dict:
         # Codex exec's successful completion reports the thread's lifetime counters.
         # Keep the observation alongside its charge so retries can compare the
         # original counters even after a later request has advanced the thread.
-        if backend == 'codex' and observations and len(events) == 1:
+        if backend == 'codex' and observations and len(events) == 1 and not observation.get('provider_response_id'):
             payload['exec_thread_total'] = totals.copy()
         if receipt.get('model_evidence'):
             payload['model_evidence'] = receipt['model_evidence']
@@ -943,14 +1006,23 @@ def _append_canonical_usage(receipt: dict) -> dict:
                 for event in records:
                     payload = event['payload']
                     prior_payload = seen.get((child, payload['request_id']))
+                    if prior_payload and payload.get('model_evidence', {}).get('source') == 'provider_terminal_response':
+                        if prior_payload.get('model') != payload['model']:
+                            raise ValueError('existing provider response has a different served model')
                     original = payload.get('exec_thread_total', payload['usage'])
+                    if prior_payload and payload.get('model_evidence', {}).get('source') == 'provider_terminal_response':
+                        if prior_payload.get('model') != payload['model']:
+                            raise ValueError('existing provider response has a different served model')
                     if prior_payload and prior_payload.get('exec_thread_total', prior_payload.get('usage')) != original:
                         raise ValueError('existing request has different counters; legacy aggregate or conflicting replay')
                     if not prior_payload and child_history and 'exec_thread_total' in payload:
                         previous_total = child_history[-1].get('exec_thread_total')
-                        if not previous_total or any(original[k] < previous_total[k] for k in original):
+                        if not previous_total or original.keys() != previous_total.keys() or any(original[k] < previous_total[k] for k in original):
                             return {'status': 'incomplete', 'reason': 'Codex thread has no comparable previous total'}
-                        payload['usage'] = {k: value - previous_total[k] for k, value in original.items()}
+                        delta = {k: value - previous_total[k] for k, value in original.items()}
+                        if delta.get('ttl_12h_tokens', 0) > delta['cache_creation_input_tokens']:
+                            return {'status': 'incomplete', 'reason': '12h writes exceed incremental writes'}
+                        payload['usage'] = delta
                 missing = [event for event in records if (child, event['payload']['request_id']) not in seen]
                 for event in missing:
                     stream.write(json.dumps(event, ensure_ascii=False) + '\n')
@@ -960,6 +1032,30 @@ def _append_canonical_usage(receipt: dict) -> dict:
                 'request_ids': [event['payload']['request_id'] for event in records]}
     except Exception as exc:
         return {'status': 'failed', 'reason': f'{type(exc).__name__}: {exc}'}
+
+
+def _journal_captured_usage(path, receipt, artifact_dir):
+    """Recover reported charges when the worker exited without native usage."""
+    try:
+        responses = captured_usage(path, receipt, artifact_dir)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {"status": "incomplete", "reason": str(exc)}
+    observations = []
+    events = []
+    missing = []
+    for uid, response in responses.items():
+        counters = response.get("pricing_usage")
+        keys = ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_input_tokens")
+        if not isinstance(counters, dict) or any(key not in counters for key in keys):
+            missing.append(uid)
+            continue
+        observations.append({"provider_response_id": uid, "model": response.get("model")})
+        events.append(counters)
+    result = _append_canonical_usage(dict(receipt, usage_events=events, usage_observations=observations,
+                                         model_evidence={"source": "provider_terminal_response"}))
+    if missing:
+        result.update(status="incomplete", missing_response_ids=missing)
+    return result
 
 
 def _record_execution(parent, fire, request, phase, *, receipt=None) -> None:
@@ -1122,11 +1218,28 @@ def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None
     """
     try:
         if backend == "grok":
-            allow = (_RELAY_ALLOW,) if agent_type in _INVOKE_ONLY_AGENT_TYPES else (*_SHELL_ALLOW, _EXAMPLE_RETRIEVAL_REPO_ALLOW)
+            # acceptEdits still prompts for a shell command, and a headless run cannot
+            # ask. A general stage therefore uses bypassPermissions. An invoke-only
+            # child keeps one coordinator-invoke rule: the absolute launcher on POSIX,
+            # because the prompt rewrite expands ${COORDINATOR_SETTINGS_HOME:-...}/bin/<cli>
+            # and a bare-name rule does not match that path.
+            if agent_type in _INVOKE_ONLY_AGENT_TYPES:
+                permission_mode = "acceptEdits"
+                if os.name == "nt":
+                    allows = (_RELAY_ALLOW,)
+                else:
+                    launcher = (settings_home() / "bin" / "coordinator-invoke").as_posix()
+                    allows = (f"Bash({launcher}:*)",)
+            elif os.name == "nt":
+                permission_mode = "acceptEdits"
+                allows = (*_SHELL_ALLOW, _EXAMPLE_RETRIEVAL_REPO_ALLOW)
+            else:
+                permission_mode = "bypassPermissions"
+                allows = (*_SHELL_ALLOW, _EXAMPLE_RETRIEVAL_REPO_ALLOW)
             output_format = "streaming-json" if agent_type == "coordinator:sizing-scout" else "json"
             argv = [*resolve_grok(), "--prompt-file", str(artifact_dir / "prompt.txt"),
-                    "--output-format", output_format, "--permission-mode", "acceptEdits",
-                    *[flag for rule in allow for flag in ("--allow", rule)],
+                    "--output-format", output_format, "--permission-mode", permission_mode,
+                    *[flag for rule in allows for flag in ("--allow", rule)],
                     "--no-subagents", "--no-auto-update"]
             if model:
                 argv += ["--model", model]
@@ -1204,7 +1317,7 @@ def _grok_cancellation(stdout: Path, stderr: Path) -> str | None:
 
 
 def _save_process(artifact_dir: Path, proc, backend: str, options: dict, requested_model,
-                  *, broker_root_session_id=None, broker_request_id=None, broker_fire_id=None) -> dict:
+                  *, broker_root_session_id=None, broker_request_id=None, broker_fire_id=None, usage_owner_session_id=None, provider_trace=None, pending_capture=False) -> dict:
     if broker_root_session_id is None:
         try:
             admission = json.loads((artifact_dir / "admission.json").read_text(encoding="utf-8"))
@@ -1218,11 +1331,17 @@ def _save_process(artifact_dir: Path, proc, backend: str, options: dict, request
         # Broker lineage is supplied by the caller, never claimed as a native
         # parent relationship or used as the child's own session identity.
         "broker_root_session_id": broker_root_session_id,
+        "usage_owner_session_id": usage_owner_session_id,
         "broker_request_id": broker_request_id, "broker_fire_id": broker_fire_id,
         **_event_provenance(artifact_dir / "stdout.jsonl", backend),
     }
     _join_startup_model(receipt)
-    receipt['canonical_usage'] = _append_canonical_usage(receipt)
+    if pending_capture:
+        receipt['canonical_usage'] = {'status': 'incomplete', 'reason': 'provider collector still draining'}
+    elif provider_trace is not None:
+        receipt['canonical_usage'] = _journal_captured_usage(provider_trace, receipt, artifact_dir)
+    else:
+        receipt['canonical_usage'] = _append_canonical_usage(receipt)
     private_audit = artifact_dir / 'private-cli.json'
     if private_audit.exists():
         receipt['private_cli'] = _private_json(private_audit, 1024*1024)
@@ -1338,6 +1457,105 @@ def _gate_reask_preserves_scalars(initial: str, retry: str) -> bool:
     return False
 
 
+def _loopback_provider_argv(endpoint: str) -> list[str]:
+    """Pin a credential-free local responder when the worker ignores user configuration."""
+    port = re.fullmatch(r"http://127[.]0[.]0[.]1:([1-9][0-9]{0,4})/v1", endpoint)
+    if not port or int(port[1]) > 65535:
+        raise AgentFailed("local fixture requires an IPv4 loopback endpoint")
+    return [
+        "-c", 'model_provider="local_fixture"',
+        "-c", 'model_providers.local_fixture.name="local_fixture"',
+        "-c", 'model_providers.local_fixture.wire_api="responses"',
+        "-c", "model_providers.local_fixture.base_url=" + json.dumps(endpoint),
+    ]
+
+
+def _budget_gateway_argv(capture_root: str | None, endpoint: str | None) -> list[str]:
+    """Bind a capped native worker to the assessor's HTTP listener before admitting its spawn."""
+    owner = os.environ.get("COORDINATOR_PAIR_BUDGET_ID")
+    path = Path(capture_root) / "budget-gateway.json" if capture_root else None
+    if owner is None and (path is None or not path.exists()):
+        return []
+    if not owner or path is None or not endpoint:
+        raise AgentFailed("capped worker requires its allocation, evidence directory and gateway")
+    import http.client
+    from urllib.parse import urlsplit
+
+    argv = _loopback_provider_argv(endpoint)
+    try:
+        binding = json.loads(path.read_bytes())
+        if binding != {"endpoint": endpoint, "allocation": owner}:
+            raise ValueError("gateway differs from issued allocation")
+        connection = http.client.HTTPConnection("127.0.0.1", urlsplit(endpoint).port, timeout=0.5)
+        try:
+            connection.request("HEAD", "/cap-ready")
+            response = connection.getresponse()
+            if response.status != 204 or response.getheader("X-Allocation") != owner:
+                raise ValueError("gateway did not confirm allocation")
+        finally:
+            connection.close()
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        raise AgentFailed(f"capped worker gateway unavailable: {exc}") from exc
+    return [*argv, "-c", "model_providers.local_fixture.supports_websockets=false"]
+
+
+def _restricted_worker_argv(native_cli, policy_file, repo_root, last, *, commit_worker=False, overlay_verifier=False):
+    """Read the operator's filesystem allocation before launching a workflow worker."""
+    path = Path(policy_file)
+    if not path.is_absolute() or path.resolve().is_relative_to(repo_root):
+        raise AgentFailed("worker policy must be an absolute host path outside the worker checkout")
+    try:
+        rules = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise AgentFailed(f"cannot load configured worker policy {path}: {exc}") from exc
+    if not isinstance(rules, dict) or rules.get(":root") not in ("deny", "read"):
+        raise AgentFailed("worker policy requires an explicit read or deny root")
+    special = {":root", ":workspace_roots", ":tmpdir"}
+    for location, access in rules.items():
+        if access not in ("read", "write", "deny") or not (location in special or Path(location).is_absolute()):
+            raise AgentFailed(f"invalid worker policy rule for {location!r}")
+    selected_lock = os.environ.get("COORDINATOR_CODEX_LANDING_LOCK")
+    if commit_worker and selected_lock:
+        from coordinator_core.ops.dispatch_emit.land_byte_gate import sidecar_path
+
+        expected = sidecar_path(repo_root)
+        if (Path(selected_lock) != expected or expected.resolve() != expected
+                or not expected.is_file() or rules.get(selected_lock) == "deny"):
+            raise AgentFailed("landing lock must be the provisioned repository sidecar")
+        rules[selected_lock] = "write"
+    verify_args = []
+    if overlay_verifier and (verify_temp := os.environ.get("COORDINATOR_CODEX_VERIFY_TEMP")):
+        directory = Path(verify_temp)
+        if (not directory.is_absolute() or directory.resolve() != directory
+                or directory.is_relative_to(repo_root.resolve()) or rules.get(verify_temp) != "write"
+                or not directory.is_dir()):
+            raise AgentFailed("overlay verifier temp requires an explicit writable host directory outside the checkout")
+        verify_args = ["-c", "shell_environment_policy.set.TMPDIR=" + json.dumps(verify_temp)]
+    table = ",".join(f"{json.dumps(key, ensure_ascii=False)}={json.dumps(value)}" for key, value in rules.items())
+    git_config_args = []
+    selected = os.environ.get("COORDINATOR_CODEX_WORKER_GIT_CONFIG")
+    # A host can provision the policy and its Git configuration as one allocation.
+    # The sibling's existence alone never grants the worker access.
+    companion = str(path.with_suffix(".gitconfig"))
+    if selected is None and rules.get(companion) == "read":
+        selected = companion
+    if selected is not None:
+        config = Path(selected)
+        if (not config.is_absolute() or config.resolve() != config
+                or config.is_relative_to(repo_root.resolve()) or rules.get(selected) != "read"
+                or not config.is_file()):
+            raise AgentFailed("worker Git config requires an explicitly read-only host file outside the checkout")
+        git_config_args = ["-c", "shell_environment_policy.set.GIT_CONFIG_GLOBAL=" + json.dumps(selected)]
+    return [
+        *native_cli, "exec", "--json", "--ephemeral", "--ignore-user-config",
+        "-c", f"permissions.coordinator_worker.filesystem={{{table}}}",
+        "-c", 'default_permissions="coordinator_worker"', "-c", 'approval_policy="never"',
+        "--disable", "apps", "--disable", "plugins", "-c", "mcp_servers={}",
+        "--disable", "multi_agent", "--disable", "multi_agent_v2", "-c", 'web_search="disabled"',
+        *git_config_args, *verify_args, "-o", str(last),
+    ]
+
+
 def run_agent(
     prompt: str,
     options: dict[str, Any] | None,
@@ -1348,9 +1566,11 @@ def run_agent(
     timeout_s: float = 3600,
     on_spawn: Callable[[int], None] | None = None,
     parent_session_id: str | None = None,
+    usage_owner_session_id: str | None = None,
     request_id: str | int | None = None,
     fire_id: str | None = None,
     on_native_thread: Callable[[dict], None] | None = None,
+    on_native_command: Callable[[str, str], None] | None = None,
     private_cli: dict | None = None,
     run_id: str | None = None,
     _gate_reask: bool = False,
@@ -1410,7 +1630,8 @@ def run_agent(
         full_prompt = (
             "Grok stage tools: search_replace or write for file edits; Execute for commands. "
             "Edit, Write, Bash, and Agent in the brief name the action. Subagents are off. "
-            "coordinator-invoke only when the brief names that command.\n\n"
+            "coordinator-invoke only when the brief names that command. "
+            "The working directory is already the repo. Never run cd or pushd, even where the task text says to.\n\n"
         ) + full_prompt
     full_prompt = with_worker_preamble(backend, full_prompt)
     if run_id:
@@ -1427,6 +1648,8 @@ def run_agent(
             "field semantics; do not replace argument objects with empty objects:\n"
             + json.dumps(schema, ensure_ascii=False)
         )
+    if on_native_command is not None and (sys.platform != 'darwin' or on_native_thread is None):
+        raise AgentFailed('native command observation requires a Darwin host-observed thread')
     if private_cli is not None and (backend != 'codex' or on_spawn is None or on_native_thread is None):
         raise AgentFailed('private CLI requires Codex and owner spawn/native identity callbacks')
     private_settings = None
@@ -1437,10 +1660,11 @@ def run_agent(
     if on_native_thread is not None:
         if backend != 'codex':
             raise AgentFailed('native identity callback requires Codex backend')
-        _protected_observer_path(repo_root, artifact_dir)
+        if sys.platform != 'darwin':
+            _protected_observer_path(repo_root, artifact_dir)
     artifact_dir = Path(artifact_dir).resolve()
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    if on_native_thread is not None:
+    if on_native_thread is not None and sys.platform != 'darwin':
         _protected_observer_path(repo_root, artifact_dir)
     (artifact_dir / "prompt.txt").write_text(full_prompt, encoding="utf-8")
     env = _environment()
@@ -1468,6 +1692,9 @@ def run_agent(
             )
         preflight_auth(env=env, requested=False)
         native_cli = resolve_codex(env=env)
+        if sys.platform == 'darwin' and on_native_thread is not None:
+            from coordinator_core.codex_runner.resolve import darwin_observed_exec
+            native_cli = darwin_observed_exec(native_cli)
         # Resolve the real native binary before private PATH can affect lookup.
         if private_settings is not None:
             env.update(private_settings[0])
@@ -1496,8 +1723,37 @@ def run_agent(
                 "--sandbox", "read-only", "--disable", "shell_tool", "--disable", "unified_exec",
                 "--disable", "plugins", "--disable", "apps", "-c", "mcp_servers={}", "-o", str(last),
             ]
+        elif "COORDINATOR_CODEX_WORKER_POLICY_FILE" in os.environ:
+            overlay_verifier = (options.get("agentType") == "coordinator:test-runner"
+                                and options.get("label") == "overlay-verify")
+            policy_file = os.environ["COORDINATOR_CODEX_WORKER_POLICY_FILE"]
+            if overlay_verifier:
+                policy_file = os.environ.get("COORDINATOR_CODEX_VERIFY_POLICY_FILE", policy_file)
+            argv = _restricted_worker_argv(
+                native_cli, policy_file, repo_root, last,
+                commit_worker=options.get("agentType") == _COMMIT_AGENT_TYPE, overlay_verifier=overlay_verifier,
+            )
         else:
             argv = codex_family_stage_argv(native_cli, "--ephemeral", "-o", str(last))
+        capture_root = os.environ.get("COORDINATOR_PROVIDER_EVIDENCE_DIR")
+        if capture_root:
+            selected_policy = os.environ.get("COORDINATOR_CODEX_WORKER_POLICY_FILE") if _gate_reask else (
+                policy_file if "COORDINATOR_CODEX_WORKER_POLICY_FILE" in os.environ else None)
+            root = Path(capture_root).resolve()
+            if not selected_policy or not root.is_dir() or root.is_relative_to(repo_root):
+                raise AgentFailed("Provider capture requires a private directory outside the restricted workspace")
+            rules = json.loads(Path(selected_policy).read_bytes())
+            if rules.get(str(root)) != "deny" or any(
+                Path(path).is_absolute() and Path(path).resolve().is_relative_to(root) and access != "deny"
+                for path, access in rules.items()
+            ):
+                raise AgentFailed("Worker policy must deny the provider evidence directory and descendants")
+        endpoint = os.environ.get("COORDINATOR_LOOPBACK_FIXTURE_URL")
+        budget_argv = _budget_gateway_argv(capture_root, endpoint)
+        if endpoint is not None:
+            if "COORDINATOR_CODEX_WORKER_POLICY_FILE" not in os.environ:
+                raise AgentFailed("local fixture requires a configured worker policy")
+            argv += budget_argv or _loopback_provider_argv(endpoint)
         if schema is not None:
             schema_path = artifact_dir / "schema.json"
             schema_path.write_text(json.dumps(schema), encoding="utf-8")
@@ -1541,18 +1797,22 @@ def run_agent(
             raise AgentFailed(f"stallWindowS must be a number: {exc}") from exc
     started = time.monotonic()
     try:
-        _record_execution(parent_session_id or os.environ.get('COORDINATOR_SESSION_ID') or os.environ.get('CODEX_THREAD_ID'),
+        _record_execution(usage_owner_session_id or parent_session_id or os.environ.get('COORDINATOR_SESSION_ID') or os.environ.get('CODEX_THREAD_ID'),
                           fire_id, request_id, 'started')
         for attempt in range(STALL_RETRIES + 1):
             with (artifact_dir / "stdout.jsonl").open("wb") as out, (artifact_dir / "stderr.txt").open("wb") as err:
                 try:
-                    with _provider_stream(env, backend, repo_root, err, fire_id, request_id, attempt, on_spawn) as (child_env, child_err, child_spawn):
+                    with _provider_stream(env, backend, repo_root, err, fire_id, request_id, attempt, on_spawn) as (
+                        child_env, child_err, child_spawn, provider_trace
+                    ):
                         proc = _run_admitted(
                             argv, stdin_text, env=child_env, repo_root=repo_root, artifact_dir=artifact_dir,
                             backend=backend, options=options, parent_session_id=parent_session_id,
                             timeout_s=max(timeout_s - (time.monotonic() - started), 1e-3), on_spawn=child_spawn,
                             stdout=out, stderr=child_err, request_id=request_id, fire_id=fire_id,
                             on_native_thread=on_native_thread, stall_window_s=stall_window_s,
+                            **({'on_native_command': on_native_command} if on_native_command is not None else {}),
+                            **({'usage_owner_session_id': usage_owner_session_id} if usage_owner_session_id else {}),
                         )
                     break
                 except StageStalled as exc:
@@ -1573,10 +1833,13 @@ def run_agent(
     requested_model = model if backend == "codex" else (family_model if backend in ("agy", "grok") and family_model is not None else options.get("model"))
     receipt = _save_process(artifact_dir, proc, backend, options, requested_model,
                   broker_root_session_id=parent_session_id, broker_request_id=request_id,
-                  broker_fire_id=fire_id)
-    _record_execution(receipt.get('broker_root_session_id'), fire_id, request_id, 'completed', receipt=receipt)
+                  broker_fire_id=fire_id, usage_owner_session_id=usage_owner_session_id, provider_trace=provider_trace)
+    _record_execution(usage_owner_session_id or receipt.get('broker_root_session_id'), fire_id, request_id, 'completed', receipt=receipt)
     if proc.returncode != 0:
-        raise AgentFailed(f"{backend} agent exited {proc.returncode}; see {artifact_dir / 'stderr.txt'}")
+        raise AgentFailed(
+            f"{backend} agent exited {proc.returncode}; see {artifact_dir / 'stderr.txt'} "
+            f"and {artifact_dir / 'stdout.jsonl'}"
+        )
     text = None
     try:
         if backend == "claude":
@@ -1664,7 +1927,7 @@ def run_agent(
                     repo_root=repo_root, artifact_dir=retry_dir,
                     backend=backend, timeout_s=remaining, parent_session_id=parent_session_id,
                     request_id=f"{request_id}:gate-reask" if request_id is not None else None,
-                    fire_id=fire_id, run_id=run_id, _gate_reask=True,
+                    fire_id=fire_id, run_id=run_id, usage_owner_session_id=usage_owner_session_id, _gate_reask=True,
                 )
                 repaired_text = (retry_dir / "last.txt").read_text(encoding="utf-8")
                 # A schema-valid prefix can still omit acceptance or manifest fields.

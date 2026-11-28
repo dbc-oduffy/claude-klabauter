@@ -30,6 +30,48 @@ def test_warn_findings_are_applied_by_the_fix_leg_and_the_run_lands():
     assert out["wave"][0]["applied"] == 4
 
 
+def test_halt_fix_report_is_not_a_product_write_or_widen():
+    report = ".coordinator-local/workflow-sidecars/ask/r1/halt-fix/result.md"
+    out = _drive_sc(reverify=_green(), wave=_BLOCKED, replies={
+        HALT_FIX_LABEL: [_done(_OWN, report)], HALT_REVERIFY_LABEL: [_CLEAR],
+    })
+    assert _labels(out) == [HALT_FIX_LABEL, HALT_REVERIFY_LABEL]
+    assert out["halted"] is None
+    assert out["sc"]["widened"] == []
+
+
+@pytest.mark.parametrize("outside", [
+    ".coordinator-local/workflow-sidecars/ask/other/halt-fix/result.md",
+    ".coordinator-local/workflow-sidecars/ask/r1/other/result.md",
+    ".coordinator-local/workflow-sidecars/ask/other/halt-fix/test_report.py",
+    "tools/other_product.py",
+])
+def test_halt_fix_report_cannot_hide_an_outside_write(outside):
+    report = ".coordinator-local/workflow-sidecars/ask/r1/halt-fix/result.md"
+    out = _drive(reverify=_green(), wave=_BLOCKED,
+                 replies={HALT_FIX_LABEL: [_done(_OWN, report, outside)]})
+    assert _labels(out) == [HALT_FIX_LABEL]
+    assert out["halted"]["self_correction"]["needs_paths"] == [outside]
+
+
+@pytest.mark.parametrize("note", ["result.md", "logs/repair.txt"])
+def test_fix_leg_can_report_its_own_sidecar_alongside_product_writes(note):
+    report = f".coordinator-local/workflow-sidecars/ask/r1/halt-fix/{note}"
+    out = _drive(
+        reverify=_green(), wave=_BLOCKED, replies={HALT_FIX_LABEL: [_done(_OWN, report)], HALT_REVERIFY_LABEL: [_CLEAR]}
+    )
+    assert out["halted"] is None
+    assert _labels(out) == [HALT_FIX_LABEL, HALT_REVERIFY_LABEL]
+
+
+@pytest.mark.parametrize("suffix", ["r2/halt-fix/result.md", "r1/halt-reverify/result.md", "r1/halt-fix/../other.md"])
+def test_fix_sidecar_exception_stays_within_the_current_run_and_stage(suffix):
+    report = f".coordinator-local/workflow-sidecars/ask/{suffix}"
+    out = _drive(reverify=_green(), wave=_BLOCKED, replies={HALT_FIX_LABEL: [_done(_OWN, report)]})
+    assert out["halted"]["self_correction"]["needs_paths"] == [report]
+    assert _labels(out) == [HALT_FIX_LABEL]
+
+
 def test_a_stale_assertion_in_a_test_file_outside_the_footprint_is_a_widen_not_a_halt():
     out = _drive(
         reverify=_red(_OWNED),

@@ -603,6 +603,8 @@ def test_the_criterion_record_carries_the_judge_reason() -> None:
         waves, name="wf", description="judge", plan_path="docs/plans/p.md",
         review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
     )
+    assert "judge_at_verification: _falsifierResult" in judged
+    assert "clauses: _falsifierResult.clauses, observed: _falsifierResult.observed" in judged
     assert "reason: _cap(_falsifierResult.reason ?? null, " in judged
     assert "status: 'not_run', observation: null, reason: null, sidecar: null" in judged
 

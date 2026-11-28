@@ -32,6 +32,8 @@ def repo(tmp_path: Path) -> Path:
     (tmp_path / REL).write_text(yaml.safe_dump(_sizing(), sort_keys=False), encoding="utf-8")
     rl.start(tmp_path, RUN)
     rl.bind(tmp_path, RUN, REL)
+    # R1 represents a plan-derived task. The second row retains its original PM source.
+    rl._mutate_register(tmp_path, REL, lambda rows: [{**rows[0], "anchor": "plan-row:C1"}, *rows[1:]])
     return tmp_path
 
 
@@ -118,3 +120,9 @@ def test_regression_gated_withheld_row_behaves_as_before(repo) -> None:
         "pass": True, "failures": [], "open": [{"id": "R1", "reason": "withheld_by C9"}],
     }
     assert rl.judge(ledger, verdict, gated=[])["pass"] is False
+
+def test_no_owner_cannot_defer_original_pm_requirement(repo):
+    before = (repo / REL).read_bytes()
+    result = _revise(repo, verbatim="blocked: no owner", out_of_scope=["R2"])
+    assert rr.PM_DISPOSITION_REASON in result["error"]
+    assert (repo / REL).read_bytes() == before

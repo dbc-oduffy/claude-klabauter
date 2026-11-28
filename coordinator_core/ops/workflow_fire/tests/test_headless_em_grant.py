@@ -87,3 +87,27 @@ def test_unresolved_home_is_typed_refusal_naming_key(monkeypatch):
     monkeypatch.setattr(g.Path, "home", staticmethod(boom))
     with pytest.raises(g.HeadlessEmGrantError, match=g.SETTINGS_HOME_KEY):
         g.write_headless_em_grant("sess-1", "codex")
+
+
+def test_launch_thread_requires_matching_live_registration(tmp_path, monkeypatch):
+    import os
+    import uuid
+    import psutil
+    from coordinator_core.session import external_registry
+
+    sid = "launcher"
+    thread = str(uuid.uuid4())
+    other = str(uuid.uuid4())
+    env = {g.HEADLESS_EM_TOKEN_ENV: g.write_headless_em_grant(sid, "codex"),
+           "COORDINATOR_SESSION_ID": sid, "CODEX_THREAD_ID": thread}
+    child = psutil.Process(os.getpid())
+    row = dict(session_id=thread, role="em", provider="codex", pid=child.pid,
+               start_epoch=int(child.create_time()), cwd=str(tmp_path))
+    monkeypatch.setattr(external_registry, "lookup", lambda key: dict(row, session_id=key))
+    assert g.observe_codex_registration(env, thread, child.pid, str(tmp_path))
+    assert g.registered_launch_thread(env, sid, str(tmp_path)) == thread
+    assert not g.registered_launch_thread(dict(env, CODEX_THREAD_ID=other), sid, str(tmp_path))
+    assert not g.registered_launch_thread(dict(env, COORDINATOR_AGENT_WORKER="1"), sid, str(tmp_path))
+    assert not g.registered_launch_thread(env, sid, str(tmp_path.parent))
+    row["start_epoch"] -= 1
+    assert not g.registered_launch_thread(env, sid, str(tmp_path))

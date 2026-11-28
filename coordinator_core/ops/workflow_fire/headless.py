@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import uuid
 
@@ -178,6 +179,13 @@ def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = N
                   script_sha256=digest, artifact_dir=str(artifacts), journal_path=str(artifacts / 'journal.jsonl'))
     child = None
     try:
+        if backend == 'codex' and caller_session_id:
+            from coordinator_core.ops.workflow_fire.headless_em_grant import registered_launch_thread
+            from coordinator_core.session.caller_env import effective_caller_env
+
+            native = registered_launch_thread(effective_caller_env(), caller_session_id, str(repo))
+            if native:
+                record['usage_owner_session_id'] = native
         if private_spec is not None:
             from coordinator_core.ops.workflow_fire.finalizer import snapshot_contract
             record['terminal_contract'] = snapshot_contract(repo, script)
@@ -252,6 +260,26 @@ def _notify(record_path: Path, record: dict) -> dict:
     from coordinator_core.ops.workflow_fire.notify import refresh_record
 
     return refresh_record(record_path, record)
+
+
+def _journal_event(event):
+    """Retain a fingerprint of a terminal assignment without journaling its run token."""
+    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import BLOCK_OPEN
+
+    prompt = event.get('prompt')
+    if isinstance(prompt, str) and BLOCK_OPEN in prompt:
+        return {**event, 'prompt': '[terminal assignment withheld]',
+                'prompt_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest()}
+    return event
+
+
+def _observed_stage_actor(facts, record, request_id):
+    from coordinator_core.session.native_actor import VerifiedCodexExecActor, validate_actor
+    actor = VerifiedCodexExecActor(**{name: facts[name] for name in VerifiedCodexExecActor.__dataclass_fields__})
+    if (actor.request_id != request_id or actor.fire_id != record['fire_id']
+            or actor.parent_session_id != record['caller_session_id'] or actor.session_id == actor.parent_session_id):
+        raise ValueError('native worker differs from issued fire and request')
+    return validate_actor(actor, actor.session_id, record['repo_root'])
 
 
 def _prepare_private_commit(private, event, script, record):
@@ -520,6 +548,25 @@ def _host_gate(params: dict, record: dict, artifacts: Path, timeout: float) -> t
     return result, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _staged_worker_binding(result, owner):
+    """Bind the staged workflow to the bytes hashed by the gate's emitter."""
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
+
+    stage = result.get("stage_reply")
+    if not isinstance(stage, dict) or "twin_sha256" not in stage:
+        return None
+    digest = stage["twin_sha256"]
+    manifest = stage.get("manifest_handle") or {}
+    manifest_digest = manifest.get("sha256") if isinstance(manifest, dict) else None
+    if not all(isinstance(h, str) and len(h) == 64 and all(c in "0123456789abcdef" for c in h)
+               for h in (digest, manifest_digest)):
+        raise ValueError("invalid staged workflow digest")
+    path = staged_twin_rel(owner["run_id"], manifest_digest)
+    if stage.get("twin_path") != path:
+        raise ValueError("staged workflow path differs from issued run and manifest")
+    return {"depth": 1, "script_path": str(Path(owner["repo_root"]) / path), "script_sha256": digest}
+
+
 def _read_host_gate_receipt(path: Path, record: dict, digest: str | None) -> dict:
     if digest is None or not path.is_file():
         raise ValueError("host gate receipt missing")
@@ -545,6 +592,7 @@ def _read_host_gate_receipt(path: Path, record: dict, digest: str | None) -> dic
 def _run_pinned_test_leg(
     repo: Path, output: Path, artifacts: Path, targets: list[str],
     base: str, timeout: float, baseline_output: Path | None = None,
+    *, measured_sha: str | None = None, run_id: str | None = None,
 ) -> tuple[int, dict]:
     artifacts.mkdir(parents=True, exist_ok=True)
     temporary_output = artifacts / "test-leg-result.json"
@@ -555,8 +603,12 @@ def _run_pinned_test_leg(
     argv = [sys.executable, "-c", bootstrap, engine]
     if base:
         argv += ["--base-sha", base]
+    if measured_sha:
+        argv += ["--run-id", run_id, "--measured"]
     if baseline_output is not None:
-        argv += ["--head-sha", "HEAD", "--base-export-out", str(temporary_export)]
+        if not measured_sha:
+            argv += ["--head-sha", "HEAD"]
+        argv += ["--base-export-out", str(temporary_export)]
     argv += ["--out", str(temporary_output), "--", *targets]
     _save(artifacts / "test-leg-start.json", {"argv": argv, "cwd": str(repo), "engine_root": engine})
     with (artifacts / "test-leg.stdout").open("wb") as out, (artifacts / "test-leg.stderr").open("wb") as err:
@@ -598,21 +650,22 @@ def _check_run_base(root: Path, run_dir: Path, run_id: str, manifest: dict, base
         raise RunBaseMismatch(base, [pinned])
 
 
-def _record_measured_rev(manifest: dict, root: Path, run_id: str, artifacts: Path, timeout: float) -> str | None:
-    """Write the run's `measured-rev.json` over the manifest's `review_declared_paths`, the record the clean
-    overlay verify reads after this host leg replaced the worker that used to measure first. None on success
-    or when no path is declared; else the refusal text (the overlay then reads as inconclusive, never green)."""
+def _record_measured_rev(manifest: dict, root: Path, run_id: str, artifacts: Path, timeout: float) -> tuple[str | None, str | None]:
+    """Return the run's measured candidate SHA and any diagnostic from measuring it."""
     declared = manifest.get("review_declared_paths")
     if not isinstance(declared, list) or not declared:
-        return None
+        return None, None
     try:
         reply = _invoke_source("dispatch.measured_rev", {"run_id": run_id, "paths": [str(p) for p in declared]},
                                str(root), artifacts / "measured-rev", max(.1, timeout))
     except Exception as exc:  # noqa: BLE001 -- a failed measurement is recorded on the result, never raised past the leg
-        return f"{type(exc).__name__}: {exc}"
+        return None, f"{type(exc).__name__}: {exc}"
     if isinstance(reply, dict) and reply.get("error"):
-        return str(reply["error"])
-    return None
+        return None, str(reply["error"])
+    sha = reply.get("sha") if isinstance(reply, dict) else None
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        return None, "measurement returned no candidate SHA"
+    return sha, None
 
 
 _EVICTED_SKIP = "evicted by this run's halt (parked out of the tree); not run"
@@ -639,7 +692,7 @@ def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *
             raise ValueError(f"host Verify tests target is outside the repository: {path!r}")
     base = params.get("base", "")
     _check_run_base(root, run_dir, run_id, manifest, base)
-    measured_rev_error = _record_measured_rev(manifest, root, run_id, artifacts, timeout)
+    measured_sha, measured_rev_error = _record_measured_rev(manifest, root, run_id, artifacts, timeout)
     # Invariant: an evicted path is parked out of the tree, so naming it makes pytest exit 4 with no tests.
     from coordinator_core.ops.dispatch_emit import halt_tree_evict
 
@@ -657,14 +710,21 @@ def _verify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *
         _save(output, measured)
         return {**measured, "evicted_targets": dropped, "sidecar_path": output.relative_to(root).as_posix(),
                 **({"measured_rev_error": measured_rev_error} if measured_rev_error else {})}
-    exit_code, measured = _run_pinned_test_leg(root, output, artifacts, targets, base, timeout)
+    if measured_rev_error:
+        measured = {"status": "error", "tests_run": 0, "tests_failed": 0,
+                    "measured_rev_error": measured_rev_error, "summary": measured_rev_error}
+        _save(output, measured)
+        return {**measured, "sidecar_path": output.relative_to(root).as_posix()}
+    pin = {"measured_sha": measured_sha, "run_id": run_id} if measured_sha else {}
+    exit_code, measured = _run_pinned_test_leg(root, output, artifacts, targets, base, timeout, **pin)
+    if measured_sha and (measured.get("own_tree") or {}).get("at") != measured_sha:
+        measured.update(status="error", summary="test runner did not verify the measured revision")
+        _save(output, measured)
     fields = ("status", "tests_run", "tests_failed", "baseline", "baseline_method", "build_clean",
               "skipped", "summary", "importer_overrun", "tripwires_not_run", "zero_run_cause",
               "measured_at", "head_sha")
     result = {key: measured[key] for key in fields if key in measured}
     result["sidecar_path"] = output.relative_to(root).as_posix()
-    if measured_rev_error:
-        result["measured_rev_error"] = measured_rev_error
     # Invariant: a declared target that did not run is a skip, never a silent pass: 19 green tests must not
     # read as covering a regression test that was parked or absent.
     unrun = [*dropped, *(t for t in measured.get("missing_targets", []) if t not in dropped)]
@@ -724,7 +784,7 @@ def _declared_code_paths(repo: str, run_key: str) -> list[str]:
     return [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else []
 
 
-def _reverify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float) -> dict | None:
+def _reverify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float, *, run_id: str | None = None) -> dict | None:
     """Measure the inventory before the review worker can interpret it."""
     deadline = time.monotonic() + timeout
     prefixes = params["slice_prefixes"]
@@ -786,11 +846,25 @@ def _reverify_test_leg(params: dict, repo: str, artifacts: Path, timeout: float)
 
     output_path = _test_leg_file(run_key, "", prefixes[-1])
     export_path = root / _base_export_file(run_key, "", prefixes[-1])
+    pin = {}
     try:
+        if run_id:
+            from coordinator_core.session.record_homes import home_dir
+            if run_id != run_key or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", run_id):
+                raise ValueError("review inventory belongs to a different run")
+            run_dir = Path(home_dir(str(root), "warp")) / run_id
+            manifest = json.loads((run_dir / "manifest.json").read_bytes())
+            _check_run_base(root, run_dir, run_id, manifest, params["base"])
+            sha, error = _record_measured_rev(manifest, root, run_id, artifacts, deadline - time.monotonic())
+            if not sha:
+                raise ValueError(error or "review manifest has no measured candidate")
+            pin = {"measured_sha": sha, "run_id": run_id}
         exit_code, measured = _run_pinned_test_leg(
             root, root / output_path, artifacts, selected, params["base"],
-            max(.1, deadline - time.monotonic()), export_path,
+            max(.1, deadline - time.monotonic()), export_path, **pin,
         )
+        if pin and (measured.get("own_tree") or {}).get("at") != pin["measured_sha"]:
+            raise ValueError("review runner did not verify the measured revision")
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         return {**receipt, "reverify_error": f"host reverify test leg failed: {exc}"}
     for key in ("failing", "failing_detail", "passed_alone", "passed_at_base", "pre_existing", "tests_run"):
@@ -989,11 +1063,12 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
     journal_lock, input_lock = threading.Lock(), threading.Lock()
     def journal(event) -> None:
         with journal_lock, (artifacts / 'journal.jsonl').open('a', encoding='utf-8') as stream:
-            stream.write(json.dumps({'at': time.time(), **event}) + '\n')
+            stream.write(json.dumps({'at': time.time(), **_journal_event(event)}) + '\n')
     process = None
     timer = None
     cancelled: list = []
     result = None
+    observed_landing = None
     terminal = False
     error = None
     private = None
@@ -1036,6 +1111,9 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
             gate_started = False
             gate_receipt: tuple[Path, str] | None = None
             emitted_root = None
+            sizing_actor = None
+            staged_binding = None
+            staged_contract = None
 
             def check_binding(event, owner):
                 expected = {key: owner[key] for key in ('script_path', 'script_sha256')}
@@ -1043,7 +1121,7 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                     raise ValueError('host operation requires its bound root workflow')
 
             def respond(event) -> None:
-                nonlocal gate_started, gate_receipt, emitted_root
+                nonlocal gate_started, gate_receipt, emitted_root, staged_binding, staged_contract, observed_landing, sizing_actor
                 reply = {'id': event['id']}
                 try:
                     remaining = deadline - time.monotonic()
@@ -1078,6 +1156,18 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                                 gate_started = True
                             result, digest = _host_gate(event['params'], owner, operation_dir, remaining)
                             with gate_lock:
+                                staged_binding = _staged_worker_binding(result, owner)
+                                if staged_binding is not None:
+                                    from coordinator_core.ops.workflow_fire import finalizer
+                                    stage = result['stage_reply']
+                                    contract = finalizer.snapshot_contract(
+                                        owner['repo_root'], Path(staged_binding['script_path']))
+                                    files = contract['files']
+                                    manifest = stage['manifest_handle']
+                                    if (files.get(stage['twin_path']) != staged_binding['script_sha256']
+                                            or files.get(manifest['path']) != manifest['sha256']):
+                                        raise ValueError('terminal contract differs from host-issued workflow or manifest')
+                                    staged_contract = contract
                                 gate_receipt = operation_dir / "consumed.json", digest
                             reply['result'] = result
                         elif event['op'] == 'gate.host_receipt':
@@ -1087,8 +1177,13 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                                     raise ValueError('host gate receipt missing')
                                 path, digest = gate_receipt
                             reply['result'] = _read_host_gate_receipt(path, owner, digest)
+                        elif event['op'] == 'workflow.staged_late_rows':
+                            params = event['params']
+                            if not staged_binding or event.get('binding') != staged_binding or params.get('run_id') != owner.get('run_id'):
+                                raise ValueError('late requirement read differs from the host-issued staged run')
+                            reply['result'] = _invoke_source('workflow.late_rows', params, record['repo_root'], operation_dir, remaining)
                         elif event['op'] == 'review.reverify.host_test_leg':
-                            reply['result'] = _reverify_test_leg(event['params'], record['repo_root'], operation_dir, remaining)
+                            reply['result'] = _reverify_test_leg(event['params'], record['repo_root'], operation_dir, remaining, run_id=owner.get('run_id'))
                         elif event['op'] == 'verify.host_test_leg':
                             reply['result'] = _verify_test_leg(event['params'], record['repo_root'],
                                                                operation_dir, remaining, run_id=record.get('run_id'))
@@ -1110,12 +1205,22 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                             raise RuntimeError(refusal)
                         request_id = str(event['id'])
                         options = event.get('options', {})
+                        if (staged_binding is not None and options.get('phase') == 'commit'
+                                and event.get('binding') != staged_binding):
+                            raise ValueError('commit worker differs from host-issued staged workflow')
+                        if staged_binding is not None and options.get('phase') == 'commit':
+                            from coordinator_core.ops.workflow_fire import finalizer
+                            if staged_contract is None:
+                                raise ValueError('missing host-issued terminal contract')
+                            finalizer.verify_contract(record['repo_root'], staged_contract)
                         agent_dir = artifacts / 'agents' / request_id
                         gate_relay = (record['backend'] == 'codex' and options.get('phase') == 'gate'
                                       and options.get('label') == 'gate')
                         extra = {}
                         spawned = False
                         commit_prompt = None
+                        native_landing = None
+                        reply_stream = None
                         if private is not None:
                             commit_prompt = _prepare_private_commit(private, event, script, record)
                             def observed_spawn(pid) -> None:
@@ -1131,6 +1236,50 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                                     'fire_id': record['fire_id'], 'request_id': request_id,
                                     'bindings_path': str(private.bindings_path)},
                             }
+                        elif (sys.platform == 'darwin' and record['backend'] == 'codex'
+                              and 'COORDINATOR_CODEX_WORKER_POLICY_FILE' in os.environ
+                              and (options.get('label'), options.get('phase'), options.get('agentType'))
+                              == ('size', 'size', 'coordinator:sizing-scout')):
+                            owner = {**record, **record.get('emitted_root', {})}
+                            check_binding(event, owner)
+                            def observe_size(facts):
+                                nonlocal sizing_actor
+                                actor = _observed_stage_actor(facts, record, request_id)
+                                sizing_actor = (owner['run_id'], actor)
+                            extra['on_native_thread'] = observe_size
+                        elif (sys.platform == 'darwin' and record['backend'] == 'codex'
+                              and staged_contract is not None and staged_contract['has_request']
+                              and options.get('phase') == 'commit' and options.get('label') == 'commit'
+                              and options.get('agentType') == 'coordinator:git-commit-agent'
+                              and 'COORDINATOR_CODEX_WORKER_POLICY_FILE' in os.environ):
+                            from coordinator_core.ops.workflow_fire.finalizer import ObservedLanding
+                            from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import prompt_params
+                            from coordinator_core.ops.dispatch_emit.land_run_contract import mode_of
+                            issued = prompt_params(event['prompt'])
+                            if issued is not None and mode_of(issued) == 'product':
+                                reply_stream = tempfile.NamedTemporaryFile(prefix='coordinator-landing-', suffix='.json')
+                                try:
+                                    native_landing = ObservedLanding(event, record, staged_contract, reply_stream, sizing_actor=sizing_actor)
+                                except BaseException:
+                                    reply_stream.close()
+                                    raise
+                                commit_prompt = ('Run this exact command once to request the host-issued product landing. '
+                                                 'It waits for the reviewed commit and prints the host reply. Report that reply.\n'
+                                                 + native_landing.command)
+                            verified_actor = None
+                            def observe_commit_worker(facts):
+                                nonlocal verified_actor
+                                actor = verified_actor = _observed_stage_actor(facts, record, request_id)
+                                journal({'type': 'commit-worker-observed', 'id': request_id, 'fire_id': actor.fire_id,
+                                         'session_id': actor.session_id, 'pid': actor.pid,
+                                         'start_epoch': actor.start_epoch, 'exe_sha256': actor.exe_sha256})
+                            extra['on_native_thread'] = observe_commit_worker
+                            if native_landing is not None:
+                                def acknowledge_commit(sid, command):
+                                    if verified_actor is None or verified_actor.session_id != sid:
+                                        raise ValueError('commit request lacks observed native session')
+                                    native_landing.acknowledge(verified_actor, command)
+                                extra['on_native_command'] = acknowledge_commit
                         try:
                             prompt = commit_prompt or event['prompt']
                             if gate_relay:
@@ -1140,16 +1289,26 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                             backend=record['backend'], timeout_s=remaining,
                             parent_session_id=record.get('caller_session_id'),
                             request_id=request_id, fire_id=record['fire_id'],
-                            **({'run_id': record['run_id']} if record.get('run_id') else {}), **extra)
+                            **({'run_id': record['run_id']} if record.get('run_id') else {}),
+                            **({'usage_owner_session_id': record['usage_owner_session_id']}
+                               if record.get('usage_owner_session_id') else {}), **extra)
                             if record.get('backend') == 'codex' and record.get('run_id'):
                                 from coordinator_core.ops.dispatch_emit import run_write_prints
                                 run_write_prints.record_codex_writes(
                                     Path(record['repo_root']), record['run_id'],
                                     artifacts / 'agents' / str(event['id']) / 'stdout.jsonl')
-                            if commit_prompt is not None:
+                            if native_landing is not None:
+                                if native_landing.result is None:
+                                    raise ValueError('commit worker did not acknowledge its host landing request')
+                                reply['result'] = native_landing.result
+                                if native_landing.result.get('committed'):
+                                    observed_landing = native_landing.result
+                            elif commit_prompt is not None:
                                 # The model reply is not proof: replace it with the host's sealed result.
                                 reply['result'] = _private_commit_receipt(private, request_id, record)
                         finally:
+                            if reply_stream is not None:
+                                reply_stream.close()
                             if gate_relay:
                                 _journal_gate_commands(agent_dir, request_id, journal)
                             if private is not None and spawned:
@@ -1197,6 +1356,8 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                 raise RuntimeError('private Workflow returned an unconsumed terminal action')
             landing = (json.loads(Path(record['terminal_finalizer']['receipt_path']).read_text(encoding='utf-8'))['result']
                        if record.get('terminal_finalizer') else None)
+        elif terminal_runner is _land and observed_landing is not None:
+            landing = observed_landing
         elif terminal_runner is _land:
             remaining = deadline - time.monotonic()
             if remaining <= 0:

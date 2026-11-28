@@ -270,3 +270,24 @@ def run_script_reply(tmp_path, script, reply):
     finally:
         if child.poll() is None:
             child.kill()
+
+
+def test_agent_request_identifies_executing_workflow_at_each_depth(tmp_path):
+    import hashlib
+
+    child = tmp_path / "staged.workflow.mjs"
+    child_source = """export const meta = {};
+return await agent('same prompt', {label:'commit'});"""
+    child.write_bytes(child_source.encode())
+    source = """export const meta = {};
+await agent('same prompt', {label:'commit'});
+return await workflow({scriptPath:args.child});"""
+    rc, events, _ = run_script(tmp_path, source, args={"child": str(child)})
+    assert rc == 0
+    requests = [event for event in events if event["type"] == "agent"]
+    assert len(requests) == 2
+    for depth, (request, path) in enumerate(zip(requests, [tmp_path / "workflow.mjs", child])):
+        assert request["binding"] == {
+            "depth": depth, "script_path": str(path),
+            "script_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }

@@ -549,7 +549,7 @@ def _owes_unclaimed_work(row: Mapping[str, Any]) -> bool:
     status = row.get(ROW_STATUS)
     if status == STATUS_MET and row.get(ROW_WIRED) is True:
         return False
-    if status in (STATUS_DEFERRED, STATUS_WAIVED) and not _unruled(row):
+    if status in (STATUS_DEFERRED, STATUS_WAIVED) and not pm_obligation(row.get(ROW_ANCHOR)) and not _unruled(row):
         return False
     return True
 
@@ -618,6 +618,17 @@ def rollup(rows: Sequence[Mapping[str, Any]], now: datetime) -> dict[str, Any]:
     return counts
 
 
+def pm_obligation(anchor: object) -> bool:
+    """Anchors assigned when a run binds its original ask or captures an explicit PM turn."""
+    from coordinator_core.ops.method_step import split_anchor
+
+    origin, _ = split_anchor(anchor)
+    return origin in ("ask", "pm_verbatims") or re.fullmatch(r"pm_verbatims turn [0-9]+", origin) is not None
+
+
+PM_DISPOSITION_REASON = "original ask remains owed; the register ruling does not authenticate a PM scope change"
+
+
 def _unruled(row: Mapping[str, Any]) -> bool:
     ruling = row.get(ROW_RULING)
     return row.get(ROW_STATUS) in (STATUS_DEFERRED, STATUS_WAIVED) and not (
@@ -631,6 +642,8 @@ def _row_block(row: Mapping[str, Any]) -> Optional[str]:
     status = row.get(ROW_STATUS)
     label = f"row {rid} ({surface})"
     if status in (STATUS_DEFERRED, STATUS_WAIVED):
+        if pm_obligation(row.get(ROW_ANCHOR)):
+            return f"{label}: {PM_DISPOSITION_REASON}"
         if _unruled(row):
             return f"{label} is {status} without a recorded ruling"
         return None

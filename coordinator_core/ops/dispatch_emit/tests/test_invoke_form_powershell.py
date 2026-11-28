@@ -27,6 +27,38 @@ def _checkpoint_prompt_text() -> str:
     return js.replace('\\"', '"')
 
 
+def test_grok_render_uses_the_absolute_launcher(tmp_path):
+    from coordinator_core.ops.dispatch_emit.invoke_form import GROK
+
+    text = _POSIX_FORM + " dispatch.emit '{\"a\":1}'"
+    out = render_invoke_for_shell(text, GROK, bin_dir=tmp_path)
+    assert "${" not in out and ":-$HOME" not in out
+    assert (tmp_path / "coordinator-invoke").as_posix() + " dispatch.emit" in out
+
+
+def test_grok_render_rewrites_the_nested_settings_home(tmp_path):
+    from coordinator_core.ops.dispatch_emit.invoke_form import GROK
+
+    nested = '"${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/bin/<cli>"'
+    bare = 'ls "${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}"'
+    out = render_invoke_for_shell(nested + "\n" + bare, GROK, bin_dir=tmp_path)
+    assert "${" not in out and "COORDINATOR_SETTINGS_HOME" not in out
+    assert (tmp_path / "<cli>").as_posix() in out
+    assert f'ls "{tmp_path.parent.as_posix()}"' in out
+
+
+def test_grok_render_rewrites_both_launcher_spellings_in_one_prompt(tmp_path):
+    from coordinator_core.ops.dispatch_emit.invoke_form import GROK
+
+    simple = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" dispatch.emit'
+    nested = '"${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/bin/coordinator-invoke" dispatch.ask_stage'
+    out = render_invoke_for_shell(simple + "\n" + nested, GROK, bin_dir=tmp_path)
+    absolute = (tmp_path / "coordinator-invoke").as_posix()
+    assert "${" not in out and "COORDINATOR_SETTINGS_HOME" not in out and "CLAUDE_HOME" not in out
+    assert out.count(absolute) == 2
+    assert f"{absolute} dispatch.emit" in out and f"{absolute} dispatch.ask_stage" in out
+
+
 def test_posix_render_is_byte_identical():
     text = _checkpoint_prompt_text()
     assert _POSIX_FORM in text

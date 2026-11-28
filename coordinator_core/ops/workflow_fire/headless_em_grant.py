@@ -113,3 +113,59 @@ def headless_em_grant_matches(env: object, session_id: str, family: str | None =
     return hmac.compare_digest(token_digest(token), recorded) and hmac.compare_digest(
         _binding_digest(token, session_id, granted), binding
     )
+
+
+def _native_observation_path(env, sid):
+    return grant_path(sid).with_suffix(f".{token_digest(env[HEADLESS_EM_TOKEN_ENV])}.native")
+
+
+def observe_codex_registration(env: Mapping, native_id: str, child_pid: int, cwd: str) -> Path | None:
+    """Pin the first native thread announced by this direct child, before SessionStart can race it."""
+    import psutil
+    from uuid import UUID
+    from coordinator_core.session.agent_role import explicit_worker_marker
+
+    sid = env.get("COORDINATOR_SESSION_ID")
+    if explicit_worker_marker(env) or not headless_em_grant_matches(env, sid, "codex"):
+        return None
+    try:
+        if str(UUID(native_id)) != native_id:
+            return None
+        path = _native_observation_path(env, sid)
+        record = dict(launcher_session_id=sid, native_session_id=native_id, pid=child_pid,
+                      start_epoch=int(psutil.Process(child_pid).create_time()), cwd=os.path.realpath(cwd))
+        with path.open("x", encoding="utf-8") as stream:
+            json.dump(record, stream)
+        return path
+    except (OSError, ValueError, psutil.Error):
+        return None
+
+
+def registered_launch_observation(env: Mapping, sid: str, cwd: str) -> dict | None:
+    """Correlate launch provenance; this result conveys no host dispatch authority."""
+    from coordinator_core.session.agent_role import explicit_worker_marker
+    from coordinator_core.session.external_registry import lookup
+
+    if not env.get("CODEX_THREAD_ID") or env.get("COORDINATOR_SESSION_ID") != sid:
+        return None
+    if explicit_worker_marker(env) or not headless_em_grant_matches(env, sid, "codex"):
+        return None
+    try:
+        bound = json.loads(_native_observation_path(env, sid).read_bytes())
+        native_id = env.get("CODEX_THREAD_ID")
+        if not native_id or bound["native_session_id"] != native_id or bound["launcher_session_id"] != sid:
+            return None
+        row = lookup(native_id)
+        if (row and row.get("role") == "em" and row.get("provider") == "codex"
+                and row.get("session_id") == native_id and row.get("pid") == bound["pid"]
+                and row.get("start_epoch") == bound["start_epoch"]
+                and os.path.samefile(row["cwd"], cwd) and os.path.samefile(bound["cwd"], cwd)):
+            return {key: bound[key] for key in ("launcher_session_id", "native_session_id", "pid", "start_epoch", "cwd")}
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def registered_launch_thread(env: Mapping, sid: str, cwd: str) -> str | None:
+    observation = registered_launch_observation(env, sid, cwd)
+    return observation["native_session_id"] if observation else None

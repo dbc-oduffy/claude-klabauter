@@ -1024,6 +1024,11 @@ def test_a_mirror_that_cannot_be_prepared_runs_in_place_and_is_noted_never_refus
     assert data["status_after"] == "pass" and "own_tree" not in data
     assert "clean mirror busy" in data["own_tree_skipped"]
 
+    _code, pinned = _main(["--measured-tree", "--head-sha", _git(dirty_repo, "rev-parse", "HEAD"),
+                           "--", "tests/test_mod.py"], tmp_path / "pinned.json")
+    assert pinned["tests_run"] == 0 and pinned["status_after"] != "pass"
+    assert "measured test tree unavailable" in pinned["summary"]
+
 
 @pytest.mark.spawns_process
 def test_an_own_tree_zero_run_never_names_a_dirty_root_file_as_the_foreign_dependency(dirty_repo, tmp_path):
@@ -1035,6 +1040,26 @@ def test_an_own_tree_zero_run_never_names_a_dirty_root_file_as_the_foreign_depen
     assert "own_tree" in data and data["tests_run"] == 0
     assert data.get(ltt.ZERO_RUN_CAUSE_KEY) != ltt.ZERO_RUN_FOREIGN_DEPENDENCY
     assert "_missing_import" not in data
+
+
+@pytest.mark.spawns_process
+def test_measured_leg_executes_pinned_commit_even_when_head_passes(dirty_repo, tmp_path):
+    base = _git(dirty_repo, "rev-parse", "HEAD")
+    (dirty_repo / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(dirty_repo, "commit", "-qam", "measured")
+    measured = _git(dirty_repo, "rev-parse", "HEAD")
+    _git(dirty_repo, "checkout", "-q", "--detach", base)
+    run = dirty_repo / "state/warp/run1"
+    run.mkdir(parents=True)
+    (run / "measured-rev.json").write_text(json.dumps({"sha": measured}), encoding="utf-8")
+    _, result = _main(["--measured", "--run-id", "run1", "--", "tests/test_mod.py"], tmp_path / "measured.json")
+    assert result["own_tree"] == {"at": measured, "overlaid": []}
+    assert result["tests_failed"] == 1
+
+
+def test_missing_measurement_never_earns_passing_test_receipt(dirty_repo, tmp_path):
+    code, result = _main(["--measured", "--run-id", "missing", "--", "tests/test_mod.py"], tmp_path / "missing.json")
+    assert code != 0 and result["status"] == "error" and result["tests_run"] == 0
 
 
 def test_engine_root_never_reads_the_claude_klabauter_registry_key(tmp_path, monkeypatch):
@@ -1055,6 +1080,8 @@ def test_a_later_leg_that_edits_a_recorded_failing_tests_file_is_flagged_not_ref
     assert first[tlr.FIXTURE_WATCH_KEY][FAIL_ID]["file"] == "tests/test_a.py"
     (repo / "tests" / "test_a.py").write_text(
         "def test_passes():\n    assert True\n\ndef test_fails():\n    assert 1 == 1\n", encoding="utf-8")
+    for stale in (repo / "tests").rglob("*.pyc"):
+        stale.unlink()
     code, second = _main(["--", "tests/test_a.py"], out)
     assert code == 0 and second["status_after"] == "pass" and second["failing"] == []
     (flag,) = second[tlr.FIXTURE_EDITS_KEY]
@@ -1104,3 +1131,23 @@ def test_fixture_edit_after_a_failing_record_is_flagged_across_intermediate_legs
     tlr._flag_fixture_edits(leg4, leg3, tmp_path, "r", "t4")
     assert leg4[tlr.FIXTURE_EDITS_KEY] == leg3[tlr.FIXTURE_EDITS_KEY]
     assert "status" not in leg4
+
+
+@pytest.mark.spawns_process
+def test_measured_leg_executes_pinned_commit_even_when_head_passes(dirty_repo, tmp_path):
+    base = _git(dirty_repo, "rev-parse", "HEAD")
+    (dirty_repo / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(dirty_repo, "commit", "-qam", "measured")
+    measured = _git(dirty_repo, "rev-parse", "HEAD")
+    _git(dirty_repo, "checkout", "-q", "--detach", base)
+    run = dirty_repo / "state/warp/run1"
+    run.mkdir(parents=True)
+    (run / "measured-rev.json").write_text(json.dumps({"sha": measured}), encoding="utf-8")
+    _, result = _main(["--measured", "--run-id", "run1", "--", "tests/test_mod.py"], tmp_path / "measured.json")
+    assert result["own_tree"] == {"at": measured, "overlaid": []}
+    assert result["tests_failed"] == 1
+
+
+def test_missing_measurement_never_earns_passing_test_receipt(dirty_repo, tmp_path):
+    code, result = _main(["--measured", "--run-id", "missing", "--", "tests/test_mod.py"], tmp_path / "missing.json")
+    assert code != 0 and result["status"] == "error" and result["tests_run"] == 0

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.dispatch_emit import objective_contract as oc
 from coordinator_core.win_portability import no_console_creationflags
@@ -186,6 +187,23 @@ def _append_line(path: Path, line: oc.LoopLine) -> None:
         handle.write(json.dumps(line.to_json(), sort_keys=True) + "\n")
 
 
+def checked_revision(run_dir: Path, root: Path) -> Optional[str]:
+    """Only an unchanged measured candidate can carry a caller observation into landing."""
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+    from coordinator_core.ops.dispatch_emit.measured_rev import measured_rev_drift
+
+    try:
+        record_path = measured_rev_record_path(root, run_dir.name)
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        if (record.get("base_sha") != head_sha(root, fresh=True) or not record.get("blobs")
+                or record.get("reach_dirt") or record.get("peer_hunks") or measured_rev_drift(record_path.parent, root)):
+            return None
+        return record["sha"]
+    except (OSError, KeyError, ValueError, AttributeError, TypeError):
+        return None
+
+
 @register_op("dispatch.objective_check")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Run the falsifier (and the plan's acceptance commands), append one check line, return the verdict.
@@ -196,7 +214,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
-    root = Path(repo_root) if repo_root is not None else Path.cwd()
+    root = main_worktree_root(repo_root) if repo_root is not None else Path.cwd()
     try:
         run_dir = record_dir(root, str(params.get("run_id")))
     except ValueError as exc:
@@ -207,17 +225,25 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {"status": oc.STATUS_NOT_MET, "axes": [], "failing": [], "error": f"objective unreadable: {exc}"}
 
     timeout_s = float(oc.FALSIFIER_TIMEOUT_S)
+    measured = checked_revision(run_dir, root) if any(type(a.threshold) in (int, float) for a in objective.axes) else None
     results = _falsifier_results(objective, root, run_dir, str(params.get("diff_range") or ""), timeout_s)
     _apply_haiku(results, params.get("haiku_axes"))
     if not results or results[0].reason not in (oc.REASON_UNPINNED, oc.REASON_RULER_CHANGED):
         results += _acceptance_results(root, str(params.get("plan_path") or ""), timeout_s)
 
     lines = [r.to_line() for r in results]
+    if measured:
+        claims = {a.id: a.claim for a in objective.axes}
+        for line in lines:
+            if line["axis"] in claims:
+                line["claim"] = claims[line["axis"]]
+
     _append_line(run_dir / oc.LOOP_FILE, oc.LoopLine(
         wave=int(params.get("wave") or 0), iteration=int(params.get("iteration") or 0), axes=lines,
         spend_usd=float(params.get("spend_usd") or 0.0),
         at=datetime.now(timezone.utc).isoformat(timespec="seconds"), kind=oc.LINE_CHECK,
         check_cost_usd=float(params.get("check_cost_usd") or 0.0),
-        check_llm_calls=int(params.get("check_llm_calls") or 0), falsifier_lines=lines))
+        check_llm_calls=int(params.get("check_llm_calls") or 0), falsifier_lines=lines,
+        measured_sha=measured if measured and measured == checked_revision(run_dir, root) else None))
     failing = [line for line in lines if not line["pass"]]
     return {"status": "not_met" if failing or not lines else "met", "axes": lines, "failing": failing}

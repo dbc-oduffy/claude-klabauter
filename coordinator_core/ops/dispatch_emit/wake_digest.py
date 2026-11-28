@@ -461,10 +461,16 @@ def next_action_parts(
                 )
                 + f", tests: {{ status: ({tests_status_expr} === 'pass-with-skips' ? 'pass' : {tests_status_expr}), "
                 + "skipped: " + record_skips + f", run: {test_num('tests_run')}, "
-                + f"failed: {test_num('tests_failed')}, sidecar: {test_num('sidecar_path')} }}"
+                + f"failed: {test_num('tests_failed')}, sidecar: {test_num('sidecar_path')}"
+                + (f", ...({test_var}?.overlay ? {{ overlay: {test_var}.overlay, test_leg: {test_var}.test_leg, "
+                   f"failed: {test_var}.test_leg.failed }} : {{}})" if test_present else "") + " }"
                 + ", criterion: "
                 + (
-                    f"({falsifier_var} ? {{ status: {criterion_status_expr}, "
+                    f"({falsifier_var} ? {{ "
+                    f"...({falsifier_var}.authored_by === 'terminal-judge' ? {{ "
+                    f"authored_by: {falsifier_var}.authored_by, judge_at_verification: {falsifier_var}, "
+                    f"clauses: {falsifier_var}.clauses, observed: {falsifier_var}.observed }} : {{}}), "
+                    f"status: {criterion_status_expr}, "
                     f"observation: {falsifier_var}.observation ?? null, "
                     f"reason: _cap({falsifier_var}.reason ?? null, {_maxlength(load_schema(), 'criterion.reason')}), "
                     f"sidecar: {falsifier_var}.sidecar_path ?? null, "

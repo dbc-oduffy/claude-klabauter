@@ -251,3 +251,19 @@ def test_visual_surface_row_records_and_unknown_surface_is_refused(repo):
     before = p.read_bytes()
     bad = _run(repo, _register(_row("w", surface="hologram")), supersede=True)
     assert bad["exit_code"] != 0 and p.read_bytes() == before
+
+
+@pytest.mark.parametrize("overlay", [
+    {"rows": [{"id": "R1", "status": "deferred", "ruling": _RULING}]},
+    {"rows": [{"id": "R1", "status": "waived", "ruling": _RULING}]},
+    {"rows": [{"id": "R1", "anchor": "design note"}]},
+    {"rows": [{"id": "R1", "source_text": "Accept sparse grading"}]},
+    {"drop": ["R1"]},
+])
+def test_original_pm_obligation_survives_unverified_amendment(repo, overlay):
+    path = _seed(repo)
+    assert _run(repo, _register(_row("R1", anchor="pm_verbatims turn 1")))["applied"]
+    before = path.read_bytes()
+    result = _run(repo, overlay, amend=True)
+    assert result["exit_code"] == 1 and "R1" in result["error"]
+    assert path.read_bytes() == before

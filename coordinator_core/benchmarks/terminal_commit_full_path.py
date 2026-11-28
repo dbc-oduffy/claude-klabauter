@@ -249,7 +249,7 @@ prime_exit_criterion:
 """
 
 
-def build_ask_fixture(parent: Path) -> tuple[Path, str]:
+def build_ask_fixture(parent: Path, *, ask_text: str = "ship a.py") -> tuple[Path, str]:
     """`build_fixture` rewired as a warp ask run: sizing committed, in-run plan on disk and
     uncommitted, a run directory with marker and manifest, an ask-manifest script, a seeded
     requirements ledger, a delivery note and one product file."""
@@ -292,7 +292,7 @@ def build_ask_fixture(parent: Path) -> tuple[Path, str]:
         f"// emitted script\n{ASK_MANIFEST_MARKER}{run_rel}/manifest.json\n", encoding="utf-8"
     )
     rl.start(repo, ASK_RUN, all_of_pm_ask=False)
-    rl.bind(repo, ASK_RUN, ASK_SIZING_REL, ask_text="ship a.py")
+    rl.bind(repo, ASK_RUN, ASK_SIZING_REL, ask_text=ask_text)
     (repo / ASK_DELIVERY_REL).parent.mkdir(parents=True)
     (repo / ASK_DELIVERY_REL).write_text("# delivered\n", encoding="utf-8")
     return repo, script

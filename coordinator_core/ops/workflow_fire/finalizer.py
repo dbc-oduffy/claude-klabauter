@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import stat
+import shlex
 import threading
 
 _ACTIVE = ContextVar('private_terminal_action', default=None)
@@ -94,8 +95,19 @@ def snapshot_contract(repo, script):
         request = parse_marker(read(manifest.marker_path))
     else:
         request = parse_marker(text)
+    issued_sizing = None
+    if manifest and request:
+        from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
+        sizing = record_sizing_rel(root, Path(manifest_path).parent.name)
+        owners = [chunk for chunk in request.chunks if sizing in chunk.paths]
+        if (sizing.startswith('state/sizings/') and sizing.endswith('.yaml') and len(owners) == 1
+                and owners[0].id == 'sizing' and list(owners[0].paths) == [sizing]
+                and sizing not in manifest.review_declared_paths):
+            # This is the original run input, bound at staging before any product worker.
+            read(sizing)
+            issued_sizing = sizing
     return {'script_path': Path(script).relative_to(root).as_posix(),
-            'files': files, 'declared_paths': sorted({p.replace('\\', '/')
+            'files': files, 'issued_sizing': issued_sizing, 'declared_paths': sorted({p.replace('\\', '/')
             for chunk in (request.chunks if request else ()) for p in chunk.paths}),
             'declared_prefixes': sorted({p.replace('\\', '/')
             for chunk in (request.chunks if request else ()) for p in chunk.prefixes}),
@@ -224,15 +236,115 @@ def terminal_action(operation):
     return decorate
 
 
+def durable_landing_contract(repo, staged, root):
+    """Token redemption retires the executable twin. Keep checking its original scope at the Git write."""
+    verify_contract(repo, staged)
+    original = snapshot_contract(repo, Path(root['script_path']))
+    root_files = dict(original['files'])
+    staged_files = dict(staged['files'])
+    if (root_files.pop(original['script_path']) != root['script_sha256']
+            or staged_files.pop(staged['script_path'], None) is None or staged_files != root_files
+            or any(original[key] != staged[key] for key in
+                   ('has_request', 'issued_sizing', 'declared_paths', 'declared_prefixes', 'manifest_declared_paths'))):
+        raise FinalizerRefused('durable root and issued staged workflow differ in landing scope')
+    return original
+
+
+class ObservedLanding:
+    """Single host-issued product request. Native command events acknowledge only its exact command."""
+
+    def __init__(self, event, record, contract, reply_stream, *, sizing_actor=None):
+        from coordinator_core.ops.dispatch_emit.land_run_contract import mode_of
+        from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import prompt_params
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        self.repo = Path(record['repo_root']).resolve(strict=True)
+        self.request_id = str(event['id'])
+        self.fire_id = record['fire_id']
+        self.parent = record['caller_session_id']
+        params = prompt_params(event['prompt'])
+        root = record.get('emitted_root') or record
+        options = event['options']
+        if (options.get('phase'), options.get('label'), options.get('agentType')) != (
+                'commit', 'commit', 'coordinator:git-commit-agent'):
+            raise FinalizerRefused('host landing requires the product commit worker')
+        if (not params or mode_of(params) != 'product' or not isinstance(params.get('inline_review'), dict)
+                or params.get('session_id') != self.parent or params['run_id'] != root['run_id']
+                or (self.repo / params['script_path']).resolve(strict=True) != Path(root['script_path'])
+                or not run_token.admits(self.repo, params['run_id'], params['run_token'], root['script_path'])):
+            raise FinalizerRefused('commit assignment differs from issued root, caller or token')
+        self.contract = durable_landing_contract(self.repo, contract, root)
+        self.sizing_session = None
+        if sizing_actor is not None:
+            run_id, scout = sizing_actor
+            if (run_id != params['run_id'] or scout.fire_id != self.fire_id
+                    or scout.parent_session_id != self.parent or not os.path.samefile(scout.repo_root, self.repo)):
+                raise FinalizerRefused('observed sizing session differs from landing assignment')
+            self.sizing_session = scout.session_id
+        self.params = params
+        self.position = _position(self.repo)
+        self.reply_stream = reply_stream
+        self.command = shlex.join(['python3', str(Path(__file__).with_name('landing_wait.py')), str(reply_stream.name)])
+        self.consumed = False
+        self.result = None
+
+    def acknowledge(self, actor, command):
+        from coordinator_core.session.native_actor import bind_verified_native_actor
+        from coordinator_core.ops.dispatch_emit.land_run import _handler
+        if not isinstance(command, str):
+            return
+        try:
+            shell = shlex.split(command)
+        except (ValueError, TypeError):
+            return
+        if (len(shell) != 3 or Path(shell[0]).name not in {'bash', 'sh', 'zsh'}
+                or shell[1] not in {'-c', '-lc'} or shell[2] != self.command):
+            return
+        if (actor.request_id != self.request_id or actor.fire_id != self.fire_id
+                or actor.parent_session_id != self.parent or actor.session_id == self.parent):
+            raise FinalizerRefused('worker does not own this host landing assignment')
+        if self.consumed:
+            raise FinalizerRefused('host landing command already consumed')
+        with bind_verified_native_actor(actor):
+            _actor(self.repo)
+            if _position(self.repo) != self.position:
+                raise FinalizerRefused('branch or HEAD moved before host landing')
+            verify_contract(self.repo, self.contract)
+            self.consumed = True
+            context = {'actor': actor, 'repo': self.repo, 'position': self.position, 'commits': [],
+                       'assignment': {'terminal_contract': self.contract, 'plan_owner_session_id': self.parent},
+                       'observed_landing': True, 'run_id': self.params['run_id'], 'sizing_session': self.sizing_session}
+            token = _ACTIVE.set(context)
+            try:
+                result = _handler({**self.params, 'session_id': actor.session_id}, self.repo)
+                if result.get('committed') and (not context['commits']
+                        or result.get('sha') != context['commits'][0]['sha']):
+                    raise FinalizerRefused('host landing reply differs from observed product commit')
+                self.result = result
+            finally:
+                _ACTIVE.reset(token)
+        self.reply_stream.write(_json(self.result).encode())
+        self.reply_stream.flush()
+
+
 def require_session(params):
     """A private worker cannot override commit attribution, even through nested dispatch."""
     from coordinator_core.warm.workflow_peer import PRIVATE_ROSTER_ENV
-    if not os.environ.get(PRIVATE_ROSTER_ENV):
+    if not os.environ.get(PRIVATE_ROSTER_ENV) and not (_ACTIVE.get() or {}).get('observed_landing'):
         return None
     actor = _actor(_ACTIVE.get()['repo'] if _ACTIVE.get() else '')
     if _ACTIVE.get() is None or params.get('session_id', actor.session_id) != actor.session_id:
         raise FinalizerRefused('commit requires the assigned live worker session')
     return actor.session_id
+
+
+def observed_sizing_session(repo, run_id):
+    """Only the same run's host-observed sizing worker can discharge its own path claim."""
+    context = _ACTIVE.get()
+    if (context and context.get('observed_landing') and context['run_id'] == run_id
+            and os.path.samefile(repo, context['repo'])):
+        return context['sizing_session']
+    return None
 
 
 def review_owner(session_id):
@@ -275,6 +387,11 @@ def authorize_product(repo, paths, deleted, reviewed, host_metadata=None, *, sup
     actual = {_explicit_path(p) for p in paths} | deleted
     # A product named by the emitter cannot be relabelled as generated bookkeeping.
     metadata -= {p for p in actual if p in declared or any(p.startswith(prefix) for prefix in prefixes)}
+    issued_sizing = contract.get('issued_sizing')
+    if (context.get('observed_landing') and issued_sizing in actual and issued_sizing not in deleted
+            and issued_sizing not in contract['manifest_declared_paths'] and issued_sizing in contract['files']):
+        metadata.add(issued_sizing)
+        sources['gate-issued-sizing'] = [issued_sizing]
     product = actual - metadata
     if not product or not reviewed:
         raise FinalizerRefused('private terminal requires nonempty reviewed product bytes')
@@ -299,6 +416,8 @@ def authorize_product(repo, paths, deleted, reviewed, host_metadata=None, *, sup
         if not file.is_file():
             raise FinalizerRefused('host generated metadata is not a regular file')
         expectations[p] = hashlib.sha256(file.read_bytes()).hexdigest()
+        if p == issued_sizing and expectations[p] != contract['files'][p]:
+            raise FinalizerRefused('issued sizing bytes changed before landing')
     context['approved_commit'] = {'paths': sorted(actual), 'hashes': expectations,
                                 'host_metadata': {kind: sorted(set(items) & actual & metadata)
                                                   for kind, items in sources.items()}}
@@ -309,7 +428,7 @@ def guarded_commit(function):
     @wraps(function)
     def call(*args, **kwargs):
         from coordinator_core.warm.workflow_peer import PRIVATE_ROSTER_ENV
-        if not os.environ.get(PRIVATE_ROSTER_ENV):
+        if not os.environ.get(PRIVATE_ROSTER_ENV) and not (_ACTIVE.get() or {}).get('observed_landing'):
             return function(*args, **kwargs)
         context = _ACTIVE.get()
         if context is None:
@@ -355,6 +474,18 @@ def guarded_commit(function):
                 raise FinalizerRefused('caller expectations conflict with protected reviewed bytes')
             merged[p] = digest
         bound.arguments['expected_content_sha256'] = merged or None
+        from coordinator_core.git.commit_trailers import can_format_trailers_in_process, format_trailers_in_process
+        message = bound.arguments['message']
+        expected_trailer = 'Session-Id: ' + actor.session_id
+        present = [line for line in message.splitlines() if line.lower().startswith('session-id:')]
+        if present and present != [expected_trailer]:
+            raise FinalizerRefused('host commit conflicts with the native worker Session-Id')
+        if not present:
+            raw = message.encode('utf-8', errors='surrogateescape')
+            if not can_format_trailers_in_process(raw):
+                raise FinalizerRefused('host commit cannot safely format the native worker Session-Id')
+            bound.arguments['message'] = format_trailers_in_process(raw, [expected_trailer]).decode(
+                'utf-8', errors='surrogateescape')
         outcome = function(*bound.args, **bound.kwargs)
         sha = outcome.sha
         actual = set(_git(repo, ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', sha]).splitlines())

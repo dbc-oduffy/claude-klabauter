@@ -321,17 +321,19 @@ def test_judge_fails_drift_and_an_unjudged_revision(run):
     assert {f["id"] for f in out["failures"]} == {"R2", "R4"}
 
 
-def test_superseded_needs_a_later_revision(run):
+def test_later_revision_cannot_supersede_original_pm_requirement(run):
     _revise(run[0], verbatim="drop the 500ms bar")
     ledger = _ledger(run)
     ok = _verdict(("R1", "met"), ("R2", "superseded", {"superseded_by": "R4"}), ("R3", "met"), ("R4", "met"))
-    assert rl.judge(ledger, ok)["pass"]
+    assert not rl.judge(ledger, ok)["pass"]
     out = rl.judge(ledger, _verdict(("R1", "superseded", {"superseded_by": "R3"}), ("R2", "met"), ("R3", "met"), ("R4", "met")))
     assert [f["id"] for f in out["failures"]] == ["R1"]
 
 
-def test_all_of_pm_ask_makes_an_inessential_item_mandatory(run):
+def test_original_pm_row_is_mandatory_with_either_all_of_setting(run):
     verdict = _verdict(("R1", "met"), ("R2", "not_met", {"essential": False}), ("R3", "met"))
+    assert rl.judge(_ledger(run), verdict)["pass"] is False
+    _revise(run[0], all_of_pm_ask=True)
     out = rl.judge(_ledger(run), verdict)
     assert not out["pass"] and "all_of_pm_ask" in out["failures"][0]["reason"]
 
@@ -368,12 +370,13 @@ def test_not_met_defaults_to_essential(run):
 
 
 @pytest.mark.parametrize("all_of", [False, True])
-def test_a_not_met_row_withheld_by_a_gated_chunk_passes_and_is_open(run, all_of):
+def test_a_gated_pm_row_stays_open_and_prevents_completion(run, all_of):
     if all_of:
         _revise(run[0], all_of_pm_ask=True)
     verdict = _verdict(("R1", "met"), ("R2", "not_met", {"withheld_by": "C9"}), ("R3", "met"))
     out = rl.judge(_ledger(run), verdict, gated={"C9"})
-    assert out == {"pass": True, "failures": [], "open": [{"id": "R2", "reason": "withheld_by C9"}]}
+    assert not out["pass"]
+    assert out["failures"] == out["open"] == [{"id": "R2", "reason": "withheld_by C9"}]
 
 
 @pytest.mark.parametrize("gated", [None, [], {"C1"}])
@@ -400,14 +403,15 @@ def test_withheld_by_a_mended_chunk_fails_as_not_withheld_never_as_a_phantom_gat
 def test_an_essential_not_met_row_still_fails_beside_a_withheld_one(run):
     verdict = _verdict(("R1", "not_met"), ("R2", "not_met", {"withheld_by": "C9"}), ("R3", "met"))
     out = rl.judge(_ledger(run), verdict, gated={"C9"})
-    assert [f["id"] for f in out["failures"]] == ["R1"]
+    assert [f["id"] for f in out["failures"]] == ["R1", "R2"]
     assert out["open"] == [{"id": "R2", "reason": "withheld_by C9"}]
 
 
 def test_open_lists_withheld_and_non_essential_rows_in_ledger_order(run):
     verdict = _verdict(("R3", "met"), ("R2", "not_met", {"withheld_by": "C9"}), ("R1", "met"))
     out = rl.judge(_ledger(run), verdict, gated=("C9",))
-    assert out["pass"] is True
+    assert not out["pass"]
+    assert out["failures"] == [{"id": "R2", "reason": "withheld_by C9"}]
     assert out["open"] == [{"id": "R2", "reason": "withheld_by C9"}]
 
 
@@ -437,10 +441,9 @@ def test_apply_verdict_writes_met_wired_and_superseded_rows(run):
     rl.apply_verdict(repo, REL, verdict, run_id=RUN, sha="abc1234")
     rows = {r["id"]: r for r in _rows(repo)}
     assert rows["R1"]["status"] == "met" and rows["R1"]["met_by"] == [f"{RUN}@abc1234"]
-    assert rows["R2"]["status"] == "waived" and rows["R2"]["ruling"]["quote"] == "drop the 500ms bar"
+    assert rows["R2"]["status"] == "open" and "ruling" not in rows["R2"]
     assert rows["R3"]["status"] == "partial" and rows["R3"]["wired"] is False
-    # A waived row is ruled: it leaves the set the next check must judge.
-    assert [i.id for i in _ledger(run).items] == ["R1", "R3", "R4"]
+    assert [i.id for i in _ledger(run).items] == ["R1", "R2", "R3", "R4"]
 
 
 def test_judge_passes_a_post_commit_item_and_the_landing_writes_it_back(run):
@@ -574,7 +577,7 @@ def test_gated_withheld_not_met_row_passes_without_the_owed_root(run, tmp_path):
     base = [("R2", "met"), ("R3", "met")]
     verdict = _verdict(("R1", "not_met", {"withheld_by": "G1", "root_read": "elsewhere"}), *base)
     out = rl.judge(_ledger(run), verdict, {"R1": str(engine)}, ["G1"])
-    assert out["pass"] and out["open"] == [{"id": "R1", "reason": "withheld_by G1"}]
+    assert not out["pass"] and out["open"] == [{"id": "R1", "reason": "withheld_by G1"}]
     ungated = rl.judge(_ledger(run), verdict, {"R1": str(engine)}, ["G2"])
     assert not ungated["pass"] and {f["id"] for f in ungated["failures"]} == {"R1"}
 
@@ -600,7 +603,7 @@ def test_cockpit_r1_shape_gated_withheld_with_annotated_klabauter_root(run):
         ("R2", "met"), ("R3", "met"),
     )
     out = rl.judge(_ledger(run), verdict, {"R1": owed}, ["C2"])
-    assert out["pass"] and out["failures"] == []
+    assert not out["pass"] and out["failures"] == [{"id": "R1", "reason": "withheld_by C2"}]
     annotated_met = _verdict(("R1", "met", {"root_read": [owed + " (engine repo, owed)"]}), ("R2", "met"), ("R3", "met"))
     assert rl.judge(_ledger(run), annotated_met, {"R1": owed})["pass"]
 
@@ -724,13 +727,13 @@ def _pm_ruling_row(text):
     }
 
 
-def test_out_of_scope_of_a_pm_row_is_accepted_when_a_pm_verbatim_ruling_is_on_the_run(run):
+def test_register_quote_on_another_row_cannot_waive_the_pm_requirement(run):
     repo, _d = run
     ruling = "drop the op, it is out of scope"
     rl._mutate_register(repo, REL, lambda rows: [*rows, _pm_ruling_row(ruling)])
     out = _revise(repo, verbatim=ruling, out_of_scope=["R1"])
-    assert out["ok"] and out["withheld"] == ["R1"]
-    assert _rows(repo)[0]["status"] == "deferred"
+    assert rr.PM_DISPOSITION_REASON in out["error"]
+    assert _rows(repo)[0]["status"] == "open"
 
 
 def test_out_of_scope_of_a_pm_row_with_a_too_short_quote_is_refused(run):
@@ -751,10 +754,13 @@ def test_out_of_scope_of_a_pm_row_with_a_stray_fragment_of_a_long_pm_turn_is_ref
     assert "error" in out and "R1" in out["error"] and _rows(tmp_path)[0]["status"] == "open"
     rl._mutate_register(tmp_path, REL, lambda rows: [*rows, _pm_ruling_row(long_turn)])
     out = _revise(tmp_path, verbatim=long_turn, out_of_scope=["R1"])
-    assert out["ok"] and out["withheld"] == ["R1"]
+    assert rr.PM_DISPOSITION_REASON in out["error"]
+    assert _rows(tmp_path)[0]["status"] == "open"
 
 
-def test_out_of_scope_of_a_non_pm_row_needs_no_pm_ruling(run):
+def test_out_of_scope_of_original_ask_preserves_r3(run):
     repo, _d = run
-    out = _revise(repo, verbatim="the raw ask is out", out_of_scope=["R3"])
-    assert out["ok"] and out["withheld"] == ["R3"]
+    before = _rows(repo)
+    refused = _revise(repo, verbatim="the raw ask is out", out_of_scope=["R3"])
+    assert rr.PM_DISPOSITION_REASON in refused["error"]
+    assert _rows(repo) == before

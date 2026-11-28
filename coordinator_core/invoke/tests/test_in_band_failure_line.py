@@ -77,3 +77,17 @@ def test_submit_launch_error_preserves_minted_handoff(monkeypatch, tmp_path):
         assert code == expected_exit
         if expected_exit:
             assert result["run_id"] in stderr and fields["fire_error"] in stderr
+
+
+def test_submit_preserves_mint_and_reports_failed_requested_fire():
+    from coordinator_core.invoke.__main__ import _exit_code_for_response as code
+
+    reason = "PermissionError: [Errno 1] Operation not permitted: '/Users/example-operator/X'"
+    response = {"result": {"run_id": "ask-r1", "fire_error": reason}}
+    assert code(response, 99, "engine_ask.submit") == 1
+    assert reason in line(response, "engine_ask.submit", "")
+    assert code(response, 99, "other.op") == 0
+    assert line(response, "other.op", "") is None
+    for success in ({"run_id": "r1"}, {"run_id": "r1", "fire": {"fire_id": "f1"}}):
+        assert code({"result": success}, 99, "engine_ask.submit") == 0
+        assert line({"result": success}, "engine_ask.submit", "") is None

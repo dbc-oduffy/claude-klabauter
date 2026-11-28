@@ -111,7 +111,7 @@ def _fold_with(overlay_js: str, halted: bool = False) -> dict:
         pytest.skip("node not on PATH")
     fold = ask_compose._OVERLAY_FOLD_JS.replace("__OVERLAY__", overlay_js)
     program = (
-        "const _USAGE_LIMIT_RE = /zzz/; const _haltOnUsageLimit = () => {}; const log = () => {};\n"
+        "const _errLimitText = () => null; const _USAGE_LIMIT_RE = /zzz/; const _haltOnUsageLimit = () => {}; const log = () => {};\n"
         f"(async () => {{ const _halted = {str(halted).lower()}, _testWanted = true;\n"
         "let _verifyTest = null; let _verify = { test: { status: 'pass', tests_failed: 0, summary: 's' } };\n"
         f"{fold}\nprocess.stdout.write(JSON.stringify(_verify.test)); }})();\n"
@@ -131,6 +131,8 @@ def test_overlay_non_zero_exit_fails_the_test_naming_the_timeout(exit_code) -> N
     assert test["status"] == "fail" and test["tests_failed"] >= 1
     assert test["summary"].startswith(f"clean-overlay verdict inconclusive (exit {exit_code}): ")
     assert "timed out after 120s" in test["summary"]
+    assert test["test_leg"] == {"status": "pass", "run": None, "failed": 0}
+    assert test["overlay"]["exit_code"] == exit_code
 
 
 def test_overlay_thrown_leg_and_null_result_fail_the_test() -> None:

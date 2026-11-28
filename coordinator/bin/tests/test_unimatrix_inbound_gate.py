@@ -56,14 +56,15 @@ def run_main(world, **kw):
     out = io.StringIO()
     kw.setdefault("required", None)
     rc = gate.main(["--timeout", "5", "--interval", "1"], out=out, run_ssh=world.run_ssh, fetch_receipts=world.fetch,
-                   route_for=kw.pop("route_for", route), members=MEMBERS, entries=ENTRIES, local_box="machine-a",
+                   route_for=kw.pop("route_for", route), members=MEMBERS, entries=ENTRIES, local_box=kw.pop("local_box", "machine-a"),
                    sleep=lambda s: None, **kw)
     return rc, out.getvalue()
 
 
-def test_every_far_box_arrives_exits_zero_and_skips_this_box():
+@pytest.mark.parametrize("local_box", ["machine-a", "Machine-a"])
+def test_every_far_box_arrives_exits_zero_and_skips_this_box(local_box):
     w = World({"mini": "ok", "example-fleet": "ok"})
-    rc, out = run_main(w)
+    rc, out = run_main(w, local_box=local_box)
     assert rc == 0
     assert out.splitlines() == ["mini: arrived", "example-fleet: arrived"]
     assert [b for b, _, _ in w.ssh] == ["mini", "example-fleet"]
@@ -429,3 +430,40 @@ def test_the_oracle_ignores_any_sender_field_a_row_may_or_may_not_carry():
 
     assert probe({}) == gate.ARRIVED
     assert probe({"label": "10.0.0.5"}) == gate.ARRIVED
+
+
+@pytest.mark.parametrize("first_exit, expected", [(0, 1), (1, 2)])
+def test_windows_probe_runs_the_installed_sender_under_powershell(tmp_path, monkeypatch, first_exit, expected):
+    import json
+    import shutil
+    import sys
+    host = shutil.which("pwsh")
+    if not host:
+        pytest.skip("PowerShell is required to execute the Windows SSH command")
+    root = tmp_path / "profile with spaces"
+    scripts = root / "unimatrix"
+    scripts.mkdir(parents=True)
+    (scripts / "unimatrix-send.py").write_text(
+        "import json, os, sys\n"
+        "with open(os.environ['PROBE_ARGS'], 'a') as f: print(json.dumps(sys.argv[1:]), file=f)\n"
+        f"sys.exit({first_exit} if sys.argv[2].endswith('.machine-b') else 0)\n")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(root))
+    monkeypatch.setenv("PROBE_ARGS", str(tmp_path / "args"))
+    mux = gate._sibling("lib/unimatrix_box_mux.py", "unimatrix_inbound_gate_mux")
+    monkeypatch.setattr(mux, "far_platform", lambda box: "win32")
+    name = "probe 'A B'"
+    seen = []
+    def run_ssh(member, key, command):
+        parts = command.split()
+        assert parts[0] == "powershell.exe"
+        p = subprocess.run([host, *parts[1:]], capture_output=True)
+        seen.append(p)
+        return p
+    _, status, _, _ = gate.probe_box({"box": "machine-a"}, (name, SID), run_ssh=run_ssh,
+        fetch_receipts=lambda *_: [{"digest":"new"}] if seen and seen[-1].returncode == 0 else [],
+        key="fixture", interval=1, timeout=1, local_box="machine-b")
+    assert status == gate.ARRIVED
+    calls = [json.loads(line) for line in (tmp_path/"args").read_text().splitlines()]
+    assert len(calls) == expected
+    assert [args[1] for args in calls] == [name + ".machine-b", name][:expected]
+    assert all(args[0] == "--to" and args[2] == calls[0][2] for args in calls)
