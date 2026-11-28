@@ -279,6 +279,37 @@ def test_relay_revoke_and_keypin_refuse_unrestatable_payloads(monkeypatch):
     ] == "relay_args_unrestatable"
 
 
+SPOOL_REPLY = {"ok": True, "lines": ['{"phase":"START"}'], "next_offset": 18}
+
+
+def test_read_admission_spool_on_a_plain_ssh_row_invokes_the_read_op():
+    calls = []
+    out = box_transport.read_admission_spool(BOX, 7, runner=_runner(json.dumps(SPOOL_REPLY), calls=calls))
+    assert out["ok"] is True and out["reply"] == SPOOL_REPLY
+    assert "groupem.admission_spool_read" in calls[0][-1] and '"offset": 7' in calls[0][-1]
+
+
+def test_read_admission_spool_on_a_relay_row_uses_the_admission_spool_mode(monkeypatch):
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: [dict(RELAY_BOX)])
+    calls = []
+    out = box_transport.read_admission_spool(RELAY_BOX, 7, runner=_relay_runner(calls, SPOOL_REPLY))
+    assert out["ok"] is True
+    assert out["reply"] == SPOOL_REPLY
+    assert calls[0][0][-1] == "admission-spool 7"
+
+
+def test_read_admission_spool_reports_far_refusal_and_transport_failure_without_raising():
+    refused = box_transport.read_admission_spool(BOX, 0, runner=_runner('{"ok": false, "reason": "engine_unavailable"}'))
+    assert refused == {"ok": False, "reason": "engine_unavailable"}
+    down = box_transport.read_admission_spool(BOX, 0, runner=_runner("", returncode=255))
+    assert down["ok"] is False and down["reason"] == "ssh_exit_255"
+    assert box_transport.read_admission_spool({"box_id": "b"}, 0)["reason"] == "not_ssh_transport"
+
+
+def test_admission_spool_read_op_is_on_the_allowlist():
+    assert "groupem.admission_spool_read" in box_transport.ALLOWED_OPS
+
+
 def test_new_ops_are_on_the_allowlist():
     assert {
         "groupem.suite_grant_revoke_receive",
@@ -560,3 +591,90 @@ def test_query_freshness_failures_are_not_answered(monkeypatch):
     assert box_transport.query_freshness(no_invoke, runner=_runner("{}")) == {
         "ok": False, "answered": False, "reason": "no_invoke_path"}
     assert box_transport.query_freshness(None)["answered"] is False
+
+
+def _payload_runner(stdout="", calls=None, returncode=0):
+    def run(argv, timeout, stdin_bytes):
+        if calls is not None:
+            calls.append((argv, timeout, stdin_bytes))
+        return subprocess.CompletedProcess(argv, returncode, stdout, "")
+
+    return run
+
+
+def test_run_remote_payload_sends_params_on_stdin_through_params_file():
+    calls = []
+    body = json.dumps({"ok": True, "job": "j"}).encode()
+    out = box_transport.run_remote_payload(
+        BOX, "test_leg.remote_run", body, _payload_runner(json.dumps({"ok": True, "job": "j"}), calls), timeout=20)
+    assert out == {"ok": True, "reply": {"ok": True, "job": "j"}}
+    argv, timeout, stdin = calls[0]
+    assert argv[:5] == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"] and argv[5] == "box.example"
+    assert argv[6] == INVOKE + " test_leg.remote_run --params-file -"
+    assert (timeout, stdin) == (20.0, body)
+
+
+def test_stdin_remote_command_is_quoted_per_shell():
+    assert box_transport._remote_command("posix", INVOKE, "test_leg.remote_run", None, stdin=True) == (
+        INVOKE + " test_leg.remote_run --params-file -")
+    win = r"C:\far\coordinator-invoke.cmd"  # abs-path-ok: Windows fixture
+    cmd = box_transport._remote_command("cmd", win, "test_leg.remote_run", None, stdin=True)
+    assert cmd.startswith('"') and cmd.endswith('--params-file -"')
+    assert box_transport._remote_command("cmd", 'bad"invoke', "test_leg.remote_run", None, stdin=True) is None
+
+
+def test_run_remote_payload_refuses_a_non_allowlisted_op_without_spawning():
+    calls = []
+    out = box_transport.run_remote_payload(BOX, "fleet.anything_else", b"{}", _payload_runner("{}", calls), timeout=5)
+    assert _refused(out, "op_not_allowed") and calls == []
+
+
+def test_run_remote_payload_refuses_non_bytes_and_bad_timeout():
+    run = _payload_runner("{}")
+    assert _refused(box_transport.run_remote_payload(BOX, "test_leg.remote_run", "{}", run, timeout=5), "bad_invoke_args")
+    assert _refused(box_transport.run_remote_payload(BOX, "test_leg.remote_run", b"{}", run, timeout=0), "bad_invoke_args")
+
+
+def test_run_remote_payload_failures_are_replies_not_raises():
+    out = box_transport.run_remote_payload(BOX, "test_leg.remote_run", b"{}", _payload_runner("", returncode=255), timeout=5)
+    assert out["reason"] == "ssh_exit_255"
+
+    def boom(argv, timeout, stdin_bytes):
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    assert _refused(box_transport.run_remote_payload(BOX, "test_leg.remote_run", b"{}", boom, timeout=5), "ssh_timeout")
+
+
+def test_run_remote_payload_spends_the_box_lock_and_rate_token():
+    inner = []
+
+    def reentrant(argv, timeout, stdin_bytes):
+        inner.append(box_transport.run_remote_payload(
+            BOX, "test_leg.remote_poll", b"{}", _payload_runner("{}"), timeout=5))
+        return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+    assert box_transport.run_remote_payload(BOX, "test_leg.remote_run", b"{}", reentrant, timeout=5)["ok"]
+    assert _refused(inner[0], "box_busy")
+    ok = _payload_runner("{}")
+    results = [box_transport.run_remote_payload(BOX, "test_leg.remote_poll", b"{}", ok, timeout=5)
+               for _ in range(box_transport.RATE_MAX_CALLS + 1)]
+    assert _refused(results[-1], "rate_limited")
+
+
+def test_run_spawn_with_stdin_keeps_the_shape_check(monkeypatch):
+    with pytest.raises(ValueError):
+        box_transport._run(["sh", "-c", "x"], 5, b"payload")
+
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen.update(kw)
+        return subprocess.CompletedProcess(argv, 0, b"out", b"err")
+
+    monkeypatch.setattr(box_transport.subprocess, "run", fake_run)
+    argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "box.example", "cmd"]
+    proc = box_transport._run(argv, 5, b"payload")
+    assert seen["input"] == b"payload" and (proc.stdout, proc.stderr) == ("out", "err")
+    seen.clear()
+    box_transport._run(argv, 5)
+    assert seen["stdin"] == subprocess.DEVNULL and "input" not in seen

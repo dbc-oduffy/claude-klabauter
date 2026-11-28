@@ -32,7 +32,7 @@ SIZING = "state/sizings/20260101-a.yaml"
 OTHER_SIZING = "state/sizings/20260101-b.yaml"
 F = "pkg/shared.py"
 REVIEWED = reviewed()
-VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 DLV = "dlv-alpha-aaaaaa"
 PLAN = "docs/plans/p.md"
 NODE = "tests/test_a.py::test_x"
@@ -93,7 +93,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     session_core.init(SELF, cwd=str(root))
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     return root

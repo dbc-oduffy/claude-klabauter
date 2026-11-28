@@ -573,18 +573,7 @@ def _session_key(payload: dict) -> tuple[str, bool]:
     return f"pid-{os.getpid()}", False
 
 
-def _repo_root(payload: dict) -> str | None:
-    cwd = payload.get("cwd") or os.getcwd()
-    if not isinstance(cwd, str):
-        return None
-    probe = os.path.abspath(cwd)
-    while True:
-        if os.path.exists(os.path.join(probe, ".git")):
-            return probe
-        parent = os.path.dirname(probe)
-        if parent == probe:
-            return None
-        probe = parent
+from coordinator_core.hooks._repo_root_walk import repo_root as _repo_root  # noqa: E402
 
 
 def _resolve_git_dir(dot_git: str) -> str | None:

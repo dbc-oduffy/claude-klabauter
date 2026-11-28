@@ -3,7 +3,8 @@
 ``scan(rows, waits_by_box, grants_by_box, dwell, now)`` is a pure decision over records already
 read; it spawns nothing, reads no file and never raises. ``rows`` are ``fleet_live.FIELDS`` rows (the
 persisted fleet live snapshot): ``box``, ``state``, ``sampled_at``, optional ``age_s``, ``cores``,
-``cpu_pct``, ``load5``, ``gpu_util_pct`` and ``gpus[]`` (``util_pct``). The caller carries ``dwell``
+``cpu_pct``, ``load5``, ``gpu_util_pct``, ``gpus[]`` (``util_pct``) and, on a heterogeneous box, ``cores_by_class`` and
+``free_cores_by_class`` (``{"p": n, "e": n}``; idle counts free P-cores only). The caller carries ``dwell``
 (``{box: idle-since epoch}``) across single-shot ticks and persists the returned one.
 
 Snapshot constants: ``IDLE_UTIL_PCT`` (GPU util below it is idle; the value ``idle_capacity``
@@ -68,15 +69,39 @@ def _gpu_idle(row: dict) -> bool:
     return util is not None and util < IDLE_UTIL_PCT
 
 
+def _p_cores_half_free(row: dict) -> Optional[bool]:
+    """Half the P-cores free on a heterogeneous row; None when the row is homogeneous."""
+    free = row.get("free_cores_by_class")
+    if not isinstance(free, dict):
+        # A declared split whose per-core use went unmeasured is unknown, never idle: E-cores must not
+        # decide a timed-job placement through the whole-box load.
+        return False if isinstance(row.get("cores_by_class"), dict) else None
+    total = row.get("cores_by_class")
+    total_p = _num(total.get("p")) if isinstance(total, dict) else None
+    free_p = _num(free.get("p"))
+    if total_p is None or free_p is None or total_p <= 0:
+        return False
+    return free_p / total_p * 100.0 >= 100.0 - IDLE_LOAD_PCT
+
+
 def is_idle(row: object, now: Optional[float] = None) -> bool:
-    """True for a fresh ``ok`` row with a GPU under ``IDLE_UTIL_PCT`` or load at most ``IDLE_LOAD_PCT``."""
+    """True for a fresh ``ok`` row with a GPU under ``IDLE_UTIL_PCT`` or half its cores free.
+
+    A heterogeneous row carries ``free_cores_by_class`` and ``cores_by_class`` (``{"p": n, "e": n}``):
+    half the P-cores free counts, E-cores never make a box idle. A homogeneous row uses ``load_pct``.
+    """
     try:
         if not isinstance(row, dict) or row.get("state") != _STATE_OK:
             return False
         if not _fresh(row, time.time() if now is None else now):
             return False
+        if _gpu_idle(row):
+            return True
+        p_free = _p_cores_half_free(row)
+        if p_free is not None:
+            return p_free
         load = load_pct(row)
-        return _gpu_idle(row) or (load is not None and load <= IDLE_LOAD_PCT)
+        return load is not None and load <= IDLE_LOAD_PCT
     except Exception:  # contract: never raises
         return False
 

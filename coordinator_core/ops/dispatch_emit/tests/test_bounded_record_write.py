@@ -35,6 +35,27 @@ def test_success_returns_none_and_writes(tmp_path: Path) -> None:
     assert not hrr.write_outstanding(p)
 
 
+def test_preserve_mode_defaults_true_and_passes_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list = []
+    monkeypatch.setattr(hrr, "atomic_write_bytes", lambda path, data, **kw: seen.append(kw))
+    assert hrr.bounded_write(tmp_path / "a.bin", b"x", 1000) is None
+    assert hrr.bounded_write(tmp_path / "b.bin", b"x", 1000, preserve_mode=False) is None
+    assert seen == [{"preserve_mode": True}, {"preserve_mode": False}]
+
+
+def test_writes_past_the_outstanding_cap_stall_without_spawning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    gate, calls = _blocker(monkeypatch)
+    try:
+        for i in range(hrr.MAX_OUTSTANDING_WRITES):
+            assert hrr.bounded_write(tmp_path / f"{i}.bin", b"x", 1) is hrr.STALLED
+        spawned = threading.active_count()
+        assert hrr.bounded_write(tmp_path / "over.bin", b"x", 1000) is hrr.STALLED
+        assert threading.active_count() == spawned
+        assert not hrr.write_outstanding(tmp_path / "over.bin")
+    finally:
+        gate.set()
+
+
 @pytest.mark.deliberate_wall_clock(reason="bounds a blocked write that must report stalled at its deadline")
 def test_blocked_write_returns_stalled_within_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate, _ = _blocker(monkeypatch)
@@ -58,6 +79,20 @@ def test_second_write_to_outstanding_path_stalls_at_once(tmp_path: Path, monkeyp
         assert hrr.bounded_write(p, b"2", 5000) is hrr.STALLED
         assert time.monotonic() - t0 < 0.1
         assert len(calls) == 1
+    finally:
+        gate.set()
+
+
+def test_write_admitted_is_false_only_for_a_write_bounded_write_would_refuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate, _ = _blocker(monkeypatch)
+    p = tmp_path / "a.bin"
+    try:
+        assert hrr.write_admitted(p)
+        assert hrr.bounded_write(p, b"1", 20) is hrr.STALLED
+        assert not hrr.write_admitted(p)
+        assert hrr.write_admitted(tmp_path / "other.bin")
     finally:
         gate.set()
 

@@ -45,16 +45,26 @@ def test_local_only_compute_op_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not policy.remote_safe(op)
 
 
-def test_phase2_allowlist_is_mint_land_only_and_classified_mutating() -> None:
+def test_phase2_allowlist_is_exactly_the_named_ops_and_classified_mutating() -> None:
     assert policy.PHASE2_MUTATING_ALLOWLIST == {
         "hooks.submit_engine_ask",
         "dispatch.emit",
+        "groupem.file_cache_trim",
     }
     assert not policy.remote_safe("dispatch.land_run")
     for op in policy.PHASE2_MUTATING_ALLOWLIST:
         assert OP_CLASSIFICATION[op] is OpClass.MUTATING
         assert policy.remote_safe(op)
         assert not policy.is_local_only(op)
+
+
+def test_fleet_file_cache_ops_remote_safe_and_the_local_cli_name_is_not() -> None:
+    assert policy.remote_safe("groupem.file_cache_report")
+    assert policy.remote_safe("groupem.file_cache_trim")
+    assert policy.is_phase2_mutating("groupem.file_cache_trim")
+    assert not policy.is_phase2_mutating("groupem.file_cache_report")
+    assert not policy.remote_safe("trim-file-cache")
+    assert not policy.remote_safe("file_cache_trim")
 
 
 def test_unlisted_mutating_op_still_refused() -> None:

@@ -2621,6 +2621,7 @@ def test_box_wide_roster_reads_peers_outside_repo_root(tmp_path: Path, monkeypat
     monkeypatch.setattr(
         harness_registry, "snapshot", lambda: {"in": _rec(repo), "out": _rec(other)}
     )
+    monkeypatch.setattr(peer_roster, "_process_alive", lambda pid, start_epoch: True)
     scoped = {r.session_id for r in peer_roster.build_roster(repo_root=str(repo))}
     wide = {r.session_id for r in peer_roster.build_roster(repo_root=str(repo), box_wide=True)}
     assert scoped == {"in"} and wide == {"in", "out"}
@@ -3158,6 +3159,41 @@ def test_kick_remote_refresh_is_a_noop_without_refresh_support(monkeypatch: pyte
     monkeypatch.setattr(watch, "_refresh_thread", None)
     monkeypatch.delattr(watch.remote_roster, "refresh", raising=False)
     assert watch.kick_remote_refresh("dir") is None
+
+
+def test_kick_admission_drain_runs_off_tick_one_at_a_time_and_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    from coordinator_core.group_em import admission_drain
+
+    gate = threading.Event()
+    calls = []
+
+    def slow(directory=None, **kw):
+        calls.append(directory)
+        gate.wait(5)
+
+    monkeypatch.setattr(admission_drain, "drain_managed", slow)
+    monkeypatch.setattr(watch, "_admission_drain_thread", None)
+    first = watch.kick_admission_drain("dir")
+    assert watch.kick_admission_drain("other") is first
+    gate.set()
+    first.join(5)
+    assert calls == ["dir"]
+    monkeypatch.setattr(admission_drain, "drain_managed", mock.Mock(side_effect=RuntimeError("x")))
+    watch.kick_admission_drain("dir").join(5)
+
+
+def test_capacity_jobs_skip_drained_records(capacity_home: Path) -> None:
+    me = os.getpid()
+    _admission(
+        capacity_home,
+        {"phase": "START", "session_id": "s1", "run": "local", "pids": [me]},
+        {"phase": "START", "session_id": "s9", "run": "far", "pids": [me], "drained_from": "mini"},
+    )
+    with mock.patch.object(_gpu_sample(), "sample", return_value={**_FAKE_GPU, "vram_by_pid": {me: 3000}}):
+        jobs = {j["run"] for j in watch._capacity_sample()["jobs"]}
+    assert jobs == {"local"}
 
 
 _SEED_BOARD = pathlib.Path(__file__).parent / "fixtures" / "fleet-goal-board-seed.json"

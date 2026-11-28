@@ -10,7 +10,8 @@ from coordinator_core.ops.dispatch_emit.pipeline_stage_roles import ROLE_BY_STAG
 
 
 def _binding(**roles):
-    return stage_family_binding.Binding(runner=stage_family.RUNNER_AGENT, fallback="claude", roles=roles)
+    binding = stage_family_binding.from_sizing({"stage_families": roles})
+    return binding or stage_family_binding.Binding(runner=stage_family.RUNNER_AGENT, fallback="claude", roles={})
 
 
 def _segment(pipeline, *stage_ids):

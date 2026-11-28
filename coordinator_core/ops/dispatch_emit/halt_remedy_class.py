@@ -8,6 +8,13 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, Sequence
 
+from coordinator_core.ops.dispatch_emit import rag_use as _rag_use
+
+HALT_UE_RETRIEVAL_MISSING = _rag_use.HALT_UE_RETRIEVAL_MISSING
+HALT_UE_RETRIEVAL_CHECK_FAILED = _rag_use.HALT_UE_RETRIEVAL_CHECK_FAILED
+HALT_EXAMPLE_RETRIEVAL_REPO_OUTAGE_REPORTED = _rag_use.HALT_EXAMPLE_RETRIEVAL_REPO_OUTAGE_REPORTED
+HALT_UE_PHASE_RETRIEVAL_MISSING = _rag_use.HALT_UE_PHASE_RETRIEVAL_MISSING
+
 DECISION = "decision"
 MECHANICAL = "mechanical"
 
@@ -84,6 +91,15 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     PACK_READ_STALL_HALT_KIND: (MECHANICAL, "refire-after-pack-read-stall"),
     # DECISION: a refire alone re-halts; the answer is outside the engine (restore example-retrieval-repo, back the citations).
     "rag_corpus_down": (DECISION, None),
+    # DECISION: a bare refire re-halts until the agents use example-retrieval-repo or the corpus serves.
+    "example_retrieval_repo_unused": (DECISION, None),
+    "example_retrieval_repo_cadence": (DECISION, None),
+    "example_retrieval_repo_not_serving": (DECISION, None),
+    "ue_corpus_gap": (DECISION, None),
+    HALT_UE_RETRIEVAL_MISSING: (DECISION, None),
+    HALT_UE_RETRIEVAL_CHECK_FAILED: (DECISION, None),
+    HALT_EXAMPLE_RETRIEVAL_REPO_OUTAGE_REPORTED: (DECISION, None),
+    HALT_UE_PHASE_RETRIEVAL_MISSING: (DECISION, None),
     # commit_stage_halt: the commit agent was cancelled or failed; the watcher lands the marker through
     # remedy_or_halt and a refire resumes the kept work.
     "commit_stage": (MECHANICAL, "refire-resumes-kept-work"),
@@ -96,6 +112,8 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     "staged_stall": (MECHANICAL, "refire-resumes-kept-work"),
     # run_cancel: workflow.cancel stopped the run on purpose; the halted record carries the refire next_action.
     "cancelled": (MECHANICAL, "refire-resumes-kept-work"),
+    # A 0-test verdict halts before commit; the cause repeats on a bare refire, so the fix is the EM's.
+    "test_infra_failure": (DECISION, None),
 }
 
 #: Class label of a kind whose continuing would do irreversible harm or commit an unasked direction.
@@ -128,6 +146,16 @@ IRREVERSIBLE_KINDS: dict[str, str] = {
     "halt-on-run-owned-merge": "resolves a merge over run-owned history unasked: history rewrite",
     # Unverifiable claims: continuing ships docs whose citations were never checked against the corpus.
     "rag_corpus_down": "code-index corpus down: the docs-check cannot back citations; continuing ships them unchecked",
+    "example_retrieval_repo_unused": "gated agents made no example-retrieval-repo call: the findings skipped the code index; refire after they call it",
+    "example_retrieval_repo_cadence": "gated agents called example-retrieval-repo below the UE cadence: UE claims rest on ungrounded knowledge; refire with regular calls",
+    "example_retrieval_repo_not_serving": "example-retrieval-repo is not serving: agents cannot ground UE work; restore it, then refire",
+    "ue_corpus_gap": "the ue-addon corpus answered empty for the run's UE queries: the knowledge is missing; index it, then refire",
+    HALT_UE_RETRIEVAL_MISSING: "a UE-declared run made no UE-corpus retrieval: its UE claims rest on ungrounded knowledge; refire with agents that query the corpus",
+    HALT_UE_RETRIEVAL_CHECK_FAILED: "the research gate denied agents of a UE run: the retrieval check never passed; fix the gate cause, then refire",
+    HALT_EXAMPLE_RETRIEVAL_REPO_OUTAGE_REPORTED: "an agent reported a example-retrieval-repo outage during a UE run: the corpus was not served; restore it, then refire",
+    HALT_UE_PHASE_RETRIEVAL_MISSING: "a required phase (sizing, planning or review) of a UE run made no UE-corpus retrieval: that phase ran ungrounded; refire with its agents querying the corpus",
+    # A zero-test verdict never judged the bytes: a refire repeats the cause, so continuing to commit ships unverified work.
+    "test_infra_failure": "a test leg ran zero tests: committing proceeds on bytes no test judged",
     "citation_unbacked": "docs-check found citations the corpus does not back: continuing ships unbacked claims",
 }
 

@@ -40,6 +40,7 @@ _SETTLE_SECS = 10.0
 _SETTLE_MAX_SECS = 30.0
 
 _ASK_READ_DEADLINE_SECS = 2.0
+_OUTSTANDING_READ_DEADLINE_SECS = 0.4
 _TERMINATE_GRACE_SECS = 5.0
 _TERMINATE_POLL_INTERVAL_SECS = 0.1
 
@@ -92,6 +93,7 @@ class PairStopResult:
     failures: tuple[tuple[int, str], ...] = ()
     # Pids the stop set out to end; None means unknown, so every survivor counts as stuck.
     initial_pids: Optional[frozenset[int]] = None
+    in_flight: Optional[int] = None
 
     def ok(self) -> bool:
         return not self.survivors
@@ -261,37 +263,56 @@ _ASK_WEDGED = "wedged"
 _ASK_UNANSWERED = "unanswered"
 
 
-def _ask_server_outcome(pipe: str) -> str:
-    """Graceful ask over the warm pipe: _ASK_ACKNOWLEDGED, _ASK_WEDGED (the -32004 envelope: the
-    server proved its dispatch is stuck, so no drain is coming), or _ASK_UNANSWERED (transport
-    failure or no reply within the read deadline)."""
+def _probe_exchange(
+    pipe: str, params: dict, deadline_secs: float = _ASK_READ_DEADLINE_SECS
+) -> "bytes | None":
+    """One `engine.stop_probe` frame over `pipe`: the raw reply line, None when unanswered."""
     request = {
         "jsonrpc": "2.0",
         "id": "warm-engine-stop",
         "method": "engine.stop_probe",
-        "params": {},
+        "params": params,
         "_engine_token": _STOP_REQUEST_TOKEN,
     }
     payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
     try:
         fh = _open_pipe(pipe)
     except OSError:
-        return _ASK_UNANSWERED
+        return None
     try:
         try:
             fh.write(payload)
             fh.flush()
         except OSError:
-            return _ASK_UNANSWERED
-        line = _read_line_with_deadline(fh, _ASK_READ_DEADLINE_SECS)
-        if _is_wedged_reply(line):
-            return _ASK_WEDGED
-        return _ASK_ACKNOWLEDGED if _is_stop_acknowledgement(line) else _ASK_UNANSWERED
+            return None
+        return _read_line_with_deadline(fh, deadline_secs)
     finally:
         try:
             fh.close()
         except OSError:
             pass
+
+
+def _ask_server_outcome(pipe: str) -> str:
+    """Graceful ask over the warm pipe: _ASK_ACKNOWLEDGED, _ASK_WEDGED (the -32004 envelope: the
+    server proved its dispatch is stuck, so no drain is coming), or _ASK_UNANSWERED (transport
+    failure or no reply within the read deadline)."""
+    line = _probe_exchange(pipe, {})
+    if _is_wedged_reply(line):
+        return _ASK_WEDGED
+    return _ASK_ACKNOWLEDGED if _is_stop_acknowledgement(line) else _ASK_UNANSWERED
+
+
+def read_server_outstanding(pipe: str) -> Optional[int]:
+    """The server's outstanding count (this read excluded), None when unanswered. Never raises."""
+    try:
+        line = _probe_exchange(pipe, {"report_outstanding": True}, _OUTSTANDING_READ_DEADLINE_SECS)
+        reply = json.loads(line) if line else None
+    except Exception:  # noqa: BLE001 -- a report that cannot be read is unknown, never a failed stop
+        return None
+    result = reply.get("result") if isinstance(reply, dict) else None
+    count = result.get("outstanding") if isinstance(result, dict) else None
+    return count if isinstance(count, int) and not isinstance(count, bool) else None
 
 
 def _ask_server_to_stop(pipe: str) -> bool:
@@ -622,6 +643,8 @@ def stop_warm_pair(
     ask_front_door: Optional[Callable[[Optional[dict]], bool]] = None,
     keep_pids: frozenset = frozenset(),
     server_pipe: Optional[str] = None,
+    on_in_flight: Optional[Callable[[Optional[int]], None]] = None,
+    read_outstanding: Optional[Callable[[str], Optional[int]]] = None,
 ) -> PairStopResult:
     """Stop the supervisor, then the server (asked, drained), then the front door (asked,
     drained), of `engine_root`; return who stopped and who survived. A pid is signalled only
@@ -635,6 +658,9 @@ def stop_warm_pair(
     survivor, or allowed to lose its breadcrumb. The successor shares this root's server.py, so
     only a pid exclusion tells the generations apart. `server_pipe` is the superseded server's
     own endpoint (the breadcrumb now names the successor), so it still gets a graceful drain ask.
+
+    `on_in_flight`, when given, is called once with the server's outstanding count (None when
+    unknown) before the supervisor or any other pid is signalled, and the count lands on the result.
     """
     from coordinator_core.warm import front_door, supervisor
 
@@ -646,6 +672,17 @@ def stop_warm_pair(
         p for p in find_pair_processes(engine_root, psutil_module=psutil_module) if p.pid not in keep
     ]
     seen: dict[int, PairProcess] = {p.pid: p for p in before}
+
+    in_flight: Optional[int] = None
+    if on_in_flight is not None:
+        early_crumb = breadcrumb.read_breadcrumb(engine_root)
+        early = _record_pid(early_crumb)
+        early_pipe = server_pipe
+        if early is not None and early[0] not in keep and isinstance(early_crumb, dict):
+            early_pipe = early_crumb.get("pipe")
+        if isinstance(early_pipe, str):
+            in_flight = (read_outstanding or read_server_outstanding)(early_pipe)
+        on_in_flight(in_flight)
 
     sup_pids: dict[int, str] = {p.pid: p.cmdline for p in before if p.role == ROLE_SUPERVISOR}
     disc = _record_pid(supervisor.read_discovery(engine_root))
@@ -790,6 +827,7 @@ def stop_warm_pair(
         survivors=survivors,
         failures=tuple(sorted((pid, why) for pid, why in failures.items() if pid in survivor_pids)),
         initial_pids=initial,
+        in_flight=in_flight,
     )
     if result.ok():
         if not keep:
@@ -797,3 +835,65 @@ def stop_warm_pair(
         supervisor.unlink_discovery(engine_root)
         front_door.unlink_discovery(engine_root)
     return result
+
+
+RESTART_RESTARTED = "restarted"
+RESTART_NO_ENGINE = "no-engine-running"
+RESTART_NOT_ANSWERING = "successor-not-answering"
+RESTART_UNSUPPORTED = "unsupported"
+
+_RESTART_STAMP_SUFFIX_RE = re.compile(r"\+restart-[0-9a-f]+$")
+
+
+@dataclass(frozen=True)
+class RestartResult:
+    """`outcome` is one of the `RESTART_*` constants. `RESTART_UNSUPPORTED` means the root carries
+    no engine stamp, so no successor generation can exist and the caller decides on a plain stop."""
+
+    outcome: str
+
+    def ok(self) -> bool:
+        return self.outcome in (RESTART_RESTARTED, RESTART_NO_ENGINE)
+
+
+def _rotated_stamp(old_stamp: bytes) -> bytes:
+    """`old_stamp` with a fresh `+restart-<nonce>` identity suffix, so its token differs and a
+    successor can bind beside the old server. The `sha:` prefix is untouched: stamp readers
+    cut the identity at the first `+`."""
+    import uuid
+
+    text = _RESTART_STAMP_SUFFIX_RE.sub("", old_stamp.decode("utf-8", errors="replace").strip())
+    return f"{text}+restart-{uuid.uuid4().hex[:12]}\n".encode("utf-8")
+
+
+def restart_warm_pair(
+    engine_root: Path,
+    *,
+    err=None,
+    start_successor: Optional[Callable[..., bool]] = None,
+) -> RestartResult:
+    """Make-before-break restart of `engine_root`'s warm pair: the successor boots under a rotated
+    stamp token while the old pair keeps answering, and the old pair is stopped only after the
+    successor answers a warm op (`percolate.round.start_successor_pair_in_hold`, the one handover).
+    No hook falls to the door's cold leg during the swap.
+
+    Nothing running: `RESTART_NO_ENGINE`, nothing spawned (the next hook starts one). A successor
+    that never answers leaves the old pair running: `RESTART_NOT_ANSWERING`. A root with no stamp:
+    `RESTART_UNSUPPORTED`, nothing touched.
+
+    Trap: a same-token successor loses the election, so the stamp is rotated rather than the
+    server merely respawned; a plain stop-then-start restart is the gap this exists to close."""
+    from coordinator_core.warm import skew
+
+    root = Path(engine_root)
+    old_stamp = skew.read_engine_stamp_bytes(root)
+    if old_stamp is None:
+        return RestartResult(RESTART_UNSUPPORTED)
+    if _record_pid(breadcrumb.read_breadcrumb(root)) is None and not find_pair_processes(root):
+        return RestartResult(RESTART_NO_ENGINE)
+    if start_successor is None:
+        from coordinator_core.warm.handover import start_successor_pair_in_hold as start_successor
+    answered = start_successor(
+        root, err=err, old_stamp=old_stamp, new_stamp=_rotated_stamp(old_stamp)
+    )
+    return RestartResult(RESTART_RESTARTED if answered else RESTART_NOT_ANSWERING)

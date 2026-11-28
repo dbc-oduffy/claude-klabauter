@@ -70,6 +70,14 @@ SPINE_REPAIR_CLASSES: dict[str, str] = {
     "SPINE/InvalidChangeKindError": (
         "re-tag change_kind to the schema enum value the row's writes imply"
     ),
+    "ANCHOR/anchor-check-malformed": (
+        "rewrite each named anchor check as grep -c -F '<exact text>' <file> or a real regex "
+        "with .*, rerun it at HEAD; never delete the premise"
+    ),
+    "ANCHOR/anchor-check-mismatch": (
+        "rerun each named anchor check at HEAD: fix the pattern, or correct the claim when the "
+        "premise is false"
+    ),
     "TEST_RUNNER_OUT_OF_ROLE/test-runner-out-of-role-row": (
         "split into a performer: em verify row with the same command, leaving the original "
         "row's writes"

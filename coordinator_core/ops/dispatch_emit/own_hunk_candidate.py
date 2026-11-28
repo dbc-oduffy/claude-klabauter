@@ -106,30 +106,54 @@ def _blocks(root: Path, common: Path, path: str, head_keys: list, shas) -> set:
 
 
 def _recorded(record_dir: Path, path: str) -> set:
-    """Blob shas a run's record names for `path`: `kept.json` blobs and the `touched-blobs.json` run blob.
-    The two record files are read once per run dir per `call_io_scope`, not once per path."""
+    """Blob shas a run's record names for `path`: kept blobs, the touched run blob and the latest write print."""
     from coordinator_core.git import call_io_scope
     from coordinator_core.ops.dispatch_emit import kept_work, stranded_sibling
 
-    kept, touched = call_io_scope.memo(
+    kept, touched, printed = call_io_scope.memo(
         "own-hunk-recorded", str(record_dir),
-        lambda: (kept_work.kept_fingerprints(record_dir), stranded_sibling.read(record_dir)),
+        lambda: (kept_work.kept_fingerprints(record_dir), stranded_sibling.read(record_dir), printed_blobs(record_dir)),
     )
     shas = set(kept.get(path, ()))
     run_blob = touched.get(path, {}).get("run")
     if run_blob:
         shas.add(run_blob)
+    if printed.get(path):
+        shas.add(printed[path])
     return shas
+
+
+def printed_blobs(record_dir: Path) -> dict:
+    """`{path: blob sha}` of the run's write prints (`write_prints.json` in its record dir); a deleted print drops."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import run_write_prints
+
+    try:
+        data = json.loads((Path(record_dir) / run_write_prints.PRINTS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {run_write_prints._norm(p): s for p, s in data.items() if isinstance(p, str) and isinstance(s, str) and s}
 
 
 def _peer_owners(root: Path, common: Path, run_id: str, path: str, head_keys: list) -> dict:
     """`{block: run id}` over the most recent other runs' recorded blobs for `path`
     (`stranded_sibling.recent_run_dirs` bounds the runs)."""
-    from coordinator_core.ops.dispatch_emit import stranded_sibling
+    from coordinator_core.ops.dispatch_emit import co_tenant_owner, stranded_sibling
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
+    base = Path(root) / RECORD_DIR_ROOT
+    dirs = dict(stranded_sibling.recent_run_dirs(base, run_id))
+    try:
+        for name in co_tenant_owner.peer_hunk_runs(root, path, exclude_run_id=run_id):
+            if name != run_id and (base / name).is_dir():
+                dirs.setdefault(name, base / name)
+    except Exception:  # noqa: BLE001 -- no halted attribution: the recent runs stand
+        pass
     owners: dict = {}
-    for name, rdir in stranded_sibling.recent_run_dirs(Path(root) / RECORD_DIR_ROOT, run_id):
+    for name, rdir in sorted(dirs.items()):
         shas = _recorded(rdir, path)
         if shas:
             for block in _blocks(root, common, path, head_keys, sorted(shas)):

@@ -371,7 +371,7 @@ def test_write_embeds_pm_verbatims_once_and_keeps_em_curation(repo: Path, monkey
     assert [e["turn"] for e in _load(path)["pm_verbatims"]] == [1, 9]
 
 
-def test_relayed_ask_registers_only_its_text_and_lists_every_turn_unrelated(
+def test_relayed_ask_registers_its_text_and_every_uncovered_pm_turn_as_a_row(
     repo: Path, monkeypatch
 ) -> None:
     import coordinator_core.ops.baton_pm_turns as pm_turns
@@ -385,11 +385,13 @@ def test_relayed_ask_registers_only_its_text_and_lists_every_turn_unrelated(
     sizing_assemble.write_back(repo, rel, _decision("M"), relayed_ask_text="  fix the relayed thing\n")
     doc = _load(path)
     register = doc["requirement_register"]
-    assert [r["source_text"] for r in register["rows"]] == ["fix the relayed thing"]
-    assert register["rows"][0]["id"] == "R1"
+    assert [r["source_text"] for r in register["rows"]] == [
+        "fix the relayed thing", *[f"session chatter {n}" for n in range(44, 48)]
+    ]
+    assert [r["id"] for r in register["rows"]] == ["R1", "T44", "T45", "T46", "T47"]
     assert register["rows"][0]["anchor"] == "relayed"
-    assert [e["turn"] for e in register["unrelated_turns"]] == [44, 45, 46, 47]
-    assert all(e["reason"] for e in register["unrelated_turns"])
+    assert all(r["status"] == "open" for r in register["rows"])
+    assert "unrelated_turns" not in register
     assert [e["turn"] for e in doc["pm_verbatims"]] == [44, 45, 46, 47]
     assert rr.coverage_gaps(doc) == []
     assert rr.unrelated_turn_errors(doc, register) == []

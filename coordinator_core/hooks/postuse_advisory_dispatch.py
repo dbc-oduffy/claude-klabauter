@@ -1655,10 +1655,11 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
             if transcript_path and _task_gone_in_tail(transcript_path, task_id):
                 with open(marker, "a", encoding="utf-8"):
                     pass
+                refire = stall.halted_refire_call(record.get("scriptPath"))
+                step = f"Refire: {refire}" if refire else f"Resume: Workflow resumeFromRunId={run_id}"
                 return (
                     f"Workflow run {run_id} abandoned: task {task_id} no longer exists "
-                    f"(TaskStop: No task found). Resume: Workflow resumeFromRunId={run_id}, "
-                    "or ignore."
+                    f"(TaskStop: No task found). {step}, or ignore."
                 )
             call = stall.render_resume_call(
                 run_id, record.get("scriptPath"), record.get("args"), task_id

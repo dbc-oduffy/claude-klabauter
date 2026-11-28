@@ -414,6 +414,94 @@ def test_sweep_on_a_missing_pack_dir_is_zero(tmp_path: Path) -> None:
     assert sh.sweep_orphan_pack_files(_common(tmp_path)) == 0
 
 
+def test_sweep_reaps_an_aged_midx_lock_even_while_paused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pack_deletion_pause, "PACK_DELETION_PAUSED", True)
+    common = _common(tmp_path)
+    (lock,) = _tmp_pack_files(common, ["multi-pack-index.lock"], _AGED_S)
+    (orphan,) = _tmp_pack_files(common, ["pack-bbb.rev"], _AGED_S)
+    assert sh.sweep_orphan_pack_files(common) == 1
+    assert not lock.exists()
+    assert orphan.exists()
+
+
+def test_sweep_keeps_a_fresh_midx_lock(tmp_path: Path) -> None:
+    common = _common(tmp_path)
+    (lock,) = _tmp_pack_files(common, ["multi-pack-index.lock"], _YOUNG_S)
+    assert sh.sweep_orphan_pack_files(common) == 0
+    assert lock.exists()
+
+
+@pytest.mark.spawns_process
+def test_light_daily_under_the_pause_reaps_an_aged_midx_lock_and_the_midx_write_lands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    from coordinator_core.ops import git_maintenance as gm
+    from coordinator_core.win_portability import no_console_creationflags
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), *args], capture_output=True, text=True, **no_console_creationflags()
+        )
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    (tmp_path / "a.txt").write_text("a\n", encoding="utf-8")
+    git("add", "a.txt")
+    assert git("commit", "-qm", "seed").returncode == 0
+    assert git("repack", "-adq").returncode == 0
+    common = tmp_path / ".git"
+    pack_dir = common / "objects" / "pack"
+    (lock,) = _tmp_pack_files(common, ["multi-pack-index.lock"], _AGED_S)
+    (orphan,) = _tmp_pack_files(common, ["pack-bbb.rev"], _AGED_S)
+    assert git("multi-pack-index", "write").returncode != 0, "a dead lock must block git's own midx write"
+    assert not (pack_dir / "multi-pack-index").exists()
+    monkeypatch.setattr(pack_deletion_pause, "paused", lambda: True)
+
+    result = gm.run_tier(tmp_path, "daily", heavy=False)
+
+    assert result.rc == 0 and result.ran is True and result.deferred is None, result
+    assert not lock.exists()
+    assert orphan.exists()
+    assert result.pack_files_reaped == 1
+    status = sh.status(common)
+    assert status.midx_pack_count == status.pack_count >= 1
+
+
+def test_status_reports_a_stale_midx_lock_with_age_and_pack_count(tmp_path: Path) -> None:
+    _, common = _repo(tmp_path, packs=3)
+    assert sh.status(common).stale_midx_lock is None
+    (lock,) = _tmp_pack_files(common, ["multi-pack-index.lock"], _YOUNG_S)
+    assert sh.status(common).stale_midx_lock is None
+    os.utime(lock, (time.time() - _AGED_S,) * 2)
+    report = sh.status(common).stale_midx_lock
+    assert report is not None and report["pack_count"] == 3 and report["age_s"] >= _AGED_S - 5
+
+
+@pytest.mark.skipif(os.name != "nt", reason="POSIX renames an open file: age is the only evidence there")
+def test_an_aged_midx_lock_held_open_survives_the_sweep_and_status_never_probes_it(tmp_path: Path) -> None:
+    common = _common(tmp_path)
+    (lock,) = _tmp_pack_files(common, ["multi-pack-index.lock"], _AGED_S)
+    with open(lock, "rb"):
+        assert sh.sweep_orphan_pack_files(common) == 0
+        assert lock.exists()
+        assert sh.status(common).stale_midx_lock is not None
+        assert lock.exists() and not lock.with_name(lock.name + ".probe").exists()
+    assert sh.sweep_orphan_pack_files(common) == 1
+    assert not lock.exists()
+
+
+def test_owed_by_threshold_is_true_for_an_aged_midx_lock_only(tmp_path: Path) -> None:
+    _, common = _repo(tmp_path, packs=0)
+    (common / "objects" / "00").mkdir()
+    (lock,) = _tmp_pack_files(common, ["multi-pack-index.lock"], _YOUNG_S)
+    assert sh.owed_by_threshold(common) is False
+    os.utime(lock, (time.time() - _AGED_S,) * 2)
+    assert sh.owed_by_threshold(common) is True
+
+
 def _plant_midx(pack_dir, names) -> None:
     """A MIDX with a PNAM chunk naming `names`, in git's on-disk shape."""
     pnam = b"".join(n.encode() + b"\0" for n in names)

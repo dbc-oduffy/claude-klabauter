@@ -91,6 +91,56 @@ def test_empty_test_verdict_with_limit_text_halts_usage_limit_and_plain_empty_st
     assert plain.stdout.strip() == "test_verdict_empty", plain.stderr
 
 
+def _verify_tests_throw_run(throw_js: str) -> subprocess.CompletedProcess:
+    """Eval the composed verify-tests catch ahead of the empty-verdict halt; prints the resulting halt kind.
+
+    The outer `_runVerify` catch is a hand-written replica of the one the composer emits, so only the inner
+    verify-tests catch, the limit route and the empty-verdict halt are the real composed text."""
+    script = ask_compose._usage_limit_helper_js()
+    catch_js = (
+        "const log = () => {}; async function _runVerify() { try { try { throw " + throw_js + "; } "
+        + ask_compose._verify_tests_catch_js().replace(ask_compose._VERIFY_TEST_RESULT_VAR, "_testResult") + " "
+        "} catch (e) { const _m = _errLimitText(e) ?? String((e && e.message) ?? e); "
+        "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } } }\n"
+    )
+    block = (
+        ask_compose._test_verdict_limit_route_js() + "\n" + ask_compose._test_verdict_empty_halt_js(None)
+    ).replace("TEST_GUARD", "true")
+    return _node(
+        "let _halted = null; const _runId = 'run-1'; let _testResult = null;\n"
+        "const _refire = () => 'refire'; const _sizingRel = 's.yaml';\n"
+        + script + "\n" + catch_js
+        + "(async () => { await _runVerify();\nfunction _t() {\n" + block + "\n}\n_t();\n"
+        "console.log(_halted.halted + '|' + _halted.next_action); })();\n"
+    )
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_verify_tests_refusal_carried_only_by_failure_cause_halts_usage_limit():
+    limit = _verify_tests_throw_run(
+        "Object.assign(new Error('agent returned no structured output'), { cause: new Error(" + repr(_WEEKLY) + ") })"
+    )
+    assert limit.returncode == 0, limit.stderr
+    kind, _, action = limit.stdout.strip().partition("|")
+    assert kind == "usage_limit"
+    assert "resumeFromRunId" in action
+    raw = _verify_tests_throw_run("Object.assign(new Error('no output'), { output: " + repr(_WEEKLY) + " })")
+    assert raw.stdout.strip().startswith("usage_limit|"), raw.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_verify_tests_non_limit_failure_still_halts_test_verdict_empty():
+    plain = _verify_tests_throw_run(
+        "Object.assign(new Error('agent returned no structured output'), { cause: new Error('socket hang up') })"
+    )
+    assert plain.returncode == 0, plain.stderr
+    assert plain.stdout.strip().startswith("test_verdict_empty|"), plain.stderr
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
 @pytest.mark.spawns_process
 @pytest.mark.cadence

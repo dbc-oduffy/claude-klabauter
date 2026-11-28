@@ -296,7 +296,6 @@ _BASELINE: dict[str, dict[str, int]] = {
     'coordinator/bin/merge-gate-and-pr.py': {'raw_spawn': 4},
     'coordinator/bin/merge-recovery-and-tag-cut.py': {'raw_spawn': 4},
     'coordinator/bin/percolate-round.py': {'raw_spawn': 1},
-    'coordinator/bin/plan-reversibility-eligibility.py': {'raw_spawn': 1},
     'coordinator/bin/pre_commit_corpus_artifact_guard.py': {'raw_spawn': 1},
     'coordinator/bin/refresh-plugin-live-install.py': {'raw_spawn': 15},
     'coordinator/bin/repomap/generate-repomap.py': {'raw_spawn': 3},

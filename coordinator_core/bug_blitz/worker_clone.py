@@ -17,9 +17,13 @@ from coordinator_core.ops._path_guard import safe_id
 CLONES_DIRNAME = "bug-blitz-clones"
 BASE_FILE = "blitz-base"
 CONE_FILE = "blitz-cone.txt"
+# git's exit status for an unrecognised option: the only failure the plain-cone retry answers.
+_GIT_USAGE_ERROR = 129
 # A clone provisioned this recently is kept by the sibling sweep whatever the liveness predicate says: the
 # run's stage record may not exist yet.
 FRESH_S = 900.0
+# An empty cone checks out the whole tree only when it is no larger than this; a larger tree gets root files only.
+FULL_CHECKOUT_MAX_FILES = 3000
 _TAIL = 400
 
 
@@ -54,11 +58,12 @@ def read_cone(run_dir: Path | str) -> tuple[str, ...]:
         return ()
     out: list = []
     for line in text.splitlines():
-        entry = line.strip().replace("\\", "/").strip("/")
+        raw = line.strip().replace("\\", "/")
+        entry = raw.strip("/")
         if not entry:
             continue
         rel = Path(entry)
-        if rel.is_absolute() or ".." in rel.parts or entry.startswith("-") or ":" in entry:
+        if raw.startswith("/") or rel.is_absolute() or ".." in rel.parts or entry.startswith("-") or ":" in entry:
             raise WorkerCloneError(f"cone entry {line.strip()!r} is not a repo-relative directory")
         if entry not in out:
             out.append(entry)
@@ -66,6 +71,13 @@ def read_cone(run_dir: Path | str) -> tuple[str, ...]:
 
 
 def _clones_dir(repo_root: Path | str) -> Path:
+    """`<scratch_root>/<repo>/bug-blitz-clones`: the machine-local scratch root, repo-scoped so two repos' sweeps
+    never meet. The managed-Temp fallback is already repo-scoped."""
+    from coordinator_core import machine_resolver
+
+    configured = machine_resolver.registry_get("paths.scratch_root")
+    if configured:
+        return Path(configured) / Path(repo_root).name / CLONES_DIRNAME
     return temp_layout.coordinator_temp_root(repo_root) / CLONES_DIRNAME
 
 
@@ -131,6 +143,15 @@ def _reap_dead_siblings(
     return reaped
 
 
+def _tree_too_large(clone: Path, sha: str) -> bool:
+    """True when `sha` lists more than `FULL_CHECKOUT_MAX_FILES` files, or the listing fails or times out: an
+    unresolved cone then narrows to root files instead of a full-tree checkout."""
+    listing = run_git(["ls-tree", "-r", "--name-only", sha], cwd=str(clone), remote=True)
+    if listing.returncode or listing.timed_out:
+        return True
+    return listing.stdout.count("\n") > FULL_CHECKOUT_MAX_FILES
+
+
 def provision(
     repo_root: Path | str,
     run_id: str,
@@ -140,7 +161,8 @@ def provision(
 ) -> Path:
     """The run's clone: `clone --shared --no-checkout` of `repo_root`'s HEAD, checked out detached at that sha,
     its sha recorded in `<clone>/.git/blitz-base`. The run's cone list (`read_cone`) narrows the checkout to those
-    top-level directories plus root files; an empty list checks out the whole tree. Idempotent per `run_id`.
+    top-level directories plus root files; an empty list checks out the whole tree only when it holds at most
+    `FULL_CHECKOUT_MAX_FILES` files, else root files only. Idempotent per `run_id`.
     Also reaps sibling clones whose run
     is no longer live (`is_live(repo_root, id)`, default: the run's owner record). Raises `InvalidRunId` for an
     unsafe `run_id` before touching disk, `WorkerCloneError` when git fails."""
@@ -159,16 +181,20 @@ def provision(
     if head.returncode or not sha:
         raise WorkerCloneError(f"run {run_id}: cannot resolve HEAD of {root.name}: {head.stderr.strip()[-_TAIL:]}")
     try:
-        clone = run_git(["clone", "--shared", "--no-checkout", "-q", str(root), str(dest)], cwd=str(root))
+        # trap: remote=True is only the 30s bulk ceiling, no remote is contacted; it covers clone, ls-tree,
+        # sparse-checkout and checkout. A leg still over 30s fails as WorkerCloneError("timed out").
+        clone = run_git(["clone", "--shared", "--no-checkout", "-q", str(root), str(dest)], cwd=str(root), remote=True)
         if clone.returncode:
             why = "timed out" if clone.timed_out else clone.stderr.strip()[-_TAIL:]
             raise WorkerCloneError(f"run {run_id}: clone failed: {why}")
-        if dirs:
-            cone = run_git(["sparse-checkout", "set", "--cone", *dirs], cwd=str(dest))
+        if dirs or _tree_too_large(dest, sha):
+            cone = run_git(["sparse-checkout", "set", "--cone", "--sparse-index", *dirs], cwd=str(dest), remote=True)
+            if cone.returncode == _GIT_USAGE_ERROR and not cone.timed_out:
+                cone = run_git(["sparse-checkout", "set", "--cone", *dirs], cwd=str(dest), remote=True)
             if cone.returncode:
                 why = "timed out" if cone.timed_out else cone.stderr.strip()[-_TAIL:]
-                raise WorkerCloneError(f"run {run_id}: sparse-checkout of {', '.join(dirs)} failed: {why}")
-        out = run_git(["checkout", "-q", "--detach", sha], cwd=str(dest))
+                raise WorkerCloneError(f"run {run_id}: sparse-checkout of {', '.join(dirs) or 'root files'} failed: {why}")
+        out = run_git(["checkout", "-q", "--detach", sha], cwd=str(dest), remote=True)
         if out.returncode:
             why = "timed out" if out.timed_out else out.stderr.strip()[-_TAIL:]
             raise WorkerCloneError(f"run {run_id}: checkout of {sha[:12]} failed: {why}")

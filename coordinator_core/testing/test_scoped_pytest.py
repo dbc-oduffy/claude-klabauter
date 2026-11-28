@@ -365,6 +365,36 @@ def test_per_run_dirs_are_disjoint_per_slug_and_tmp_env_points_under_them(monkey
     assert Path(env["TEMP"]).is_relative_to(holder_a)
 
 
+def _site(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    from coordinator_core.install import engine_interpreter
+
+    site = tmp_path / "home" / "engine-site"
+    monkeypatch.setattr(engine_interpreter, "engine_site_dir", lambda home=None: site)
+    return site
+
+
+def test_tmp_env_drops_engine_site_from_an_inherited_pythonpath_keeping_the_engine_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    site, root, other = _site(monkeypatch, tmp_path), tmp_path / "engine", tmp_path / "consumer-src"
+    base = {"PYTHONPATH": os.pathsep.join([str(root), str(site), str(other)]), "COORDINATOR_ENGINE_ROOT": str(root)}
+    env = sp.tmp_env(base, tmp_path / "t")
+    assert env["PYTHONPATH"].split(os.pathsep) == [str(root), str(other)]
+    assert base["PYTHONPATH"].count(str(site)) == 1
+
+
+def test_tmp_env_restores_the_engine_root_when_engine_site_was_the_only_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    site, root = _site(monkeypatch, tmp_path), tmp_path / "engine"
+    env = sp.tmp_env({"PYTHONPATH": str(site), "COORDINATOR_ENGINE_ROOT": str(root)}, tmp_path / "t")
+    assert env["PYTHONPATH"] == str(root)
+    env = sp.tmp_env({"PYTHONPATH": str(site)}, tmp_path / "t")
+    assert "PYTHONPATH" not in env
+
+
+def test_tmp_env_leaves_a_pythonpath_without_engine_site_untouched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _site(monkeypatch, tmp_path)
+    keep = str(tmp_path / "consumer-src")
+    assert sp.tmp_env({"PYTHONPATH": keep, "COORDINATOR_ENGINE_ROOT": str(tmp_path / "e")}, tmp_path / "t")["PYTHONPATH"] == keep
+
+
 def test_per_run_dirs_land_outside_a_repo_when_temp_is_redirected_into_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import tempfile
 

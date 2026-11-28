@@ -133,7 +133,7 @@ _RETIRED_KEYS = frozenset({"coordinator_claude"})
 
 `repos.coordinator_claude` is retired by `ops.setup_chain_walker`
 (`_COORDINATOR_ROOT_LADDER_REMEDIATION`) -- coordinator-claude's location is
-`publish.mirrors.coordinator_claude.path` (a publish mirror) or
+the `publish.mirrors.coordinator_claude` path key (a publish mirror) or
 `engine.working_repos.content_root` (the working checkout), never a `repos.*`
 rung. `_derive_key` collapses a BASENAME, so any `coordinator-claude` clone on
 the box derives this key, and `_prefer_platform_install_paths` then re-points
@@ -323,7 +323,7 @@ def _register_repos(non_interactive: bool, check_only: bool) -> int:
         if key in _RETIRED_KEYS:
             print(
                 f"{_PROG}: skipping {repo_path!r} — repos.{key} is a retired key; "
-                f"see publish.mirrors.{key}.path / engine.working_repos.*",
+                "see engine.working_repos.*",
                 file=sys.stderr,
             )
             continue

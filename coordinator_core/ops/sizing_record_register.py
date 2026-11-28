@@ -252,7 +252,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         state["rows"] = len(wanted[rr.ROWS_KEY])
         if isinstance(current, dict):
             would_be = {**current, rr.REGISTER_KEY: wanted}
-            problems = rr.unrelated_turn_errors(current, wanted)
+            problems = rr.unrelated_turn_errors(
+                current, wanted, root=worktree,
+                prior=(existing.raw.get(rr.UNRELATED_TURNS_KEY) if existing is not None else None),
+            )
             gaps = rr.coverage_gaps(would_be)
             if gaps or problems:
                 raise MutateAbort(_coverage_refusal(current, gaps, problems))

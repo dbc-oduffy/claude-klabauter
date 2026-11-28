@@ -123,6 +123,81 @@ def test_non_git_rootdir_skips_cleanly(tmp_path):
     assert "moved the checkout" not in proc.stderr
 
 
+def _peer_move_test(*git_steps: list[str]) -> str:
+    steps = "\n".join(f"    subprocess.run({s!r}, check=True)" for s in git_steps)
+    return f"import subprocess\n\ndef test_peer_move():\n{steps}\n"
+
+
+_PEER_ENV = {
+    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+}
+
+
+@pytest.fixture
+def peer_identity(monkeypatch):
+    for key, value in _PEER_ENV.items():
+        monkeypatch.setenv(key, value)
+
+
+def test_same_branch_fast_forward_touching_no_tested_path_passes(tmp_path, peer_identity):
+    body = (
+        "import subprocess\n\ndef test_peer_move():\n"
+        "    open('peer.txt', 'w').write('x')\n"
+        "    subprocess.run(['git', 'add', 'peer.txt'], check=True)\n"
+        "    subprocess.run(['git', 'commit', '-q', '-m', 'peer'], check=True)\n"
+    )
+    proc = _session(tmp_path, body)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "fast-forwarded" in proc.stderr and "advisory only" in proc.stderr
+    assert "moved the checkout" not in proc.stderr
+
+
+def test_fast_forward_touching_a_tested_path_still_fails(tmp_path, peer_identity):
+    body = (
+        "import subprocess\n\ndef test_peer_move():\n"
+        "    open('test_case.py', 'a').write('# touched\\n')\n"
+        "    subprocess.run(['git', 'commit', '-q', '-am', 'peer'], check=True)\n"
+    )
+    proc = _session(tmp_path, body)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "moved the checkout" in proc.stderr
+
+
+def test_branch_switch_with_a_new_commit_still_fails(tmp_path, peer_identity):
+    body = (
+        "import subprocess\n\ndef test_peer_move():\n"
+        "    subprocess.run(['git', 'switch', '-q', '-c', 'other'], check=True)\n"
+        "    open('peer.txt', 'w').write('x')\n"
+        "    subprocess.run(['git', 'add', 'peer.txt'], check=True)\n"
+        "    subprocess.run(['git', 'commit', '-q', '-m', 'peer'], check=True)\n"
+    )
+    proc = _session(tmp_path, body)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "moved the checkout" in proc.stderr
+
+
+def test_non_ancestor_head_move_still_fails(tmp_path, peer_identity):
+    body = _peer_move_test(["git", "commit", "-q", "--amend", "-m", "rewritten"])
+    proc = _session(tmp_path, body)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "moved the checkout" in proc.stderr
+
+
+def test_fast_forward_that_also_stages_an_index_change_still_fails(tmp_path, peer_identity):
+    body = (
+        "import subprocess\n\ndef test_peer_move():\n"
+        "    open('peer.txt', 'w').write('x')\n"
+        "    subprocess.run(['git', 'add', 'peer.txt'], check=True)\n"
+        "    subprocess.run(['git', 'commit', '-q', '-m', 'peer'], check=True)\n"
+        "    open('leak.txt', 'w').write('x')\n"
+        "    subprocess.run(['git', 'add', 'leak.txt'], check=True)\n"
+    )
+    proc = _session(tmp_path, body)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "moved the checkout" in proc.stderr
+
+
 def test_opt_out_keeps_the_move_advisory_only(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_ALLOW_CHECKOUT_MOVE", "1")
     proc = _session(tmp_path, _COMMITTING_TEST)

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import re
 import secrets
 import time
@@ -28,11 +29,19 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core.group_em import atomic_record, gem_home, remote_identity, remote_roster
+from coordinator_core.group_em import (
+    atomic_record,
+    box_registry,
+    gem_home,
+    remote_identity,
+    remote_roster,
+)
 
 # Pinned equal to watch._TRANSIENT_CODEX_PREFIX by test; watch is too heavy to import here.
 CODEX_MIRROR_PREFIX = "peer-codex-"
 ROUTER_FACE_PREFIX = "peer-"
+ROLE_WORKER_LEG = "worker_leg"
+ROLE_SUBAGENT = "subagent"
 RECORD_DIRNAME = "roll-call"
 DEFAULT_DEADLINE_MINUTES = 60
 GOAL_FIELDS = (
@@ -80,12 +89,32 @@ def record_path(roll_call_id: str, home: Optional[Path] = None) -> Path:
     return base / RECORD_DIRNAME / (roll_call_id + ".json")
 
 
-def _exclusion(session_id: str) -> Optional[str]:
+def _exclusion(session_id: str, role: Optional[str] = None) -> Optional[str]:
     if session_id.startswith(CODEX_MIRROR_PREFIX):
         return "codex_mirror"
     if session_id.startswith(ROUTER_FACE_PREFIX):
         return "unimatrix_transport"
+    if role in (ROLE_WORKER_LEG, ROLE_SUBAGENT):
+        return role
     return None
+
+
+def _norm_root(root: Any) -> Optional[str]:
+    if not isinstance(root, (str, Path)):
+        return None
+    return os.path.normcase(os.path.abspath(os.fspath(root)))
+
+
+def _published_sessions(box: dict) -> list:
+    """Sessions in a box's own published snapshot under its registered root, any age; [] if unreadable."""
+    root = box.get("root")
+    if not isinstance(root, str):
+        return []
+    try:
+        path = remote_roster.snapshot_path(Path(root) / "state" / "group-em", box["box_id"])
+    except ValueError:
+        return []
+    return remote_roster.read_published(path)
 
 
 def resolve_addressees(
@@ -99,7 +128,10 @@ def resolve_addressees(
     ``local`` rows are ``{session_id, name, kind}`` (addressed by name); ``far`` rows are ``{key,
     box_id, name}`` with ``key = <box_id>:<session_id>``, plus ``unreachable: True`` when the box
     snapshot is down; ``excluded`` rows are ``{key, reason}`` (reasons: self, codex_mirror,
-    unimatrix_transport, no_name). One registry scan plus one listdir and one open per snapshot.
+    unimatrix_transport, worker_leg, subagent, no_name); a far row with no ``role`` (an
+    un-upgraded box) is addressed. Far boxes come from the box registry (minus this box, by id or
+    by root) united with the snapshot files; a registered box with no usable snapshot falls back
+    to its own published snapshot, and ``silent_boxes`` lists boxes that yielded no session.
     """
     from coordinator_core.session import peer_roster
 
@@ -107,7 +139,7 @@ def resolve_addressees(
     far: list = []
     excluded: list = []
     for row in peer_roster.build_roster(repo_root, box_wide=True):
-        reason = _exclusion(row.session_id)
+        reason = _exclusion(row.session_id, row.role)
         if reason is None and (row.is_self or row.session_id == caller_session_id):
             reason = "self"
         if reason is None and not row.name:
@@ -118,18 +150,35 @@ def resolve_addressees(
             local.append({"session_id": row.session_id, "name": row.name, "kind": row.kind or "claude"})
 
     base = Path(snapshot_dir) if snapshot_dir else settings_home() / "state" / "group-em"
-    for box_id, snap in sorted(remote_roster.read_snapshot(base, local_id=local_id).items()):
+    own_id = local_id if local_id is not None else box_registry.local_box_id()
+    own_root = _norm_root(settings_home()) if snapshot_dir is None else None
+    boxes = {
+        b["box_id"]: b
+        for b in box_registry.read_boxes(base)
+        if not box_registry.same_box(b["box_id"], own_id) and (own_root is None or _norm_root(b.get("root")) != own_root)
+    }
+    snaps = {
+        box_id: snap
+        for box_id, snap in remote_roster.read_snapshot(base, local_id=own_id).items()
+        if not box_registry.same_box(box_id, own_id)
+    }
+    silent: list = []
+    for box_id in sorted(set(snaps) | set(boxes)):
+        snap = snaps.get(box_id) or {"reachable": False, "sessions": []}
         unreachable = not snap.get("reachable")
         sessions = snap.get("sessions", [])
         if unreachable:
-            prior = remote_roster._raw(remote_roster.snapshot_path(base, box_id)) or {}
-            sessions = remote_roster._trim(prior.get("sessions"))
+            sessions = remote_roster.read_published(remote_roster.snapshot_path(base, box_id))
+            if not sessions and box_id in boxes:
+                sessions = _published_sessions(boxes[box_id])
+        if not sessions:
+            silent.append(box_id)
         for sess in sessions:
             sid = sess.get("session_id")
             if not isinstance(sid, str) or not sid:
                 continue
             key = remote_identity.peer_key(box_id, sid)
-            reason = _exclusion(sid)
+            reason = _exclusion(sid, sess.get("role"))
             if reason is None and not sess.get("name"):
                 reason = "no_name"
             if reason:
@@ -139,7 +188,7 @@ def resolve_addressees(
                 if unreachable:
                     far_row["unreachable"] = True
                 far.append(far_row)
-    return {"local": local, "far": far, "excluded": excluded}
+    return {"local": local, "far": far, "excluded": excluded, "silent_boxes": silent}
 
 
 def render_ask(
@@ -164,6 +213,8 @@ def render_ask(
         "   - priority_goal_id: the one goal_id in your reply that is your priority item",
         "   A missing field, a TBD, or a missing ETA is refused and returned to you.",
         "   Put done/next narrative in activity; it goes to the log, not the brief.",
+        "   No goals? Reply with jobs (id, pid, cores, hard stop), queued (what waits on the G-EM) "
+        "and eta; session_key defaults to your own session.",
     ]
     if origin_box:
         lines += [f"   origin_box: pass {origin_box} so the reply reaches the issuing box."]
@@ -298,6 +349,18 @@ def _priority_problems(goals: Any, priority_goal_id: Any) -> list:
     return []
 
 
+def _minimal_problems(extras: dict) -> list:
+    out: list = []
+    for field in ("jobs", "queued"):
+        value = extras.get(field)
+        if value is not None and not isinstance(value, (list, dict)):
+            out.append({"goal_id": None, "field": field, "reason": "not_a_list"})
+    eta = extras.get("eta")
+    if eta is not None and (not isinstance(eta, str) or not eta.strip()):
+        out.append({"goal_id": None, "field": "eta", "reason": "missing"})
+    return out
+
+
 def _normalize_goals(goals: list) -> list:
     """Accepted goals reduced to the known fields, strings stripped (so a repeat compares equal)."""
 
@@ -323,8 +386,18 @@ def upsert_reply(
     home: Optional[Path] = None,
     origin_box: Optional[str] = None,
     forwarded_by: Optional[str] = None,
+    jobs: Any = None,
+    queued: Any = None,
+    eta: Any = None,
+    create_if_missing: bool = False,
 ) -> dict:
     """Validate then store ``goals`` under ``session_key``; ``activity`` goes to the log only.
+
+    ``goals`` are optional: a reply with none is the minimal reply, ``jobs`` (live jobs: id, pid,
+    cores, hard stop), ``queued`` (what waits on the G-EM) and ``eta`` (non-empty string), at least
+    one of the four required, and ``priority_goal_id`` is then not required. ``create_if_missing``
+    opens an addressee-less record when the id is not on disk (a reply that could not reach its
+    issuing box).
 
     ``origin_box`` (the minting box) and ``forwarded_by`` (the replying box of a far reply) are
     stamped on a stored reply when given.
@@ -340,27 +413,47 @@ def upsert_reply(
     """
     if not isinstance(session_key, str) or not session_key:
         raise ValueError("session_key must be a non-empty string")
-    refusals = validate_reply(goals) + _priority_problems(goals, priority_goal_id)
+    has_goals = goals is not None and goals != []
+    extras = {"jobs": jobs, "queued": queued, "eta": eta}
+    refusals = _minimal_problems(extras)
+    if has_goals:
+        refusals += validate_reply(goals) + _priority_problems(goals, priority_goal_id)
+    elif all(v is None for v in extras.values()):
+        refusals.append({"goal_id": None, "field": "reply", "reason": "missing"})
     if refusals:
         raise RollCallReplyRefused(roll_call_id, session_key, refusals)
     when = time.time() if now is None else now
-    accepted = _normalize_goals(goals)
-    priority = priority_goal_id.strip()
+    accepted = _normalize_goals(goals) if has_goals else []
+    priority = priority_goal_id.strip() if has_goals else None
+    carried = {k: (v.strip() if isinstance(v, str) else v) for k, v in extras.items() if v is not None}
     path = record_path(roll_call_id, home)
     with atomic_record.holder_lock(path):
         record = atomic_record.read_json_tolerant(path)
         if record is None:
-            return {"ok": False, "reason": "unknown_roll_call"}
+            if not create_if_missing:
+                return {"ok": False, "reason": "unknown_roll_call"}
+            record = {
+                "roll_call_id": roll_call_id,
+                "text": None,
+                "created": when,
+                "deadline": when + DEFAULT_DEADLINE_MINUTES * 60,
+                "addressees": {"local": [], "far": [], "excluded": []},
+                "replies": {},
+                "deliveries": {},
+                "orphan": True,
+            }
         replies = record.setdefault("replies", {})
         prior = replies.get(session_key)
         if (
             prior is not None
             and prior.get("goals") == accepted
             and prior.get("priority_goal_id") == priority
+            and all(prior.get(k) == carried.get(k) for k in extras)
         ):
             return {"ok": True, "result": "unchanged", "late": bool(prior.get("late"))}
         late = when > record.get("deadline", float("inf"))
         entry = {"goals": accepted, "priority_goal_id": priority, "received_at": when, "late": late}
+        entry.update(carried)
         if origin_box:
             entry["origin_box"] = origin_box
         if forwarded_by:
@@ -461,11 +554,17 @@ def status(roll_call_id: str, home: Optional[Path] = None) -> dict:
         for key, rep in replies.items()
         for g in rep.get("goals", [])
     ]
+    reports = [
+        {"session_key": key, "late": bool(rep.get("late")), **{k: rep[k] for k in ("jobs", "queued", "eta") if k in rep}}
+        for key, rep in replies.items()
+        if any(k in rep for k in ("jobs", "queued", "eta"))
+    ]
     return {
         "ok": True,
         "roll_call_id": roll_call_id,
         "deadline": record.get("deadline"),
         "goals": brief,
+        "reports": reports,
         "replied": list(replies),
         "missing": missing,
         "deliveries": record.get("deliveries", {}),

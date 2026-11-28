@@ -121,9 +121,24 @@ def test_in_memory_marks_at_the_threshold_end_the_server(stall: Path) -> None:
     assert _log(stall).count("action=restart") == 1
 
 
+def test_a_client_requested_restart_of_a_hung_engine_is_backed_off_then_allowed(stall: Path) -> None:
+    svc = stall.parent
+    now = time.time()
+    assert hang_restart.decide(svc, server_pid=5, source="client-unanswering", now=now) == "restart"
+    soon = now + hang_restart.RESTART_MIN_INTERVAL_SECS / 3
+    assert hang_restart.decide(svc, server_pid=5, source="client-unanswering", now=soon) == "suppressed"
+    later = now + hang_restart.RESTART_MIN_INTERVAL_SECS + 5
+    assert hang_restart.decide(svc, server_pid=5, source="client-unanswering", now=later) == "restart"
+
+
+@pytest.mark.parametrize("blocker", ["sleep", "lock"])
 def test_a_real_watcher_on_a_sleeping_handler_writes_a_hung_record_and_counts_it(
-    stall: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    stall: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blocker: str
 ) -> None:
+    held = threading.Lock()
+    if blocker == "lock":
+        held.acquire()
+        threading.Thread(target=lambda: (held.acquire(), held.release()), daemon=True).start()
     counted: list = []
     monkeypatch.setattr(server, "_WORKER_STALL_DIR", stall)
     monkeypatch.setattr(server, "_op_blocked_on_read", lambda _ident: False)
@@ -139,6 +154,8 @@ def test_a_real_watcher_on_a_sleeping_handler_writes_a_hung_record_and_counts_it
             release.wait(0.02)
     finally:
         disarm()
+        if blocker == "lock":
+            held.release()
     records = list(stall.glob("*.txt"))
     assert records
     assert all(hang_restart._is_io_wait_record(p) is False for p in records)

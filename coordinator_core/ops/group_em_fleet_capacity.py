@@ -11,8 +11,8 @@ Negative-spec:
     - `groupem.fleet_capacity` fans out fleet-wide by default: one `groupem.capacity_local` invoke per
       far box through `box_transport.invoke_remote` (one ssh each, in parallel, per-box timeout
       `_PER_BOX_TIMEOUT_S` = 8s, clamped under the `ipc._timeout_for` backstop); `local_only` samples
-      this box in-process and makes no network call. Its only extra write is the per-box last-known
-      cache. The other three ops spawn nothing and make no network call: every read is a stamped
+      this box in-process and makes no network call. Its only extra writes are the per-box last-known
+      cache and the merged fleet live snapshot. The other three ops spawn nothing and make no network call: every read is a stamped
       record under a box root; `groupem.capacity_admit` writes its grant and wait ledgers under the
       target box's root.
     - No reply carries a slot or job count; a refusal names a measured axis or the missing
@@ -81,6 +81,27 @@ def _requirement(p: dict) -> tuple:
     if v is None:
         return None, None
     return (v, None) if isinstance(v, dict) else (None, "requirement must be an object")
+
+
+def _booking(p: dict) -> tuple:
+    """``(kwargs for capacity_admit.admit, error)``: only the booking fields the caller gave."""
+    out: dict = {}
+    for key, lo_exclusive in (("pid", True), ("pid_started_at", False), ("window_s", True), ("expected_rate", False)):
+        v = p.get(key)
+        if v is None:
+            continue
+        ok = isinstance(v, int) if key == "pid" else isinstance(v, (int, float))
+        if isinstance(v, bool) or not ok or v < 0 or (lo_exclusive and v == 0):
+            return {}, f"{key} must be a {'positive' if lo_exclusive else 'non-negative'} {'int' if key == 'pid' else 'number'}"
+        out[key] = v
+    for key in ("owner_sid", "rate_unit"):
+        v = p.get(key)
+        if v is None:
+            continue
+        if not isinstance(v, str) or not v:
+            return {}, f"{key} must be a non-empty str"
+        out[key] = v
+    return out, None
 
 
 def _boxes(home: Path) -> list[dict]:
@@ -181,6 +202,9 @@ def _groupem_capacity_admit(params: dict, repo_root: Optional[Path] = None) -> d
         declared (dict, optional) -- ram_mb / vram_mib / cores used only when no peak is measured;
             the reply labels the basis ``declared``.
         requester_sid (str, optional), priority (str | number | bool, optional) -- recorded on a wait row.
+        pid (int > 0), pid_started_at (number), owner_sid (str), window_s (number > 0),
+        expected_rate (number >= 0), rate_unit (str), all optional -- book the grant to a process;
+        recorded on the grant row only when given (the grant's ``run`` is its GO id).
 
     Returns:
         {grant, run, job_type, box_id, headroom, short, peak_basis, gpu_index, recorded} plus, on
@@ -202,8 +226,9 @@ def _groupem_capacity_admit(params: dict, repo_root: Optional[Path] = None) -> d
     os_value, err = _os_param(p)
     declared, err2 = _declared(p)
     requirement, err3 = _requirement(p)
-    if err or err2 or err3:
-        return {"error": err or err2 or err3}
+    booking, err4 = _booking(p)
+    if err or err2 or err3 or err4:
+        return {"error": err or err2 or err3 or err4}
     try:
         home = settings_home()
         run = run or f"{job_type}-{uuid.uuid4().hex[:8]}"
@@ -232,11 +257,36 @@ def _groupem_capacity_admit(params: dict, repo_root: Optional[Path] = None) -> d
             declared=declared,
             requester_sid=p.get("requester_sid"),
             priority=priority,
+            **booking,
         )
         reply.update(run=run, job_type=job_type, box_id=target)
         if not reply["grant"]:
             reply["capable_elsewhere"] = [c for c in cands if c["box_id"] != target]
         return reply
+    except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+@register_op("groupem.job_progress")
+def _groupem_job_progress(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "groupem.job_progress" handler: record a booked job's progress on its grant row.
+
+    Params:
+        run (str) -- the GO id the grant is held under.
+        progress (number >= 0) -- units done so far, in the booking's ``rate_unit``.
+
+    Returns:
+        {updated, run} (``updated: false`` carries ``reason`` ``no_grant`` or ``ledger_unavailable``)
+        or {"error": str}. Updates this box's grant ledger.
+    """
+    p = params if isinstance(params, dict) else {}
+    run, progress = _str(p, "run"), p.get("progress")
+    if run is None:
+        return {"error": "run (non-empty str) is required"}
+    if isinstance(progress, bool) or not isinstance(progress, (int, float)) or progress < 0:
+        return {"error": "progress must be a non-negative number"}
+    try:
+        return capacity_admit.record_progress(run, progress, home=settings_home())
     except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
         return {"error": f"{type(exc).__name__}: {exc}"}
 

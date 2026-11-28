@@ -141,6 +141,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     with_canonical_disposition,
 )
 from coordinator_core.ops.dispatch_emit import review_floor, run_notes, run_order
+from coordinator_core.ops.dispatch_emit.ask_exclusions import is_conditional
 from coordinator_core.ops.dispatch_emit.requirements_ledger import NOTES_FILE
 from coordinator_core.ops.dispatch_emit.wave_map import (
     _RUNTIME_ORDER_GATE_KINDS,
@@ -1341,7 +1342,7 @@ def _excluded_by_ask(sizing: Mapping, writes: Sequence[str]) -> dict[str, str]:
     named: dict[str, str] = {}
     for text in texts:
         for sentence in re.split(r"(?<=[.!?])\s+|\n", text):
-            if _EXCLUSION_CUE.search(sentence):
+            if _EXCLUSION_CUE.search(sentence) and not is_conditional(sentence):
                 for t in _PATH_TOKEN.findall(sentence):
                     named.setdefault(t.rstrip(".,;:)\"'`").lstrip("(\"'`"), sentence.strip())
     out: dict[str, str] = {}
@@ -1451,6 +1452,50 @@ def _park_activity_note(wait: Mapping[str, object]) -> str:
     if not isinstance(seen, dict) or not seen:
         return ""
     return " (last activity: " + "; ".join(f"{rid}: {stamp}" for rid, stamp in sorted(seen.items())) + ")"
+
+
+def _submission_blocker_pending(root: Path, blocker: Mapping[str, str]) -> bool:
+    """True while the blocker run has not ended (`run_end`: a halted or landed marker or a retired token) or landed (`run_landed`)."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    ref = blocker["ref"]
+    if blocker["kind"] == "run_landed":
+        return not run_token._run_landed(root, ref)
+    if run_token.is_live(root, ref):
+        return True
+    try:
+        marker = halted_run.read_strict(record_dir(root, ref))
+    except (OSError, ValueError):
+        marker = None
+    return not (marker or run_token._present(root, ref, retired=True))
+
+
+def _park_on_submission_blockers(
+    root: Path, run_id: str, sizing: Optional[Mapping], writes: Sequence[str]
+) -> Optional[dict]:
+    """The `stage_wait` record parking the run on its sizing's pending `stage_blockers`; None when none is pending."""
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract, run_token, stage_wait
+
+    named = ask_fanout_contract.decode_stage_blockers((sizing or {}).get("em_analysis"))
+    pending = [b for b in named if _submission_blocker_pending(root, b)]
+    if not pending:
+        return None
+    if stage_wait.expired(root, run_id):
+        stage_wait.clear(root, run_id)
+        run_token.consume(root, run_id)
+        raise AskStageError(
+            f"submission-blocker-expired: still waiting on {', '.join(b['ref'] for b in pending)}. "
+            "Resubmit when they end."
+        )
+    prior = stage_wait.read(root, run_id)
+    if prior is not None and prior.get("started"):
+        stage_wait.clear(root, run_id)
+    owner = run_token._read_rec(root, run_id) or {}
+    return stage_wait.park(
+        root, run_id, pending, writes, session_id=owner.get("session_id") or "",
+        last_activity=_blockers_last_activity(root, [b["ref"] for b in pending]),
+        reason="submission-blocker",
+    )
 
 
 def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -> Optional[dict]:
@@ -1787,6 +1832,7 @@ def stage(
             logging.getLogger(__name__).info("refire restore for %s: %s", restore_run, restored)
 
     excluded: dict[str, str] = {}
+    write_conflicts: list[dict[str, str]] = []
     if sizing_rel:
         sizing = load_sizing(root, sizing_rel)
         run_sizing_rel, run_sizing = sizing_rel, sizing
@@ -1794,13 +1840,16 @@ def stage(
         if not any(str(w).strip() for w in writes) and (prior or (record / "manifest.json").is_file()):
             writes = _recorded_xs_writes(root, record, prior)
         excluded = _excluded_by_ask(sizing, writes)
+        if excluded and all(w in excluded for w in writes if str(w).strip()):
+            write_conflicts = [{"path": p, "sentence": s, "status": "conflict"} for p, s in excluded.items()]
+            excluded = {}
         writes = [w for w in writes if w not in excluded]
         _refuse_misrouted_xs_mint(sizing, sizing_rel, writes)
         from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
 
         spine_text, spine_path = mint_xs_spine(
             sizing, sizing_rel=sizing_rel, writes=writes, out_dir=record, gated=gated,
-            repo_root=root,
+            repo_root=root, conflicts=write_conflicts,
         )
         _write(spine_path, spine_text)
         plan_path = spine_path
@@ -2345,6 +2394,13 @@ def stage(
 
     docs = doc_writes(run_id, run_sizing)
     with leg("overlap"):
+        submission = _park_on_submission_blockers(root, run_id, run_sizing, [*declared, *docs])
+        if submission is not None:
+            raise StageWaiting(
+                f"{STAGE_WAIT_PARKED}: sequenced after {', '.join(submission['blockers'])}"
+                f"{_park_activity_note(submission)}; parked until they end.",
+                submission,
+            )
         from coordinator_core.ops.dispatch_emit import live_run_writes, run_withhold
 
         withheld = run_withhold.read([record, *([record_dir(root, refire_prior)] if refire_prior else [])])
@@ -2451,7 +2507,7 @@ def stage(
         ledger_item_ids=ledger_item_ids,
         withheld_ids=withheld_ids,
         retired_resume_rows=retired_resume,
-        dropped_writes=tuple({"path": p, "sentence": s} for p, s in excluded.items()),
+        dropped_writes=(*({"path": p, "sentence": s} for p, s in excluded.items()), *write_conflicts),
         write_baseline=write_baseline,
         foreign_at_baseline=foreign_at_baseline,
         slot_withheld=tuple(slot_withheld_rows(raw_by_id)),
@@ -2911,17 +2967,25 @@ def _stage_write_baseline(
     """Fingerprint every non-adopting row's declared file write (absent -> None); directories and globs are skipped.
     Spawn-free; runs at stage, before any executor.
 
+    Trap: a takeover (`takeover.jsonl`, no halted base) keeps the recorded baseline for every path it
+    covers, since the dead session's edits already sit in the live tree.
     Trap: a refire (`record` holds a `halted.json` carrying `run_base_sha`) keeps the baseline the
     halted run's own stage recorded for every path it covers, since the live tree already holds that
     fire's output. A refire never reads the live tree: a path the prior manifest never baselined (or
     a manifest that is absent, unreadable or lacks `write_baseline`) takes its blob at the run base,
     an in-process object read (one `git cat-file --batch --filters` only for conversions it cannot
     reproduce); a failed lookup raises `RefireBaselineError`."""
+    from coordinator_core.ops.dispatch_emit import resume_gate
+
     prior: Mapping = {}
     source = _baseline_source(root, record)
     base = halted_run_base(source) if source is not None else None
     if base:
         recorded = (_recorded_manifest(source) or {}).get("write_baseline")
+        if isinstance(recorded, Mapping):
+            prior = recorded
+    elif record is not None and resume_gate.takeover_recorded(record):
+        recorded = (_recorded_manifest(record) or {}).get("write_baseline")
         if isinstance(recorded, Mapping):
             prior = recorded
     paths: list[str] = []
@@ -2951,9 +3015,14 @@ def _stage_foreign_at_baseline(root: Path, record: Optional[Path], write_baselin
     chain wrote (`write_baseline.without_carried`), so one run's own earlier dirt is never re-labelled
     foreign, including when no predecessor holds a halted base; a peer's dirt the chain never wrote stays
     foreign."""
+    from coordinator_core.ops.dispatch_emit import resume_gate
+
     source = _baseline_source(root, record)
-    if source is not None and halted_run_base(source):
-        inherited = (_recorded_manifest(source) or {}).get("foreign_at_baseline")
+    inherit_from = source if source is not None and halted_run_base(source) else None
+    if inherit_from is None and record is not None and resume_gate.takeover_recorded(record):
+        inherit_from = record
+    if inherit_from is not None:
+        inherited = (_recorded_manifest(inherit_from) or {}).get("foreign_at_baseline")
         if isinstance(inherited, Mapping):
             marker = {p: s for p, s in inherited.items() if p in write_baseline and isinstance(s, str)}
         else:

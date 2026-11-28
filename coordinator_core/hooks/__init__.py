@@ -164,6 +164,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.workflow_step_dispatch",
     "coordinator_core.hooks.track_dispatched_agents",
     "coordinator_core.hooks.agent_postuse_dispatch",
+    "coordinator_core.hooks.event_dispatch",
     "coordinator_core.hooks.context_pressure_precompact",
     "coordinator_core.hooks.idle_compact_advisory",
     "coordinator_core.hooks.postusefailure_cross_repo_memo_remediate",

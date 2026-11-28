@@ -78,6 +78,17 @@ CONSTRAINTS: Tuple[Constraint, ...] = (
         waivable=True,
     ),
     Constraint(
+        id="anchor-check-malformed",
+        gate="ANCHOR",
+        rule=(
+            "An anchor check pattern never elides with '...': grep reads it as three characters. "
+            "Write a literal `grep -c -F PATTERN FILE`, or a real regex with `.*`."
+        ),
+        source="_anchors coordinator_core/roadmap/prep_gate.py",
+        satisfy="grep -c -F '<exact text>' <file>",
+        waivable=False,
+    ),
+    Constraint(
         id="census-undeclared",
         gate="CENSUS",
         rule="The plan must carry a census key; a plan resting on no counted premise declares it empty.",

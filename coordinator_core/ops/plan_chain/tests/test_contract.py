@@ -10,7 +10,8 @@ import pytest
 from coordinator_core.ops.plan_chain import contract
 
 SCHEMA = Path(contract.__file__).resolve().parents[2] / "contract" / "doe-wake-digest.schema.json"
-SCHEMA_SHA256 = "0006556853a999e16628b618f62c827ce3617b26c9043b89e21a33eee181da0d"
+# DoE 80494a529c (doe-wake-digest schema 1.6.0) plus the UE halted_by widening pending DoE re-vendor
+SCHEMA_SHA256 = "d6d8b47682ebc58f693943eea432205a2c9cd5f2a2ed734eae367eca3ede407c"
 
 
 def _schema() -> dict:

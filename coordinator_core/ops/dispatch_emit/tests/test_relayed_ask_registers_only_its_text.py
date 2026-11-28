@@ -1,4 +1,4 @@
-"""A relayed-memo ask registers only its own text; the session's PM turns are unrelated_turns."""
+"""A relayed-memo ask registers its own text as R1; each session PM turn it does not cover is an open row."""
 
 from __future__ import annotations
 
@@ -50,9 +50,12 @@ def test_relayed_ask_registers_only_its_text(tmp_path: Path, monkeypatch: pytest
 
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     register = doc["requirement_register"]
-    assert [r["source_text"] for r in register["rows"]] == [ASK]
-    assert [e["turn"] for e in register["unrelated_turns"]] == [44, 45, 46, 47]
+    assert [r["source_text"] for r in register["rows"]] == [
+        ASK, *[f"session chatter {n}" for n in range(44, 48)]
+    ]
+    assert "unrelated_turns" not in register
     assert [e["turn"] for e in doc["pm_verbatims"]] == [44, 45, 46, 47]
     assert rr.coverage_gaps(doc) == []
     items = rl.read_ledger(tmp_path, tmp_path / RECORD_DIR_ROOT / RUN).items
-    assert [i.origin for i in items] == ["relayed"]
+    assert [i.id for i in items] == ["R1", "T44", "T45", "T46", "T47"]
+    assert items[0].origin == "relayed"

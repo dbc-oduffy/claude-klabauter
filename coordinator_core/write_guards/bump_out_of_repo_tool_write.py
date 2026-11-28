@@ -231,8 +231,8 @@ there is no command line on this surface for either to operate on.
 DESTINATION-CLASS AXIS, NO SECOND MODULE
 (docs/plans/2026-08-03-narrow-write-confinement-bump.md, chunk C5). This
 surface gains the SAME `destination_class` axis as the two Bash guards --
-`DESTINATION_PUBLISH` when the target resolves to a registered
-`publish.mirrors.*.path` entry (C1's `target_is_publish_destination`,
+`DESTINATION_PUBLISH` when the target resolves to an open
+publish round's mirror clone (C1's `target_is_publish_destination`,
 gated on `target_gitdir is not None` -- a mirror entry is itself always a
 real repo, so a target resolving to no git repo at all can never match
 it), `DESTINATION_FOREIGN` otherwise -- without gaining a second

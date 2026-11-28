@@ -410,9 +410,7 @@ def _carry_rows(repo_root: Path, plan_rel: str) -> list:
 REGISTER_ROWS_UNCLAIMED_KIND = _premise_repair.REPAIR_REGISTER_UNCLAIMED
 _REGISTER_APPLIER_KINDS = frozenset({REGISTER_ROWS_UNCLAIMED_KIND, _premise_repair.REPAIR_REGISTER_PIN})
 MAJOR_FINDING_KIND = "major-finding-needs-fix-row"
-
-
-_ANCHOR_FIX_KIND = "anchor-check-corrected"  # == plan_apply_mechanical_repairs.REPAIR_ANCHOR_CHECK
+_ANCHOR_UNEVALUABLE_KIND = "anchor-check-unevaluable"
 
 
 def _repair(kind: str, target: str, instruction: str) -> dict:
@@ -557,7 +555,6 @@ def readiness_verdict(
     open_questions: str = "",
     anchor_findings: Optional[List[str]] = None,
     anchor_verdicts: Optional[List[dict]] = None,
-    checker_ran: bool = True,
     declared: Optional[Any] = None,
     anchor_entries: Optional[Any] = None,
     census: Optional[Any] = None,
@@ -570,9 +567,9 @@ def readiness_verdict(
     is an UNRESOLVED row a ``declared_absent`` entry covers through a resolvable ``tracked_by``.
     Each ``anchor_findings`` entry is a blocking judgment no ``corrects``/``declared_absent`` exempts;
     rows carrying ``anchor`` are judged only through them. ``anchor_verdicts`` is the recorded
-    per-anchor verdict list: it is echoed in the reply and feeds a ready-reason note. With
-    ``checker_ran`` either way, an anchor whose check is not evaluable in-process, or that the
-    census screen refuses, is a note naming its id: never a repair, a pull or a halt."""
+    per-anchor verdict list: it is echoed in the reply and feeds a ready-reason note. An anchor
+    whose check is not evaluable in-process, or that the census screen refuses, is a note naming
+    its id: never a repair, a pull or a halt."""
     notes: List[str] = []
     repairs: List[dict] = []
     substantive: List[str] = []
@@ -749,26 +746,11 @@ def readiness_verdict(
     if engine_checked:
         notes.append(f"{engine_checked} anchor premise(s) resolved by in-process check")
     unevaluable = _anchor_premise.unevaluable_anchors(anchor_verdicts or []) + refused
-    cause = (
-        "; " + "; ".join(f"anchor {i} not evaluable: {d[:120]}" for i, d in unevaluable)
-        if unevaluable and not checker_ran
-        else ""
-    )
-    if unevaluable and checker_ran:
+    if unevaluable:
         notes.append(
-            "anchor check not evaluable in-process, not blocking (premise-checker ran, no blocking row): "
+            "anchor check not evaluable in-process, unchecked, not blocking: "
             + "; ".join(f"{i} ({d[:80]})" for i, d in unevaluable)
         )
-    elif unevaluable:
-        for anchor_id, detail in unevaluable:
-            repairs.append(_repair(
-                "anchor-check-not-evaluable", anchor_id,
-                f"rewrite anchor {anchor_id}'s check in the in-process form ({_anchor_check.GRAMMAR}) and "
-                f"apply it as repair kind {_ANCHOR_FIX_KIND} (target, command); a command the engine "
-                "cannot run is skipped, not written, and this anchor is offered again. A git grep stage "
-                "ends `<ref> -- <path>` (never ref-less); an absence claim is expect 0. "
-                f"It was not evaluable: {detail[:200]}",
-            ))
     if uncheckable:
         notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
     if covered:
@@ -797,10 +779,15 @@ def readiness_verdict(
         reason = "prep gate failure needs judgment: " + "; ".join(substantive)
     elif judgment:
         verdict, pull_class, repairs = "judgment", "none", []
-        reason = counts + "; ".join(judgment) + cause
+        reason = counts + "; ".join(judgment)
     elif repairs:
         verdict, pull_class = "pulled", "mechanical"
-        reason = f"{len(repairs)} mechanical repair(s) apply in one revise" + cause
+        reason = f"{len(repairs)} mechanical repair(s) apply in one revise"
+    elif prep_gate.get("verdict") != "PREPPED" and (
+        (prep_gate.get("classes") or {}).get("ANCHOR", {}).get("kind") != _ANCHOR_UNEVALUABLE_KIND
+    ):
+        verdict, pull_class = "judgment", "none"
+        reason = f"prep gate verdict {prep_gate.get('verdict')} is not PREPPED; no finding classifies it"
     else:
         verdict, pull_class = "ready", "none"
         blocking_findings = advisory_findings = 0
@@ -872,9 +859,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         raise ValueError("plan.readiness_verdict requires a resolved repo_root")
     raw_plan, coverage, reviews, premise_rows = _check_params(params)
     declared = None
-    checker_ran = params.get("premise") is not None or any(
-        r.get("reviewer") == _PREMISE_REVIEWER for r in params.get("reviews") or []
-    )
     try:
         prep_gate, plan_text = prep_gate_with_text(raw_plan, repo_root)
     except OSError as exc:
@@ -916,7 +900,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         anchor, ruled = _discharge_by_j_ruling(anchor, anchor_root, fm.get("sizing_object"))
     out = readiness_verdict(
         prep_gate, coverage, reviews, repo_root, premise_rows, corrects, spine_rows, ref,
-        absent, questions, anchor, verdicts, checker_ran, declared, anchor_entries, census,
+        absent, questions, anchor, verdicts, declared, anchor_entries, census,
     )
     if ruled:
         out["reason"] = (out["reason"] + "; " if out["reason"] else "") + "; ".join(ruled)

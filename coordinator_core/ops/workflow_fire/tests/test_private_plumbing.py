@@ -178,7 +178,7 @@ def test_submit_forwards_execution_configuration_without_putting_it_in_script_ar
         'run_id': 'ask-fixture', 'script_path': str(tmp_path / 'run.mjs'), 'sha256': 'a' * 64})
     monkeypatch.setattr(op, '_workflow_fire', lambda params, repo: calls.append(params) or {'fire_id': 'b' * 32})
     result = engine_ask_submit._engine_ask_submit({'ask': 'fixture', 'ask_source': 'relayed',
-        'session_id': '11111111-1111-4111-8111-111111111111', 'caller': 'fixture',
+        'session_id': '11111111-1111-4111-8111-111111111111', 'caller': 'fixture', 'backend': 'codex',
         'cwd': str(tmp_path), 'fire': True, 'private_engine': spec(tmp_path)})
     assert 'fire' in result
     assert calls[0]['private_engine'] == spec(tmp_path)

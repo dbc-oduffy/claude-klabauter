@@ -99,6 +99,23 @@ def test_target_in_second_home_root(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert hr.creates_home_root_entry(str(b / "fo.txt"), None) is True
 
 
+@pytest.mark.parametrize(
+    "target",
+    ["/h/.claude.json", "h\\sub\\.claude.json.tmp.123588.910255f9", "~/.CLAUDE.JSON.lock"],
+)
+def test_claude_json_family_is_attributed_to_claude_code(target) -> None:
+    assert hr.writer_of(target) == "Claude Code"
+    reason = hr.deny_reason(target)
+    assert "Claude Code" in reason
+    assert reason.startswith("DENY: ") and "Instead: write under <repo>/scratch/" in reason
+
+
+@pytest.mark.parametrize("target", ["/h/fo.txt", "/h/.claude.jsonx", "/h/.claude", ""])
+def test_other_names_keep_the_unattributed_reason(target) -> None:
+    assert hr.writer_of(target) is None
+    assert hr.deny_reason(target) == hr.DENY_REASON
+
+
 def test_deny_reason_register() -> None:
     assert "<repo>/scratch/" in hr.DENY_REASON
     assert "scratchpad" in hr.DENY_REASON

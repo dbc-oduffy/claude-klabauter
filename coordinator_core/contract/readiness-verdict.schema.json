@@ -92,12 +92,12 @@
     },
     "anchor_base_ref": {
       "type": "object",
-      "description": "The git ref every anchor check was evaluated against; present only when a base ref applied. source is the param or the run marker a revise set.",
+      "description": "The git ref every anchor check was evaluated against; present only when a base ref applied. source is the param, the run marker a revise set, or head when neither applied and anchors resolved against HEAD.",
       "additionalProperties": false,
       "required": ["ref", "source"],
       "properties": {
         "ref": { "type": "string" },
-        "source": { "type": "string", "enum": ["param", "run"] }
+        "source": { "type": "string", "enum": ["param", "run", "head"] }
       }
     },
     "anchor_verdicts": {

@@ -88,8 +88,8 @@ blocking finding:
 - `anchor-premise-no-verdict: <id>`: no row resolves the anchor, and `premise` or a `premise-check`
   review is present. When the engine check was NOT_EVALUABLE the finding ends `(check not
   evaluable in-process: <detail>)`. With neither present (no premise-checker ran) and the engine
-  check NOT_EVALUABLE, the anchor is no finding: it is a `mechanical_repairs` entry of kind
-  `anchor-check-not-evaluable` naming the grammar, so the plan is rewritten to fit it.
+  check NOT_EVALUABLE, the anchor is no finding and no repair: `reason` carries a note naming it
+  unchecked, as it does when the checker ran.
 - `anchor-premise-unknown: <id>`: a passed row names an `anchor` no declared entry carries.
 - `anchor-premises-unjudged: <reason>`: the plan could not be read; the reply pulls.
 - `anchor-premise-malformed-row: rows[<i>] (not a mapping)`: a passed `premise.rows` entry is not a

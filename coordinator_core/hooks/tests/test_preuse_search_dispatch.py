@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import sys
 import uuid
 
 import pytest
@@ -350,3 +351,61 @@ def test_grep_count_write_failure_fails_open(indexed_repo, monkeypatch: pytest.M
     m._handler(_payload(indexed_repo, pattern="a", session_id=sid))
     monkeypatch.setattr(m.Path, "write_text", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
     assert _ctx(m._handler(_payload(indexed_repo, pattern="b", session_id=sid))) == ""
+
+
+_IO_EVENTS: list = []
+_IO_RECORDING = [False]
+
+
+def _record_io(event: str, args: tuple) -> None:
+    if _IO_RECORDING[0] and event in ("open", "os.listdir", "os.scandir"):
+        _IO_EVENTS.append((event, str(args[0])))
+
+
+# An audit hook cannot be removed: one registration per process, gated on _IO_RECORDING.
+sys.addaudithook(_record_io)
+
+
+#: Steady Grep: the after-nudge counter's read and write; nothing proportional to the corpus.
+_STEADY_IO_BOUND = 4
+_CPU_BAR_MS = 50.0
+
+
+def test_a_steady_grep_is_under_the_cpu_bar_with_bounded_file_io(indexed_repo) -> None:
+    import time
+
+    sid = str(uuid.uuid4())
+    for pat in ("warm", "warm2"):
+        m._handler(_payload(indexed_repo, pattern=pat, session_id=sid))
+    calls = 5
+    _IO_EVENTS.clear()
+    _IO_RECORDING[0] = True
+    t0 = time.process_time()
+    try:
+        for i in range(calls):
+            m._handler(_payload(indexed_repo, pattern=f"steady {i}", session_id=sid))
+    finally:
+        _IO_RECORDING[0] = False
+    cpu_ms = (time.process_time() - t0) * 1000.0 / calls
+    assert cpu_ms < _CPU_BAR_MS
+    assert len(_IO_EVENTS) / calls <= _STEADY_IO_BOUND, _IO_EVENTS
+
+
+def test_a_steady_grep_io_does_not_grow_with_the_session_dir(indexed_repo) -> None:
+    """A per-call read of the whole session dir would scale with its sentinel count."""
+    sid = str(uuid.uuid4())
+    m._handler(_payload(indexed_repo, pattern="warm", session_id=sid))
+    from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
+    from coordinator_core.session_hub_path import session_dir_for
+
+    d = session_dir_for(Path(resolve_git_common_dir(str(indexed_repo))), sid)
+    for i in range(200):
+        (d / f"unrelated-sentinel-{i}").touch()
+    _IO_EVENTS.clear()
+    _IO_RECORDING[0] = True
+    try:
+        m._handler(_payload(indexed_repo, pattern="after", session_id=sid))
+    finally:
+        _IO_RECORDING[0] = False
+    assert not any(e == "os.listdir" or e == "os.scandir" for e, _ in _IO_EVENTS), _IO_EVENTS
+    assert len(_IO_EVENTS) <= _STEADY_IO_BOUND, _IO_EVENTS

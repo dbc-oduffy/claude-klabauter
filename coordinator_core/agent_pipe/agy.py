@@ -3,17 +3,36 @@
 Messages are `step_update` events of `step_type == "agent_response"` with non-blank `text_delta`;
 every other event (init, user_input, whitespace-only DONE delta, result) is not a message. The
 conversation id rides on each step_update.
+
+Every headless resume goes through `claim_resume`: a conversation whose presence lock is held (a live
+interactive session) or whose resume is already running gets the text spooled to the Unimatrix
+`<conv>.queue.jsonl` instead, and never a second `agy --conversation <id> -p`.
 """
 from __future__ import annotations
 
+import contextlib
+import errno
+import hashlib
 import json
+import os
+import re
 import shutil
-from typing import Optional, Sequence
+import sys
+import time
+import uuid
+from pathlib import Path
+from typing import Generator, Optional, Sequence
 
+from coordinator_core._settings_home import settings_home
 from coordinator_core.agent_pipe.acp import AcpDriver
-from coordinator_core.agent_pipe.contract import KIND_AGY, classify_exit
+from coordinator_core.agent_pipe.contract import KIND_AGY, _pipe_root, classify_exit
 from coordinator_core.agent_pipe.session_driver import ApprovalCallback
 
+SPOOL_MAX_BYTES = 1 << 20
+SPOOL_LOCK_TIMEOUT_S = 15.0
+RESUME_WAIT_S = 0.25
+_LOCK_POLL_S = 0.05
+_CONV_RE = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 _OUTPUT_FLAGS = ["--output-format", "stream-json"]
 _LEG_SCRIPTS = (
     "unimatrix-agy-leg.py",
@@ -83,6 +102,204 @@ def family_stage_argv(
     if log_file:
         argv += ["--log-file", str(log_file)]
     return argv
+
+
+class SpoolRefused(OSError):
+    """The conversation's spool refused a line (full, lock timeout, unsafe id)."""
+
+
+def _try_lock(fh) -> bool:
+    """One nonblocking exclusive byte lock on `fh`; False when another holder owns it."""
+    fh.seek(0)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+            return False
+        raise
+    return True
+
+
+def _unlock(fh) -> None:
+    fh.seek(0)
+    if sys.platform == "win32":
+        import msvcrt
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def presence_dir() -> Path:
+    """agy's per-conversation presence locks, beside its brain root (AGY_BRAIN_DIR)."""
+    brain = os.environ.get("AGY_BRAIN_DIR")
+    return (Path(brain).parent if brain else Path.home() / ".gemini" / "antigravity-cli") / "presence"
+
+
+def presence_held(conversation: str) -> bool:
+    """True while another process holds `presence/<conversation>.lock` (a live interactive agy session)."""
+    if not _CONV_RE.fullmatch(conversation or "") or conversation in (".", ".."):
+        return False
+    try:
+        fh = open(presence_dir() / f"{conversation}.lock", "r+b" if sys.platform == "win32" else "rb")
+    except PermissionError:
+        return True  # invariant: an existing lock file we cannot open is held by a sharing-denying owner
+    except OSError:
+        return False
+    with fh:
+        try:
+            if not _try_lock(fh):
+                return True
+            _unlock(fh)
+        except (OSError, ImportError):
+            return False
+    return False
+
+
+def spool_dir() -> Path:
+    """The Unimatrix agy-legs state dir the leg, hook and spool share."""
+    return settings_home() / "unimatrix" / "agy-legs"
+
+
+@contextlib.contextmanager
+def _sidecar_lock(path: Path) -> Generator[None, None, None]:
+    """Exclusive lock on the never-replaced `<path>.lock` sidecar the Unimatrix leg uses; TimeoutError past SPOOL_LOCK_TIMEOUT_S."""
+    with open(f"{path}.lock", "a+b") as fh:
+        deadline = time.monotonic() + SPOOL_LOCK_TIMEOUT_S
+        while not _try_lock(fh):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"spool lock timed out: {path}")
+            time.sleep(0.02)
+        try:
+            yield
+        finally:
+            _unlock(fh)
+
+
+def spool_text(conversation: str, text: str, sender: str) -> str:
+    """Append one Unimatrix-shaped `{"id","text","from"}` line to `<conv>.queue.jsonl` and return its id; SpoolRefused on refusal."""
+    if not _CONV_RE.fullmatch(conversation or "") or conversation in (".", ".."):
+        raise SpoolRefused(f"unsafe conversation id: {conversation!r}")
+    state = spool_dir()
+    path = state / f"{conversation}.queue.jsonl"
+    msg_id = uuid.uuid4().hex
+    line = (json.dumps({"id": msg_id, "text": text, "from": sender}) + "\n").encode()
+    try:
+        state.mkdir(parents=True, exist_ok=True)
+        with _sidecar_lock(path):
+            if path.exists() and path.stat().st_size + len(line) > SPOOL_MAX_BYTES:
+                raise SpoolRefused("spool full")
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o600)
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)
+        _ensure_pending_record(state, conversation)
+    except SpoolRefused:
+        raise
+    except (OSError, TimeoutError) as exc:
+        raise SpoolRefused(str(exc) or "spool write failed") from exc
+    return msg_id
+
+
+def take_spool(conversation: str) -> list[str]:
+    """Claim and return the texts spooled for `conversation` (empty when none, unsafe id, or presence held); the claimed file is removed."""
+    if not _CONV_RE.fullmatch(conversation or "") or conversation in (".", "..") or presence_held(conversation):
+        return []
+    path = spool_dir() / f"{conversation}.queue.jsonl"
+    claimed = path.with_name(f"{path.name}.claim.{os.getpid()}.{uuid.uuid4().hex[:8]}")
+    try:
+        with _sidecar_lock(path):
+            os.replace(path, claimed)
+    except (OSError, TimeoutError):
+        return []
+    texts: list[str] = []
+    try:
+        for raw in claimed.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                row = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and isinstance(row.get("text"), str) and row["text"]:
+                texts.append(row["text"])
+    finally:
+        claimed.unlink(missing_ok=True)
+    return texts
+
+
+def _ensure_pending_record(state: Path, conversation: str) -> None:
+    record = state / f"{conversation}.json"
+    try:
+        with _sidecar_lock(record):
+            if record.exists():
+                return
+            tmp = record.with_name(f"{record.name}.tmp.{os.getpid()}")
+            tmp.write_bytes(json.dumps({"conversation": conversation, "mode": "pending", "spooled": True}).encode())
+            os.replace(tmp, record)
+    except (OSError, TimeoutError):  # invariant: the line is already spooled; a missing record only hides the leg from --list
+        pass
+
+
+class ResumeLease:
+    """Ownership of one conversation's headless-resume slot; `release()` is idempotent and callable from any thread."""
+
+    def __init__(self, fh) -> None:
+        self._fh = fh
+
+    def release(self) -> None:
+        fh, self._fh = self._fh, None
+        if fh is None:
+            return
+        try:
+            _unlock(fh)
+        finally:
+            fh.close()
+
+    def __enter__(self) -> "ResumeLease":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.release()
+
+
+def _resume_lock_path(conversation: str) -> Path:
+    key = conversation if _CONV_RE.fullmatch(conversation or "") and conversation not in (".", "..") \
+        else hashlib.sha256(str(conversation).encode()).hexdigest()
+    return _pipe_root() / "agy-resume" / f"{key}.lock"
+
+
+def claim_resume(conversation: str, text: str, sender: str, wait_s: float = RESUME_WAIT_S) -> Optional[ResumeLease]:
+    """Lease to spawn a headless resume under, or None after spooling `text` (presence held, or another resume alive past `wait_s`); SpoolRefused on spool refusal."""
+    def spooled() -> None:
+        if text:
+            spool_text(conversation, text, sender)
+        return None
+
+    if presence_held(conversation):
+        return spooled()
+    path = _resume_lock_path(conversation)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "a+b")
+    deadline = time.monotonic() + wait_s
+    try:
+        while not _try_lock(fh):
+            if time.monotonic() >= deadline:
+                fh.close()
+                return spooled()
+            time.sleep(_LOCK_POLL_S)
+    except BaseException:
+        fh.close()
+        raise
+    lease = ResumeLease(fh)
+    if presence_held(conversation):
+        lease.release()
+        return spooled()
+    return lease
 
 
 class AgyAdapter:

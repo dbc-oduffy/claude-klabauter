@@ -1953,8 +1953,8 @@ class NothingUnlandedError(InventoryMintError):
 
 
 class InventoryPartError(InventoryMintError):
-    """An inventory cannot be cut into the requested number of parts: fewer
-    plan items than parts, or a row depending on a row in a LATER part."""
+    """An inventory cannot be cut into parts: a cycle between plan items, no
+    placeable item, or a single plan item whose part composes over the byte cap."""
 
 
 def _row_item_ids(rows: List[dict], item_ids: List[str]) -> List[str]:
@@ -2075,16 +2075,20 @@ def select_part(
     order, excluded = _order_part_items(rows, owners, items, item_ids)
     if excluded_out is not None:
         excluded_out.update(excluded)
-    if count > len(order):
-        raise InventoryPartError(
-            f"cannot cut {len(order)} plan item(s) into {count} parts"
-        )
+    if not order:
+        raise InventoryPartError("no plan item is placeable into a part")
+    count = min(count, len(order))
     size = {item: owners.count(item) for item in order}
     total = sum(size.values())
     part_of_item: Dict[str, int] = {}
     seen = 0
-    for item in order:
-        part_of_item[item] = min(count, int((seen + size[item] / 2) / total * count) + 1)
+    prev = 0
+    for position, item in enumerate(order):
+        part = min(count, int((seen + size[item] / 2) / total * count) + 1)
+        # Never leave a part empty: step at most one part per item, and reserve
+        # one item for each part still ahead.
+        part = max(min(part, prev + 1), count - (len(order) - 1 - position), prev)
+        part_of_item[item] = prev = part
         seen += size[item]
     part_of_row = {row["id"]: part_of_item[o] for row, o in zip(rows, owners) if o in part_of_item}
     selected: List[dict] = []
@@ -2892,3 +2896,15 @@ def whole_set_part_count(
     placed_rows = sum(1 for o in owners if o not in excluded)
     count = min(-(-placed_rows // max(1, row_budget)), len(order))
     return count if count >= 2 else None
+
+
+def placeable_items(inventory_path: str, skip_landed: bool = False) -> List[str]:
+    """The plan items `select_part` places, in part order: the ceiling on a part count,
+    since one item per part is the finest cut."""
+    path = Path(inventory_path)
+    chunk_rows = parse_chunk_table(path.read_text(encoding="utf-8"))
+    rows = mint_rows(chunk_rows, inventory_path=path, skip_landed=skip_landed)
+    all_ids = [_strip_backtick(r["id"]) for r in chunk_rows]
+    owners = _row_item_ids(rows, all_ids)
+    order, _ = _order_part_items(rows, owners, list(dict.fromkeys(owners)), all_ids)
+    return order

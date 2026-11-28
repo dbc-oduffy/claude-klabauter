@@ -442,3 +442,98 @@ def test_winreg_key_path_has_single_separators() -> None:
     line = next(ln for ln in src.splitlines() if "CentralProcessor" in ln)
     literal = line[line.index('"'):line.rindex('"') + 1]
     assert eval(literal) == "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0"
+
+
+# ------------------------------------------------------------ box_hardware
+def _set_os(monkeypatch: pytest.MonkeyPatch, which: str) -> None:
+    monkeypatch.setattr(EL, "IS_WINDOWS", which == "windows")
+    monkeypatch.setattr(EL, "IS_DARWIN", which == "darwin")
+    monkeypatch.setattr(EL, "IS_LINUX", which == "linux")
+
+
+def test_meminfo_parse_is_bytes() -> None:
+    assert EL._parse_meminfo_bytes("MemFree: 1 kB\nMemTotal:       2048 kB\n") == 2048 * 1024
+    assert EL._parse_meminfo_bytes("nothing") is None
+
+
+def test_cpuinfo_physical_cores_counts_distinct_cores() -> None:
+    text = ("processor : 0\nphysical id : 0\ncore id : 0\n\n"
+            "processor : 1\nphysical id : 0\ncore id : 0\n\n"
+            "processor : 2\nphysical id : 0\ncore id : 1\n\n"
+            "processor : 3\nphysical id : 1\ncore id : 0\n")
+    assert EL._physical_cores_from_cpuinfo(text) == 3
+    assert EL._physical_cores_from_cpuinfo("processor : 0\nmodel name : x\n") is None
+
+
+def test_core_record_count_skips_other_relations() -> None:
+    def rec(rel: int, size: int = 16) -> bytes:
+        return rel.to_bytes(4, "little") + size.to_bytes(4, "little") + b"\0" * (size - 8)
+    assert EL._count_core_records(rec(0) + rec(0) + rec(2, 24) + rec(0)) == 3
+    assert EL._count_core_records(b"") is None
+
+
+def test_box_hardware_linux_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_os(monkeypatch, "linux")
+    monkeypatch.setattr(EL, "_cpu_brand_linux", lambda: ("AMD Ryzen 9 9950X3D2", "0x1"))
+    monkeypatch.setattr(EL, "_read_text", lambda p: (
+        "MemTotal: 1024 kB\n" if p.endswith("meminfo")
+        else "physical id : 0\ncore id : 0\n\nphysical id : 0\ncore id : 1\n"))
+    monkeypatch.setattr(EL.os, "cpu_count", lambda: 8)
+    hw = EL.box_hardware({}, force=True)
+    assert hw == EL.BoxHardware("AMD Ryzen 9 9950X3D2", 2, 8, 1024 * 1024)
+
+
+def test_box_hardware_windows_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_os(monkeypatch, "windows")
+    monkeypatch.setattr(EL, "_cpu_brand_windows", lambda env: "Intel Brand")
+    monkeypatch.setattr(EL, "_windows_physical_cores", lambda: 24)
+    monkeypatch.setattr(EL, "_windows_ram_bytes", lambda: 96 << 30)
+    monkeypatch.setattr(EL.os, "cpu_count", lambda: 24)
+    assert EL.box_hardware({}, force=True) == EL.BoxHardware("Intel Brand", 24, 24, 96 << 30)
+
+
+def test_box_hardware_darwin_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_os(monkeypatch, "darwin")
+    vals = {"machdep.cpu.brand_string": "Apple M4 Pro", "hw.physicalcpu": 12,
+            "hw.memsize": 24 << 30}
+    monkeypatch.setattr(EL, "_darwin_sysctl", lambda name, as_str=False: vals[name])
+    monkeypatch.setattr(EL.os, "cpu_count", lambda: 12)
+    assert EL.box_hardware({}, force=True) == EL.BoxHardware("Apple M4 Pro", 12, 12, 24 << 30)
+
+
+def test_box_hardware_unreadable_fields_degrade_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_os(monkeypatch, "linux")
+
+    def boom(*a: object, **k: object) -> None:
+        raise OSError("denied")
+    monkeypatch.setattr(EL, "_cpu_brand_linux", boom)
+    monkeypatch.setattr(EL, "_read_text", boom)
+    monkeypatch.setattr(EL.os, "cpu_count", lambda: None)
+    assert EL.box_hardware({}, force=True) == EL.BoxHardware(None, None, None, None)
+    _set_os(monkeypatch, "windows")
+    monkeypatch.setattr(EL, "_cpu_brand_windows", boom)
+    monkeypatch.setattr(EL, "_windows_physical_cores", boom)
+    monkeypatch.setattr(EL, "_windows_ram_bytes", boom)
+    assert EL.box_hardware({}, force=True) == EL.BoxHardware(None, None, None, None)
+
+
+def test_box_hardware_second_call_reads_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    EL._HARDWARE_CACHE.clear()
+    EL.box_hardware({})
+    calls: list = []
+    monkeypatch.setattr(EL, "_box_hardware_uncached",
+                        lambda env: calls.append(1) or EL.BoxHardware(None, None, None, None))
+    EL.box_hardware({})
+    assert calls == []
+    EL._HARDWARE_CACHE.clear()
+
+
+def test_box_hardware_live_read_spawns_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    def no_spawn(*a: object, **k: object) -> None:
+        raise AssertionError("box_hardware spawned a process")
+    monkeypatch.setattr(subprocess, "Popen", no_spawn)
+    hw = EL.box_hardware(dict(os.environ), force=True)
+    assert hw.logical_cores is None or hw.logical_cores >= 1
+    EL._HARDWARE_CACHE.clear()

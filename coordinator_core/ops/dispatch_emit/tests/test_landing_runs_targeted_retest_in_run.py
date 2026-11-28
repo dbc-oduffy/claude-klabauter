@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
 from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
+from coordinator_core.ops.dispatch_emit.landing_refusal_kinds import NO_TARGETED_TESTS
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_targeted_tests import (  # noqa: F401
     _fire,
     _write,
@@ -71,7 +72,7 @@ def test_unattributed_findings_name_a_node_or_say_none_recorded(verdict, expect)
 
 
 @pytest.mark.parametrize("status", ["fail", "error"])
-def test_a_failure_count_with_no_node_is_a_retest_clearable_harness_error(status):
+def test_a_failure_count_with_no_node_and_no_derivable_target_halts_as_no_targeted_tests(status):
     findings, check = ltt.failed_targeted_tests({"status": status, "tests_failed": 1, "baseline": None})
 
     assert check == "failed"
@@ -79,7 +80,8 @@ def test_a_failure_count_with_no_node_is_a_retest_clearable_harness_error(status
     assert findings[0].path == ""
     assert "no baseline to attribute them" in findings[0].detail and ltt.NO_NODE_RECORDED in findings[0].detail
     step = ltt.retest_step(findings, {})
-    assert step["kind"] == ltt.TARGETED_TESTS_FAILED and step["remedy"] == "landing-runs-targeted-retest"
+    assert step["kind"] == NO_TARGETED_TESTS and step["remedy"] == "halt-no-targeted-tests"
+    assert step["nodes"] == [] and step["exhausted"] is True
 
 
 @pytest.mark.parametrize("verdict", [

@@ -571,7 +571,6 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
 _PUBLISH_ROUND_ADVISORY_BUDGET_SECS = 30
 _ENGINE_BUILD_SUBDIR = ("engine-build", "claude-klabauter")
 _KLABAUTER_MIRROR_REGISTRY_KEY = "repos.claude_klabauter"
-_KLABAUTER_MIRROR_PATH_REGISTRY_KEY = "publish.mirrors.claude_klabauter.path"
 _KLABAUTER_MIRROR_ROW_NAME = "claude-klabauter-bin"
 
 
@@ -640,10 +639,6 @@ def provision_stamped_engine(
         except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as exc:
             print(f"[first-run] WARNING: git init of engine-build directory failed: {exc}", file=sys.stderr)
             return False
-
-    if not _register_engine_key(_KLABAUTER_MIRROR_PATH_REGISTRY_KEY, str(dest)):
-        print(f"[first-run] WARNING: failed to register {_KLABAUTER_MIRROR_PATH_REGISTRY_KEY} — skipping engine provisioning.", file=sys.stderr)
-        return False
 
     publish_script = claude_klabauter_root / "coordinator" / "bin" / "publish.py"
     if not publish_script.is_file():

@@ -167,3 +167,74 @@ def test_ledger_failure_refuses_unrecorded_and_never_raises(tmp_path: Path) -> N
     reply = ca.admit("r", "t", _sample(), {"vram_mib": 1}, home=blocker, now=NOW)
     assert reply["grant"] is False and reply["recorded"] is False
     assert reply["short"] == [{"resource": "measurement", "reason": "ledger_unavailable"}]
+
+
+def _booked(tmp_path: Path, run: str = "b1", **kw) -> None:
+    reply = ca.admit(run, "t", _sample(), {"vram_mib": 1000}, home=tmp_path, now=NOW, pid=4242, **kw)
+    assert reply["grant"] and reply["recorded"]
+
+
+def test_booking_fields_land_on_the_row_and_absent_ones_stay_absent(tmp_path: Path) -> None:
+    _booked(tmp_path, pid_started_at=123.0, owner_sid="sid", window_s=900.0, expected_rate=2.5, rate_unit="files/s")
+    ca.admit("plain", "t", _sample(), {"vram_mib": 1000}, home=tmp_path, now=NOW)
+    rows = {r["run"]: r for r in ca._rows(ca.grants_path(tmp_path))}
+    assert {k: rows["b1"][k] for k in ("pid", "pid_started_at", "owner_sid", "window_s", "expected_rate", "rate_unit")} == {
+        "pid": 4242, "pid_started_at": 123.0, "owner_sid": "sid", "window_s": 900.0, "expected_rate": 2.5, "rate_unit": "files/s",
+    }
+    assert not {"pid", "owner_sid", "window_s", "expected_rate", "rate_unit"} & set(rows["plain"])
+    assert [r["run"] for r in ca.read_booked(tmp_path)] == ["b1"]  # the plain grant is not pid-booked
+
+
+def test_booked_window_defaults_to_ttl(tmp_path: Path) -> None:
+    _booked(tmp_path)
+    assert ca.read_booked(tmp_path)[0]["window_s"] == ca.GRANT_TTL_S
+
+
+def test_booked_row_survives_a_later_admit_after_start_and_after_ttl_and_headroom_ignores_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from coordinator_core.group_em import session_registry
+
+    monkeypatch.setattr(session_registry, "pid_alive", lambda pid: True)
+    _booked(tmp_path)
+    running = _sample(jobs=[{"run": "b1", "job_type": "t"}])
+    later = NOW + ca.GRANT_TTL_S + 10
+    reply = ca.admit("r2", "t", running, {"vram_mib": 1000}, home=tmp_path, now=later)
+    assert reply["grant"]
+    assert [r["run"] for r in ca.read_booked(tmp_path)] == ["b1"]
+    assert [r["run"] for r in ca.read_held(running, tmp_path, later)] == ["r2"]
+    assert reply["headroom"]["vram_mib"] == 32768 - 6144
+
+
+def test_booked_row_is_dropped_once_its_pid_is_gone(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.group_em import session_registry
+
+    _booked(tmp_path)
+    monkeypatch.setattr(session_registry, "pid_alive", lambda pid: False)
+    ca.admit("r2", "t", _sample(jobs=[{"run": "b1"}]), {"vram_mib": 1000}, home=tmp_path, now=NOW + ca.GRANT_TTL_S + 10)
+    assert ca.read_booked(tmp_path) == []
+
+
+def test_record_progress_updates_the_booked_row_and_refuses_an_unknown_run(tmp_path: Path) -> None:
+    _booked(tmp_path)
+    assert ca.record_progress("b1", 40.0, tmp_path, now=NOW + 5) == {"updated": True, "run": "b1"}
+    row = ca.read_booked(tmp_path)[0]
+    assert row["progress"] == 40.0 and row["progress_at"] == NOW + 5
+    assert ca.record_progress("nope", 1.0, tmp_path)["reason"] == "no_grant"
+
+
+def test_booked_row_with_a_reused_pid_is_dropped_and_a_matching_start_is_kept(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.ask_spool import record
+    from coordinator_core.group_em import session_registry
+
+    monkeypatch.setattr(session_registry, "pid_alive", lambda pid: True)
+    _booked(tmp_path, pid_started_at=1000.0)
+    later = NOW + ca.GRANT_TTL_S + 10
+
+    monkeypatch.setattr(record, "pid_create_time", lambda pid: 1000.5)
+    ca.admit("r2", "t", _sample(jobs=[{"run": "b1"}]), {"vram_mib": 1000}, home=tmp_path, now=later)
+    assert [r["run"] for r in ca.read_booked(tmp_path)] == ["b1"]
+
+    monkeypatch.setattr(record, "pid_create_time", lambda pid: 5000.0)
+    ca.admit("r3", "t", _sample(jobs=[{"run": "b1"}]), {"vram_mib": 1000}, home=tmp_path, now=later)
+    assert ca.read_booked(tmp_path) == []

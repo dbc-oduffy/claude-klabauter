@@ -16,11 +16,16 @@ class Candidate:
     indent: str = ""
 
 
+_STATEMENT_LISTS = ("body", "orelse", "finalbody", "handlers", "cases")
+
+
 def _docstring_expr_lines(tree: ast.AST) -> dict[tuple[int, int], tuple[bool, str]]:
     spans: dict[tuple[int, int], tuple[bool, str]] = {}
-    for node in ast.walk(tree):
+    stack = [tree]
+    while stack:
+        node = stack.pop()
         if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            body = getattr(node, "body", None)
+            body = node.body
             if body and isinstance(body[0], ast.Expr) and isinstance(
                 getattr(body[0], "value", None), ast.Constant
             ) and isinstance(body[0].value.value, str):
@@ -28,6 +33,11 @@ def _docstring_expr_lines(tree: ast.AST) -> dict[tuple[int, int], tuple[bool, st
                 sole = len(body) == 1 and not isinstance(node, ast.Module)
                 indent = " " * (first.col_offset if sole else 0)
                 spans[(first.lineno, getattr(first, "end_lineno", first.lineno))] = (sole, indent)
+        # invariant: defs and classes occur only in statement lists, so expression subtrees are never entered
+        for name in _STATEMENT_LISTS:
+            children = getattr(node, name, None)
+            if isinstance(children, list):
+                stack.extend(c for c in children if isinstance(c, ast.AST))
     return spans
 
 

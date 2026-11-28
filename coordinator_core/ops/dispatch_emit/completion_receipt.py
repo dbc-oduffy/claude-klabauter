@@ -46,7 +46,7 @@ from coordinator_core.ops.dispatch_emit.plan_row_coding import MINTED_SPINE_ORIG
 from coordinator_core.ops.dispatch_emit.worktree_snapshot import read_rel
 
 _DERIVATION = "dispatch.land_run"
-_HANDOFF_CLASS = "handoff"
+_HANDOFF_CLASS = "handoff-claims"
 
 
 def _fm(worktree_root: Path, rel: Optional[str]) -> dict:
@@ -139,7 +139,9 @@ def _handoff_claims(worktree_root: Path, session_id: Optional[str]) -> list[str]
         return []
     from coordinator_core.session.claims import list_claims_by_session_checked
 
-    matches, _errors = list_claims_by_session_checked(session_id, str(worktree_root))
+    matches, _errors = list_claims_by_session_checked(
+        session_id, str(worktree_root), classes=(_HANDOFF_CLASS,)
+    )
     return [
         Path(
             os.path.relpath(

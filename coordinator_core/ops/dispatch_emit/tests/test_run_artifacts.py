@@ -23,10 +23,18 @@ SLICE = "state/sizings/2026-10-16-x-slice-2.yaml"
 def _no_git(monkeypatch):
     from coordinator_core.git import run as git_run
 
+    armed = [True]
+
     def boom(*a, **k):
-        raise AssertionError("run_artifacts must not spawn git")
+        # A module first imported while this guard is installed binds it by name for the rest of the
+        # process; disarmed at teardown, the leaked binding delegates to the real runner.
+        if armed[0]:
+            raise AssertionError("run_artifacts must not spawn git")
+        return _REAL_RUN_GIT(*a, **k)
 
     monkeypatch.setattr(git_run, "run_git", boom)
+    yield
+    armed[0] = False
 
 
 def _w(root: Path, rel: str, text: str = "x\n") -> None:
@@ -86,9 +94,12 @@ ASK = "ask-20261016T110000-dddddd"
 
 
 def _halted_ask(root: Path) -> None:
-    _w(root, f"state/warp/{ASK}/halted.json", json.dumps({"status": "halted", "sizing_rel": SIZING}))
+    from coordinator_core.ops.dispatch_emit import halted_run
+
     _w(root, f"state/warp/{ASK}/briefs/x.md")
     _w(root, f"state/warp/{ASK}/withheld-prints.json", "{}")
+    # halted_ask_run_for reads the lookup index only; the marker writer is what populates it.
+    halted_run._write(root / f"state/warp/{ASK}", {"status": "halted", "sizing_rel": SIZING})
 
 
 def test_ask_dir_resolved_from_halted_ask_run(graph):
@@ -373,6 +384,60 @@ def test_write_tracked_outcome_is_lf_and_skips_an_unchanged_rewrite(tmp_path):
     assert ra.read_tracked_outcome(tmp_path, run_id)["state"] == "landed"
     assert b"\r" not in target.read_bytes()
     assert list(target.parent.glob("*.tmp")) == []
+
+
+def _register_text(rows: list) -> str:
+    import yaml
+
+    return "schema: sizing-object\nstatus: routed\n" + yaml.safe_dump(
+        {"requirement_register": {"sources": [{"doc": "b.md", "ref": "r@1"}], "rows": rows}}, sort_keys=False)
+
+
+def _row(rid: str, status: str, **extra) -> dict:
+    return {"id": rid, "source_text": rid, "surface": "ui", "status": status, "claimed_by": [], **extra}
+
+
+def test_a_landed_outcome_is_partial_while_a_register_row_is_open_or_a_ledger_item_not_met(tmp_path):
+    _w(tmp_path, SIZING, _register_text([_row("R1", "met", wired=True), _row("R2", "open"), _row("R3", "partial")]))
+    _w(tmp_path, f"state/warp/{RUN}/run.json", json.dumps({"sizing_rel": SIZING}))
+    verdict = {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "met"}, {"id": "R9", "status": "not_met"}]}
+
+    ra.write_tracked_outcome(tmp_path, RUN, "landed", ledger_verdict=verdict)
+
+    closure = ra.read_tracked_outcome(tmp_path, RUN)["closure"]
+    assert closure["verdict"] == "partial"
+    assert [r["id"] for r in closure["open_rows"]] == ["R2", "R3"]
+    assert closure["not_met_items"] == ["R9"]
+    assert closure["ledger_met_open_rows"] == ["R2"]
+    assert closure["register"] == {"R1": "met", "R2": "open", "R3": "partial"}
+
+
+def test_a_landed_outcome_is_finished_only_when_every_row_is_closed_and_no_item_not_met(tmp_path):
+    ruling = {"source": "pm", "quote": "q", "ref": "r", "on": "2026-11-24"}
+    _w(tmp_path, SIZING, _register_text([_row("R1", "met", wired=True), _row("R2", "deferred", ruling=ruling)]))
+    _w(tmp_path, f"state/warp/{RUN}/run.json", json.dumps({"sizing_rel": SIZING}))
+
+    ra.write_tracked_outcome(tmp_path, RUN, "landed", ledger_verdict={"items": [{"id": "R1", "status": "met"}]})
+
+    closure = ra.read_tracked_outcome(tmp_path, RUN)["closure"]
+    assert (closure["verdict"], closure["open_rows"], closure["not_met_items"]) == ("finished", [], [])
+
+
+def test_a_landed_outcome_over_an_unreadable_sizing_is_not_finished(tmp_path):
+    _w(tmp_path, f"state/warp/{RUN}/run.json", json.dumps({"sizing_rel": SIZING}))
+
+    ra.write_tracked_outcome(tmp_path, RUN, "landed")
+
+    assert ra.read_tracked_outcome(tmp_path, RUN)["closure"]["verdict"] == "partial"
+
+
+def test_a_non_landed_outcome_carries_no_closure(tmp_path):
+    _w(tmp_path, SIZING, _register_text([_row("R1", "open")]))
+    _w(tmp_path, f"state/warp/{RUN}/run.json", json.dumps({"sizing_rel": SIZING}))
+
+    ra.write_tracked_outcome(tmp_path, RUN, "halted")
+
+    assert "closure" not in ra.read_tracked_outcome(tmp_path, RUN)
 
 
 def test_sharded_delivery_note_is_a_candidate_and_maps_back(graph):

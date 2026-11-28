@@ -309,6 +309,7 @@ def _revision_anchor(at: str, sender: object) -> str:
 GARBAGE_KEY = "engine_garbage"
 #: Origins `engine_garbage` never drops: the PM's words, the raw ask and its relay.
 GARBAGE_PROTECTED_ORIGINS = (ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_RELAYED)
+RETRACTABLE_ORIGINS = (ORIGIN_REVISION, ORIGIN_RELAYED)
 _ERROR_CODE_RE = re.compile(r'"code"\s*:\s*(-32\d{3})')
 
 
@@ -732,7 +733,7 @@ def _is_force_loaded(path: str) -> bool:
 
 
 def _note_uncovered_paths(root: Path, dir_: Path, run: Mapping, note: str) -> list[str]:
-    """Repo-relative paths a staged run's frozen footprint does not cover that `note` asks to change:
+    """Repo-relative paths a staged run's frozen footprint does not cover that `note` (a PM verbatim; a revise `note` never calls this) asks to change:
     existing repo files named in a clause an edit verb governs (`sizing_xs_mint._EDIT_VERB` over
     `_CLAUSE_SPLIT`), plus every path after an explicit "widen to" in the note, plus, when the note has
     an edit clause and the run is halted, the uncovered `self_correction.needs_paths` of its halt.
@@ -760,61 +761,6 @@ def _note_uncovered_paths(root: Path, dir_: Path, run: Mapping, note: str) -> li
                 wanted.append(resolved)
     sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
     return paths_outside_footprint(root, dir_, sizing_rel, wanted)
-
-
-def _pair_key(path: str) -> tuple[str, str]:
-    """`(directory without a trailing /tests, basename without a test_ prefix and .py)`: a module and its test share it."""
-    directory, _, name = path.replace("\\", "/").rpartition("/")
-    directory = directory.removesuffix("/tests")
-    stem = name.rsplit(".", 1)[0]
-    return directory, stem.removeprefix("test_")
-
-
-def _row_for_path(rows: Sequence, path: str) -> Optional[str]:
-    """The id of the plan row whose `writes` hold the file `path` pairs with (same stem and directory), else
-    the first row writing in its directory; None when no row does."""
-    want = _pair_key(path)
-    same_dir: Optional[str] = None
-    for row in rows:
-        if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not isinstance(row.get("writes"), list):
-            continue
-        keys = [_pair_key(w) for w in row["writes"] if isinstance(w, str)]
-        if want in keys:
-            return row["id"]
-        if same_dir is None and any(k[0] == want[0] for k in keys):
-            same_dir = row["id"]
-    return same_dir
-
-
-def _widen_note_paths(
-    root: Path, dir_: Path, run: Mapping, run_id: str, paths: Sequence[str], note: str, outcome: Optional[dict],
-) -> bool:
-    """Covers `paths` a note names: on a halted run each goes onto the plan row it pairs with by directory
-    and test pair (`_stamp_for_rows`), the rest onto an engine-written row (`_widen_footprint`); a live run
-    takes `_widen_footprint` alone. True when every path is covered."""
-    from coordinator_core.ops.dispatch_emit import halted_run
-
-    remaining = list(paths)
-    try:
-        marker = halted_run.read_strict(dir_)
-    except ValueError:
-        marker = None
-    if marker is not None and marker.get("status") == halted_run.STATUS_HALTED:
-        sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
-        rows = _plan_rows(root, sizing_rel)
-        wanted_by_row: dict[str, list[str]] = {}
-        for p in remaining:
-            row_id = _row_for_path(rows, p)
-            if row_id:
-                wanted_by_row.setdefault(row_id, []).append(p)
-        stamp = _stamp_for_rows(root, run, wanted_by_row) if wanted_by_row else None
-        if stamp is not None and stamp[1] and _apply_row_writes(root, (stamp[0], stamp[1])):
-            for update in stamp[1]:
-                added = [p for p in wanted_by_row[update["id"]]]
-                remaining = [p for p in remaining if p not in added]
-                if outcome is not None:
-                    outcome.setdefault("footprint_widened", []).append({"row": update["id"], "paths": added})
-    return not remaining or _widen_footprint(root, run, run_id, remaining, note, outcome)
 
 
 def _plan_rows(root: Path, sizing_rel: Optional[str]) -> list:
@@ -958,25 +904,6 @@ def _widen_footprint(
     if outcome is not None:
         outcome.setdefault("footprint_widened", []).append({"row": row_id, "paths": list(paths)})
     return True
-
-
-def _note_route(root: Path, run: Mapping, run_id: str, paths: Sequence[str]) -> str:
-    """The refusal text for a note naming `paths` outside the run's footprint, carrying the
-    `plan.tasks.mutate` add-task call that covers them (its `<...>` task fields are the caller's to fill)."""
-    sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
-    plan_rel = _sizing_plan(root, sizing_rel)[0] or "<plan path>"
-    task = {
-        "id": "<next id>", "title": "...", "change_kind": "<kind>", "surface": paths[0],
-        "writes": list(paths), "disposition": "open",
-    }
-    call = "coordinator-invoke plan.tasks.mutate " + "'" + json.dumps(
-        {"verb": "add-task", "plan_path": plan_rel, "task": task}, separators=(",", ":")
-    ).replace("'", "'\\''") + "'"
-    return (
-        f"note not stored: run {run_id}'s write footprint does not cover {', '.join(paths)}, so no leg could "
-        f"act on it ({_edge_state(root, sizing_rel)}). Cover them with a plan row: {call}. Once that row "
-        "lands in the plan the sizing names, re-send the note to this run_id; it is accepted and reaches the briefs."
-    )
 
 
 def _footprint_route(run_id: str, paths: Sequence[str]) -> str:
@@ -1464,8 +1391,11 @@ def _append_rows(
             target = by_id.get(retract_row)
             if target is None:
                 raise MutateAbort(f"retract_row names no register row: {retract_row}")
-            if _origin(target.get(rr.ROW_ANCHOR))[0] != ORIGIN_REVISION:
-                raise MutateAbort(f"retract_row {retract_row} is not a revision row: only a revision can be withdrawn")
+            if _origin(target.get(rr.ROW_ANCHOR))[0] not in RETRACTABLE_ORIGINS:
+                raise MutateAbort(
+                    f"retract_row {retract_row} is not a revision or relayed row: only those can be withdrawn; "
+                    "a PM requirement is ruled out by the PM"
+                )
             if target.get(rr.ROW_STATUS) != rr.STATUS_OPEN:
                 raise MutateAbort(f"retract_row {retract_row} is already {target.get(rr.ROW_STATUS)}: only an open row can be withdrawn")
             if rr.claimants(target):
@@ -2299,6 +2229,19 @@ def _parsed_register_rows(register: Mapping) -> Optional[list]:
     return rows
 
 
+def _failed_run_refusal(dir_: Path, run_id: str) -> Optional[str]:
+    """The refusal for a run whose halt marker names `run_failed` (its fire exited failed), else None."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.failed_fire_halt import HALT_RUN_FAILED
+
+    marker = halted_run._read(dir_)
+    if marker is None or marker.get("status") != halted_run.STATUS_HALTED or marker.get("halted") != HALT_RUN_FAILED:
+        return None
+    sizing_rel = marker.get("sizing_rel")
+    route = f"resubmit {sizing_rel}" if isinstance(sizing_rel, str) and sizing_rel else "resubmit its sizing"
+    return f"run {run_id!r} failed (halted: {HALT_RUN_FAILED}): revision not delivered. {route}."
+
+
 def _note_canvas_conflicts(root: Path, dir_: Path, sizing_rel: Optional[str], note: str) -> list[dict]:
     """Contradictions between `note` and the PM's words plus the SETTLED.md decisions of the canvases
     governing the run's footprint; [] when none or a source is unreadable. Pure reads, never raises."""
@@ -2363,12 +2306,11 @@ def revise(
     write set widens it through an engine-written row on the sizing's plan spine
     (`outcome["footprint_widened"] = [{row, paths}]`); with no readable plan it refuses, naming the
     routes (a new ask, or resize the sizing), and nothing is written. `withhold_paths` outside the
-    footprint and a `note` with an edit-verb clause naming an existing repo file outside a staged run's
-    footprint (or, on a halted run, whose halt `self_correction.needs_paths` the footprint leaves
-    uncovered) widen the same way. With no plan a note is never stored and never raises:
-    `outcome["note_refused"] = {paths, reason}` carries the paths and the `plan.tasks.mutate` add-task
-    call, and the rest of the call applies. A file named without an edit verb (provenance, a tool to
-    run) is not checked.
+    footprint widen the same way. A `note` never widens: it is stored as written, whatever paths it names
+    ("do not edit X" included); only `add_paths` or a PM verbatim does. A `verbatim` is read by the same
+    extraction: uncovered paths widen through `_widen_footprint`; with no plan to take the row the verbatim
+    is not stored and `outcome["verbatim_refused"] = {paths, reason}` carries the follow-up route (no
+    `outcome`: LedgerRefused).
     `accept_partial` (`[{chunk, reason}]`, `run_accept_partial.validate` before any write) rules PARTIAL
     chunks good enough to release their dependents on the refire: recorded to the run's
     `accept_partial.jsonl`, same preconditions and effects as `withhold_paths`; a BLOCKED chunk stays held.
@@ -2522,6 +2464,9 @@ def revise(
     root = Path(repo_root)
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
+    failed = _failed_run_refusal(dir_, run_id)
+    if failed is not None:
+        raise LedgerRefused(failed)
     verbatim_only = not (
         named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or pre_entries or build_only
         or stop_after or retraction is not None or row_retraction is not None or claim or accept_entries
@@ -2714,6 +2659,13 @@ def revise(
             "withhold_paths: " + "; ".join(f"{e['path']} ({e.get('reason', '')})" for e in withheld_entries), outcome,
         ):
             raise LedgerRefused(_footprint_route(run_id, outside))
+    verbatim_uncovered = _note_uncovered_paths(root, dir_, run, text) if text and not named else []
+    if verbatim_uncovered and _widen_footprint(root, run, run_id, verbatim_uncovered, text, outcome):
+        verbatim_uncovered = []
+    if verbatim_uncovered:
+        if outcome is None:
+            raise LedgerRefused(_footprint_route(run_id, verbatim_uncovered))
+        outcome["verbatim_refused"] = {"paths": verbatim_uncovered, "reason": _footprint_route(run_id, verbatim_uncovered)}
     if named and not run.get("sizing_rel"):
         raise LedgerRefused("out_of_scope needs a bound sizing: the run has no register yet")
     claim_plan: Optional[tuple[str, Path]] = None
@@ -2771,13 +2723,7 @@ def revise(
 
         write_base_ref_marker(dir_, base_ref, sender)
         declare_write(dir_ / BASE_REF_FILE)
-    note_uncovered = _note_uncovered_paths(root, dir_, run, note) if has_note else []
-    if note_uncovered and _widen_note_paths(root, dir_, run, run_id, note_uncovered, note, outcome):
-        note_uncovered = []
-    if note_uncovered:
-        if outcome is not None:
-            outcome["note_refused"] = {"paths": note_uncovered, "reason": _note_route(root, run, run_id, note_uncovered)}
-    elif has_note:
+    if has_note:
         from coordinator_core.atomic_append import append_line
 
         conflicts = _note_canvas_conflicts(
@@ -2824,7 +2770,7 @@ def revise(
             _release_garbage_claim(root, run["sizing_rel"], row_retraction)
     if named:
         _append_rows(root, run["sizing_rel"], [], withhold=withhold)
-    elif text:
+    elif text and not (outcome or {}).get("verbatim_refused"):
         at = _now()
         if run.get("sizing_rel"):
             reused: dict = {}
@@ -3961,7 +3907,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
     if unclaimed and live and "next" not in out:
         out["next"] = _add_task_next(unclaimed_plan, unclaimed)
-    if params.get("note") and not outcome.get("note_refused") and _REQUIREMENT_MODAL.search(params["note"]):
+    if params.get("note") and _REQUIREMENT_MODAL.search(params["note"]):
         out["note_mints_no_row"] = "note stored as context; it mints no register row: send it as verbatim to bind it"
     applied = [f"row {added}"] if added else []
     applied += [k for k in _APPLIED_KEYS if out.get(k)]
@@ -3969,13 +3915,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         applied.append("order_rows")
     if landed_sha:
         applied.append("ledger_verdict")
-    note_refused = outcome.get("note_refused")
-    if note_refused:
-        refused.append({"input": "note", "paths": note_refused["paths"], "reason": note_refused["reason"]})
+    verbatim_refused = outcome.get("verbatim_refused")
+    if verbatim_refused:
+        refused.append({"input": "verbatim", "paths": verbatim_refused["paths"], "reason": verbatim_refused["reason"]})
+        out.pop("next", None)
+        out["note"] = "verbatim not stored: it names paths outside every footprint and no plan row could cover them; see refused."
     applied += [
         k for k in ("note", "all_of_pm_ask")
         if params.get(k) is not None and params.get(k) != ""
-        and not (k == "note" and (note_refused or out.get("will_not_read")))
+        and not (k == "note" and out.get("will_not_read"))
     ]
     return _mutation_reply(tuple(applied), tuple(refused), params["run_id"], **out)
 
@@ -4174,14 +4122,6 @@ def _relocated_plan(
         if sizing_name in text:
             return rel, cand
     return None
-
-
-def _edge_state(root: Path, sizing_rel: Optional[str]) -> str:
-    """What `_sizing_plan` read, for a refusal: the plan file, or why there is none."""
-    plan_rel = _sizing_plan(root, sizing_rel)[0]
-    if plan_rel:
-        return f"the plan it read is {plan_rel}"
-    return "it read no plan: the sizing names no readable `plan:` edge"
 
 
 def pinned_plan_drift(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str], list[str]]:

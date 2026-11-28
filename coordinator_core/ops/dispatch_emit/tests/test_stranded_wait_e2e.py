@@ -68,7 +68,10 @@ def _timed_tick(root: Path, now: float) -> tuple[list[dict], float]:
 
 def test_idle_tick_refires_the_superseded_owner_first_then_the_waiter_once_the_owner_lands(repo, monkeypatch) -> None:
     run_token.mint(repo, WAITER, "w.mjs", marker=True, session_id="waiter-sess", sizing_rel=WAITER_SIZING)
-    stage_wait.park(repo, WAITER, [OWNER], [PEER], session_id="waiter-sess", sizing_rel=WAITER_SIZING, reason="co-tenant-wait")
+    stage_wait.park(
+        repo, WAITER, [OWNER], [PEER], session_id="waiter-sess", sizing_rel=WAITER_SIZING, reason="co-tenant-wait",
+        on_blocker_dead="proceed",
+    )
     _halt_owner_at_commit(repo)
     assert not run_token.is_live(repo, OWNER) and run_token.escrowed(repo, OWNER) is None
     assert co_tenant_owner._halted_marker(repo, OWNER) is not None
@@ -113,7 +116,10 @@ def test_idle_tick_refires_the_superseded_owner_first_then_the_waiter_once_the_o
 
 def test_owner_that_never_lands_ends_the_wait_by_proceeding_without_it(repo) -> None:
     run_token.mint(repo, WAITER, "w.mjs", marker=True, session_id="waiter-sess", sizing_rel=WAITER_SIZING)
-    stage_wait.park(repo, WAITER, [OWNER], [PEER], session_id="waiter-sess", sizing_rel=WAITER_SIZING, reason="co-tenant-wait")
+    stage_wait.park(
+        repo, WAITER, [OWNER], [PEER], session_id="waiter-sess", sizing_rel=WAITER_SIZING, reason="co-tenant-wait",
+        on_blocker_dead="proceed",
+    )
     _halt_owner_at_commit(repo)
     moment = time.time()
     for n in range(stranded_wait.MAX_STRANDED_REFIRES):
@@ -127,3 +133,34 @@ def test_owner_that_never_lands_ends_the_wait_by_proceeding_without_it(repo) -> 
     assert stage_wait.read(repo, WAITER)["proceeded_without"] == [OWNER]
     assert len(_refires_of(repo, WAITER)) == 1
     assert co_tenant_owner._proceeded_without(repo, WAITER) == frozenset({OWNER})
+
+
+def _marker(root: Path, run_id: str, **fields: object) -> None:
+    run_dir = root / "state" / "warp" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "halted.json").write_text(json.dumps(fields), encoding="utf-8")
+
+
+def test_status_op_reports_engine_resume_with_the_marker_sha_and_a_dead_blocker_as_attention(repo, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import run_close_hand_landed, stage_wait_status
+
+    sha = "b" * 40
+    monkeypatch.setattr(run_close_hand_landed, "_handler", lambda *_a, **_k: {"ok": True})
+    stage_wait.park(
+        repo, WAITER, [{"kind": "run_landed", "ref": OWNER}], [], session_id="waiter-sess",
+        sizing_rel=WAITER_SIZING, resume_action="close_landed",
+    )
+    other = "ask-20261123T080000-0ddba1"
+    stage_wait.park(repo, other, [{"kind": "run_end", "ref": LANDED_REFIRE}], [], session_id="s2", sizing_rel=WAITER_SIZING)
+    _marker(repo, OWNER, status="landed", sha=sha)
+    _marker(repo, LANDED_REFIRE, status="halted", sizing_rel=OWNER_SIZING, halted="dependents_unstarted")
+
+    stranded_wait.sweep(repo, now=time.time())
+
+    resumed = stage_wait_status.stage_wait_status({"run_id": WAITER}, repo)
+    assert (resumed["status"], resumed["resumed_by"], resumed["session"], resumed["action"], resumed["sha"]) == (
+        "resumed", "engine", None, "close_landed", sha,
+    )
+    held = stage_wait_status.stage_wait_status({"run_id": other}, repo)
+    assert held["status"] == "attention" and held["flag"] and held["sha"] is None
+    assert "proceeded_without" not in stage_wait.read(repo, other)

@@ -66,7 +66,7 @@ def test_halt_commit_prompt_runs_a_bare_params_file_command_and_never_inlines_pa
 
 
 def test_params_with_both_quote_kinds_reach_the_params_file_byte_identical(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(run_token, "halt_admits", lambda *_a: True)
+    monkeypatch.setattr(run_token, "halt_own_token", lambda *_a: True)
     prompt = _composed_prompt(tmp_path, _HALTED)
 
     written, leg = chan.prewrite_for_spawn(tmp_path, prompt)

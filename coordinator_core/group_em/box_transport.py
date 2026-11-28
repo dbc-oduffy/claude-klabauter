@@ -29,7 +29,8 @@ Containment (enforced in ``_remote_invoke`` and re-checked in ``_run``, refusal 
 Negative-spec:
     - Never raises: a failure is ``{"ok": False, "state": "unknown", "reason": ...}``; an
       empty session list is never returned for an unreachable box.
-    - Every ssh call goes through ``_run`` (the single sanctioned spawn site).
+    - Every ssh call goes through ``_run`` (the single sanctioned spawn site), including
+      ``run_remote_payload``'s stdin-carrying call.
 """
 
 from __future__ import annotations
@@ -62,8 +63,13 @@ ALLOWED_OPS: frozenset = frozenset(
         "groupem.suite_grant_revoke_receive",
         "groupem.box_key_pin_from_peer",
         "groupem.roll_call_reply",
+        "groupem.admission_spool_read",
         # Issued by coordinator_core.percolate.fleet_adoption.
         "fleet.klabauter_freshness",
+        "test_leg.remote_run",
+        "test_leg.remote_poll",
+        "agent_leg.remote_run",
+        "agent_leg.remote_poll",
     }
 )
 RATE_MAX_CALLS = 12
@@ -71,7 +77,7 @@ RATE_WINDOW_S = 60.0
 CONNECT_TIMEOUT_S = 10.0
 LOCK_GRACE_S = 10.0
 
-Runner = Callable[[list, float], "subprocess.CompletedProcess"]
+Runner = Callable[..., "subprocess.CompletedProcess"]
 
 _clock: Callable[[], float] = time.time
 _INVOKE_NAMES = frozenset({"coordinator-invoke", "coordinator-invoke.exe", "coordinator-invoke.cmd"})
@@ -312,8 +318,16 @@ def _safe_arg(value: object) -> Optional[str]:
     return value
 
 
-def _remote_command(shell: str, invoke: str, op: str, params: dict) -> Optional[str]:
-    """The single remote command string quoted for ``shell``; None when ``invoke`` cannot be quoted safely."""
+def _remote_command(shell: str, invoke: str, op: str, params: Optional[dict], stdin: bool = False) -> Optional[str]:
+    """The single remote command string quoted for ``shell``; None when ``invoke`` cannot be quoted safely.
+
+    ``stdin``: the op's params object is read from the call's stdin (``--params-file -``), not argv."""
+    if stdin:
+        if shell != "cmd":
+            return shlex.quote(invoke) + " " + shlex.quote(op) + " --params-file -"
+        if _CMD_UNSAFE.search(invoke) or _CMD_UNSAFE.search(op):
+            return None
+        return '"' + subprocess.list2cmdline([invoke, op, "--params-file", "-"]) + '"'
     text = json.dumps(params)
     if shell != "cmd":
         return shlex.quote(invoke) + " " + shlex.quote(op) + " " + shlex.quote(text)
@@ -324,9 +338,23 @@ def _remote_command(shell: str, invoke: str, op: str, params: dict) -> Optional[
     return '"' + subprocess.list2cmdline([invoke, op, text]) + '"'
 
 
-def _run(argv: list, timeout: float) -> "subprocess.CompletedProcess":
+def _run(argv: list, timeout: float, stdin_bytes: Optional[bytes] = None) -> "subprocess.CompletedProcess":
     if not _shape_ok(argv):
         raise ValueError("ssh argv outside the contained shape")
+    if stdin_bytes is not None:
+        raw = subprocess.run(
+            argv,
+            input=stdin_bytes,
+            capture_output=True,
+            timeout=timeout,
+            **no_console_creationflags(),
+        )
+        return subprocess.CompletedProcess(
+            raw.args,
+            raw.returncode,
+            (raw.stdout or b"").decode("utf-8", "replace"),
+            (raw.stderr or b"").decode("utf-8", "replace"),
+        )
     return subprocess.run(
         argv,
         capture_output=True,
@@ -346,7 +374,8 @@ def ssh_host(box: dict) -> Optional[str]:
 
 
 def _remote_invoke(
-    box: dict, op: str, params: dict, runner: Optional[Runner], timeout: float
+    box: dict, op: str, params: dict, runner: Optional[Runner], timeout: float,
+    stdin_bytes: Optional[bytes] = None,
 ) -> dict:
     host = ssh_host(box)
     if host is None:
@@ -368,7 +397,7 @@ def _remote_invoke(
     not_registered = _registered(box, host, invoke)
     if not_registered:
         return _unknown(not_registered)
-    remote = _remote_command(shell, invoke, op, params)
+    remote = _remote_command(shell, invoke, op, params, stdin=stdin_bytes is not None)
     if remote is None:
         return _unknown("invoke_unquotable_for_shell")
     identity = transport.get("identity_file")
@@ -382,20 +411,23 @@ def _remote_invoke(
     head += ["-o", "BatchMode=yes", "-o", f"ConnectTimeout={connect_s}"]
     hosts = [host] + ([tunnel] if tunnel and tunnel != host else [])
     for attempt, target in enumerate(hosts):
-        res = _invoke_once(box["box_id"], head + [target, remote], runner, timeout)
+        res = _invoke_once(box["box_id"], head + [target, remote], runner, timeout, stdin_bytes)
         # LAN first; the tunnel is tried once, only after ssh itself failed (exit 255) on host.
         if res.get("reason") != "ssh_exit_255" or attempt == len(hosts) - 1:
             return res
     return res
 
 
-def _invoke_once(box_id: str, argv: list, runner: Optional[Runner], timeout: float) -> dict:
+def _invoke_once(
+    box_id: str, argv: list, runner: Optional[Runner], timeout: float, stdin_bytes: Optional[bytes] = None
+) -> dict:
     """One admitted ssh call (box lock plus one rate token) and its parsed reply."""
     nonce, refused = _admit(box_id, timeout)
     if refused:
         return _unknown(refused)
     try:
-        proc = (runner or _run)(argv, timeout)
+        call = runner or _run
+        proc = call(argv, timeout) if stdin_bytes is None else call(argv, timeout, stdin_bytes)
     except subprocess.TimeoutExpired:
         return _unknown("ssh_timeout")
     except OSError as exc:
@@ -451,6 +483,31 @@ def invoke_remote(
         return _unknown("bad_invoke_args")
     try:
         return _remote_invoke(box, op, params, runner, float(timeout))
+    except Exception as exc:  # noqa: BLE001 - contract: never raises
+        return _unknown(f"invoke_failed:{type(exc).__name__}:{exc}")
+
+
+def run_remote_payload(
+    box: dict,
+    op: str,
+    stdin_bytes: bytes,
+    runner: Optional[Runner] = None,
+    *,
+    timeout: float,
+) -> dict:
+    """``invoke_remote`` with the op's params JSON object read from ``stdin_bytes``; ``runner(argv, timeout, stdin_bytes)`` is injectable."""
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not timeout > 0
+        or not isinstance(op, str)
+        or not op
+        or not isinstance(stdin_bytes, (bytes, bytearray))
+        or not isinstance(box, dict)
+    ):
+        return _unknown("bad_invoke_args")
+    try:
+        return _remote_invoke(box, op, {}, runner, float(timeout), bytes(stdin_bytes))
     except Exception as exc:  # noqa: BLE001 - contract: never raises
         return _unknown(f"invoke_failed:{type(exc).__name__}:{exc}")
 
@@ -715,6 +772,22 @@ def deliver_key_pin(
         box, _relay_keypin_command(payload), payload,
         "groupem.box_key_pin_from_peer", dict(payload) if isinstance(payload, dict) else {}, runner, timeout,
     )
+
+
+def read_admission_spool(
+    box: dict,
+    offset: int,
+    runner: Optional[Runner] = None,
+    timeout: float = DEFAULT_TIMEOUT_S,
+) -> dict:
+    """The far box's admission-spool lines past ``offset``: ``{"ok": True, "reply": {...}}`` or ``{"ok": False, "reason"}``; never raises."""
+    try:
+        return _deliver_via(
+            box, f"admission-spool {int(offset)}", {}, "groupem.admission_spool_read",
+            {"offset": int(offset)}, runner, timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 - contract: never raises
+        return _unknown(f"admission_spool_read_failed:{type(exc).__name__}:{exc}")
 
 
 def list_remote_sessions(

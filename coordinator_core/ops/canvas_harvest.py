@@ -4,8 +4,7 @@
 one-shot reader `dispatch` dict, writing nothing. `reader: true` (harvest only, needs `transcript`)
 lifts the named reader subagent's sidechain. A relative `out` resolves against the `repo_root` the
 `show_top` scope supplies; with none it is a params refusal. A HarvestError comes back as
-`ok: false` with its reason. Every result carries the reserved max-paths key so an IPC
-dispatch claims the whole record in one batch.
+`ok: false` with its reason.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from coordinator_core import ipc
 from coordinator_core.canvas_harvest import api, model, reader
 from coordinator_core.ipc import register_op
 
@@ -28,7 +26,6 @@ def _result(ok: bool, reason: str = "", detail: str = "", wrote=(), deleted=()) 
         "detail": detail,
         "wrote": [str(p) for p in wrote],
         "deleted": [str(p) for p in deleted],
-        ipc._SCOPE_TOUCH_MAX_PATHS_KEY: model.MAX_RECORD_FILES,
     }
 
 

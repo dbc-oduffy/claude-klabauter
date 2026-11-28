@@ -121,6 +121,35 @@ def test_merge_with_detached_head_fails_closed(trees) -> None:
     assert _run("git merge other", trees[0]) is not None
 
 
+@pytest.fixture
+def other_repo(tmp_path: Path) -> Path:
+    other = tmp_path / "other-repo"
+    (other / ".git").mkdir(parents=True)
+    return other
+
+
+@pytest.mark.parametrize("branch", ["main", "feature/x"])
+def test_leading_cd_into_another_repo_merges_like_dash_c(trees, other_repo, branch) -> None:
+    _on(other_repo, branch)
+    assert _run(f"git -C {_c(other_repo)} merge --no-ff x", trees[0]) is None
+    assert _run(f"cd {_c(other_repo)} && git merge --no-ff x", trees[0]) is None
+
+
+def test_leading_cd_into_session_repo_on_main_stays_denied(trees) -> None:
+    main, clone = trees
+    _on(main, "main")
+    for cwd in (main, clone):
+        out = _run(f"cd {_c(main)} && git merge other", cwd)
+        assert out is not None, cwd
+        assert "git merge (not --ff-only)" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_leading_cd_into_another_repo_does_not_cover_a_second_cd(trees, other_repo) -> None:
+    main, _clone = trees
+    _on(main, "main")
+    assert _run(f"cd {_c(other_repo)} && git merge a && cd {_c(main)} && git merge b", main) is not None
+
+
 def test_dash_c_shared_root_on_main_stays_denied_even_if_cwd_branch_is_feature(trees) -> None:
     main, _clone = trees
     _on(main, "main")

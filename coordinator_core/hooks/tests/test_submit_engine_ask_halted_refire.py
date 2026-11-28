@@ -330,21 +330,6 @@ def test_a_stalled_emitted_run_lookup_is_a_deferred_emit_not_a_refusal(tmp_path,
     assert "deferred emit defer-" in hso["permissionDecisionReason"]
 
 
-def test_an_unbuilt_lookup_index_on_the_hook_path_answers_without_building_it(tmp_path):
-    """The default hook entry (no `build`) is the emit's lookup; the hook's `build=False` never writes the index."""
-    from coordinator_core.ops.dispatch_emit import halted_run
-
-    halted = _halted_repo(tmp_path, "alpha")
-    _other_halts(halted.repo, halted_run.INLINE_BUILD_MAX_RUNS + 1)
-    sentinel = halted.repo / halted_run.LOOKUP_INDEX_DIR / halted_run.LOOKUP_SENTINEL
-    assert not sentinel.exists()
-    hit = halted_run.halted_run_to_resume(halted.repo, halted.sizing_rel, build=False)
-    assert hit is halted_run.STALLED
-    assert not sentinel.exists()
-    halted_run.halted_run_to_resume(halted.repo, halted.sizing_rel)
-    assert sentinel.exists()
-
-
 def _other_halts(root: Path, count: int) -> None:
     for n in range(count):
         d = root / RECORD_DIR_ROOT / f"ask-20261028T{n // 3600 % 24:02d}{n // 60 % 60:02d}{n % 60:02d}-{n:06x}"
@@ -361,7 +346,6 @@ def test_a_sizing_with_no_halt_among_many_halts_resumes_nothing_in_one_listing(t
     from coordinator_core.ops.dispatch_emit import halted_run
 
     _other_halts(tmp_path, 400)
-    halted_run.rebuild_lookup_index(tmp_path)
     reads: list = []
     real = halted_run._read
     monkeypatch.setattr(halted_run, "_read", lambda d: reads.append(d) or real(d))
@@ -523,7 +507,7 @@ def test_a_standalone_deferred_emit_still_starts_the_run_itself(tmp_path):
     from coordinator_core.ops.dispatch_emit.fan_launcher import DEFERRED_EMIT_KEY
 
     script = hook._write_deferred_script(tmp_path, {"ask": "x"}).read_text(encoding="utf-8")
-    assert "await workflow({ scriptPath: path })" in script
+    assert "await workflow({ scriptPath: path, args: callArgs })" in script
     assert "launcher_child" in script
     assert DEFERRED_EMIT_KEY not in script
 

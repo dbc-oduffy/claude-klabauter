@@ -36,7 +36,7 @@ def test_scoped_close_runs_an_op_relay_call_gated_on_delivered(tmp_path: Path) -
 def test_next_action_returns_only_when_the_close_did_not_commit(tmp_path: Path) -> None:
     script = _chain(tmp_path, CLOSE)
     assert "...(delivered && closed?.committed !== true ? { next_action: effective } : {})" in script
-    assert script.count("next_action:") == 1
+    assert script.count("next_action: effective") == 1
 
 
 def test_unscoped_close_runs_in_run_and_returns_next_action_on_refusal(tmp_path: Path) -> None:
@@ -92,6 +92,62 @@ def test_closed_committed_stays_false_when_the_close_did_not_commit() -> None:
     assert _run_close_in_run(json.dumps({"committed": False}))["committed"] is False
     assert _run_close_in_run(json.dumps({"ok": True, "result": {"committed": False}}))["committed"] is False
     assert _run_close_in_run("not json at all")["committed"] is False
+
+
+def test_both_tails_return_the_rag_halt_after_the_close(tmp_path: Path) -> None:
+    scoped = _chain(tmp_path, CLOSE)
+    assert scoped.index("closeInRun(effective)") < scoped.index("ragHaltOf(closed)") < scoped.index("...ragHalt")
+    seg = _segment(tmp_path, "main", [_stage("work")])
+    plain = compose_chain_script([seg], next_action=CLOSE, **KW)
+    assert plain.index("closeInRun(NEXT_ACTION)") < plain.index("ragHaltOf(closed)") < plain.index("...ragHalt")
+    assert "ragHaltOf" not in _chain(tmp_path, {"op": "other.op", "params": {}})
+
+
+def _rag_halt(closed):
+    """Run the composed `ragHaltOf` JS under node over a close reply; `(returned object, results)`."""
+    import json
+    import shutil
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit.pipeline_compose import _RAG_HALT_JS
+
+    node = shutil.which("node")
+    if node is None:
+        import pytest
+
+        pytest.skip("node not installed")
+    js = (
+        "const results = [];\n" + _RAG_HALT_JS
+        + f"\nconsole.log(JSON.stringify([ragHaltOf({json.dumps(closed)}), results]));"
+    )
+    out = subprocess.run(
+        [node, "--input-type=module", "-e", js], capture_output=True, text=True, timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_a_pre_commit_close_halt_returns_as_halted_by_and_other_replies_do_not() -> None:
+    action = "re-run stage r1 with example-retrieval-repo (workers made 0 calls)"
+    agents = [{"agent_id": "a1", "agent_type": "coordinator:sizing-scout", "label": "size", "rag_calls": 0}]
+    rag_use = {"verdict": "rag_not_used", "tier": "rag"}
+    for kind in ("example_retrieval_repo_unused", "example_retrieval_repo_cadence", "example_retrieval_repo_not_serving", "ue_corpus_gap"):
+        closed = {
+            "exit_code": 0, "committed": False, "halted": kind, "rag_use": rag_use, "next_action": action,
+            "halted_by": {"halted": kind, "agents": agents},
+        }
+        out, results = _rag_halt(closed)
+        assert out == {"halted_by": {"halted": kind, "agents": agents, "rag_use": rag_use, "next_action": action}}
+        assert results == [{"scope": "close", "halted": out["halted_by"]}]
+    for closed in (
+        {"committed": True, "rag_use": {"verdict": "rag_not_used"}, "next_action": action},
+        {"committed": True, "rag_use": {"verdict": "ok"}},
+        {"committed": False, "halted_by": {"halted": "criterion_not_met"}},
+        {"committed": True},
+        None,
+    ):
+        assert _rag_halt(closed) == [{}, []], closed
 
 
 def test_other_next_action_ops_keep_the_plain_tail(tmp_path: Path) -> None:

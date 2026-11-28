@@ -26,6 +26,10 @@ HALT_EXAMPLE_RETRIEVAL_REPO_UNUSED = "example_retrieval_repo_unused"
 HALT_EXAMPLE_RETRIEVAL_REPO_CADENCE = "example_retrieval_repo_cadence"
 HALT_EXAMPLE_RETRIEVAL_REPO_NOT_SERVING = "example_retrieval_repo_not_serving"
 HALT_UE_CORPUS_GAP = "ue_corpus_gap"
+HALT_UE_RETRIEVAL_MISSING = "ue_retrieval_missing"
+HALT_UE_RETRIEVAL_CHECK_FAILED = "ue_retrieval_check_failed"
+HALT_EXAMPLE_RETRIEVAL_REPO_OUTAGE_REPORTED = "example_retrieval_repo_outage_reported"
+HALT_UE_PHASE_RETRIEVAL_MISSING = "ue_phase_retrieval_missing"
 TIER_NONE, TIER_RAG, TIER_UE = "none", "rag", "ue"
 GATED_ROLES_RELPATH = "coordinator/contract/example-retrieval-repo-gated-roles.json"
 DEFAULT_TOOL_PREFIX = "mcp__project-rag__"
@@ -405,6 +409,46 @@ def agent_rag_halt(
         if low:
             return {"halted": HALT_EXAMPLE_RETRIEVAL_REPO_CADENCE, "agents": low}
     return None
+
+
+def ue_retrieval_verdict(
+    *,
+    ue: bool,
+    rows: Optional[list[dict]],
+    friction_rows: Optional[list] = None,
+    outage_reports: Optional[list] = None,
+    metrics_rows: Optional[list] = None,
+) -> Optional[dict]:
+    """Terminal UE-retrieval halted_by (friction > outage > zero ue_calls per judged row), or None to pass; each agent entry carries ue_calls, denies and metrics_rows."""
+    if not ue:
+        return None
+    live = [r for r in rows or [] if isinstance(r, dict)]
+    friction = [f for f in friction_rows or []]
+    metrics = [m for m in metrics_rows or [] if isinstance(m, dict)]
+
+    def _owned(rows_: list, agent_id: str) -> int:
+        return sum(1 for x in rows_ if isinstance(x, dict) and agent_id and str(x.get("agent_id") or "") == agent_id)
+
+    entries = []
+    for r in live:
+        e = _agent_entry(r)
+        entries.append({**e, "ue_calls": _as_int(r.get("ue_calls")),
+                        "denies": _owned(friction, e["agent_id"]),
+                        "metrics_rows": _owned(metrics, e["agent_id"])})
+    reports = [x for x in outage_reports or []]
+    if friction:
+        cause = HALT_UE_RETRIEVAL_CHECK_FAILED
+        agents = entries
+    elif reports:
+        cause = HALT_EXAMPLE_RETRIEVAL_REPO_OUTAGE_REPORTED
+        agents = entries
+    else:
+        agents = [e for r, e in zip(live, entries) if r.get("ue_calls") is not None and e["ue_calls"] <= 0]
+        if not agents:
+            return None
+        cause = HALT_UE_RETRIEVAL_MISSING
+    return {"halted": cause, "cause": cause, "agents": agents,
+            "friction_count": len(friction), "reports": reports}
 
 
 def stage_rag_verdict(*, served: bool, rows: Optional[list[dict]]) -> dict:

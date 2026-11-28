@@ -114,6 +114,48 @@ def test_next_send_reconciles_from_tree_copy_when_no_anchor(tmp_path: Path, monk
     assert not draft.exists()
 
 
+def _fresh_send_with_stall(tmp_path, monkeypatch, topic, target, stall_exc):
+    sender = _make_sender_git_repo(tmp_path)
+    receiver = _make_receiver_git_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver})))
+    _write_draft(sender, topic)
+
+    def _stall(*_a, **_k):
+        raise stall_exc
+
+    monkeypatch.setattr(memo_send_module, target, _stall)
+    return sender, _memo_send({"dry_run": False, "topic": topic}, repo_root=sender)
+
+
+def test_receipt_commit_pack_stall_after_delivery_is_a_warning_on_a_sent_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.git.git_objects import PackReadDeadline
+
+    sender, result = _fresh_send_with_stall(
+        tmp_path, monkeypatch, "t-stall-commit", "commit_paths", PackReadDeadline("pack read > 4.0s")
+    )
+
+    assert result["exit_code"] == 0, result
+    assert result["failed"] == []
+    acted = result["acted"][0]
+    assert acted["delivery_commit_sha"]
+    assert acted["sender_committed"] is False
+    assert any("4.0s" in w for w in acted["post_delivery_warnings"])
+    assert (sender / ".coordinator-local" / "memo-outbox" / "sent" / "t-stall-commit.md").is_file()
+
+
+def test_receiver_branch_pack_stall_after_delivery_is_a_warning_on_a_sent_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.git.git_objects import PackReadDeadline
+
+    _sender, result = _fresh_send_with_stall(
+        tmp_path, monkeypatch, "t-stall-branch", "_on_receiver_branch", PackReadDeadline("pack read > 4.0s")
+    )
+
+    assert result["exit_code"] == 0, result
+    acted = result["acted"][0]
+    assert acted["delivery_outcome"] == "pinned"
+    assert acted["post_delivery_warnings"]
+
+
 def test_different_memo_under_the_same_filename_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender, receiver, draft, sha = _stalled_first_send(tmp_path, monkeypatch, "t-other")
     different = _delivered_text(receiver).replace("Body prose.", "A different body.")

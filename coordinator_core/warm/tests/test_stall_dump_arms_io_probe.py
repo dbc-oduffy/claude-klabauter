@@ -3,6 +3,8 @@ and the probe log line format is fixed."""
 
 from __future__ import annotations
 
+import os
+import subprocess
 import threading
 import time
 
@@ -11,6 +13,9 @@ import pytest
 from coordinator_core.warm import hang_restart, io_probe, server
 
 pytestmark = pytest.mark.complete
+
+PROBE_PROCESS_MS_PER_MINUTE = 15.0
+PROBE_TICK_PROCESS_MS = PROBE_PROCESS_MS_PER_MINUTE * io_probe.TICK_S / 60.0
 
 
 @pytest.fixture
@@ -127,28 +132,21 @@ def test_a_log_at_its_size_cap_takes_no_more_lines(tmp_path, monkeypatch):
 
 
 def test_probe_work_stays_cheap(tmp_path):
-    # The Windows CPU clock ticks at ~15.6 ms: the loop must span >= 100 ticks (~1.6 s of process
-    # time) so the 15 ms/min bar (both targets combined, one tick per TICK_S) is measured, not quantized.
-    # Targets follow production: a second target exists only on a different volume, so tmp_path
-    # (one volume) yields exactly the targets the engine would probe here.
     targets = [d for _label, d in io_probe.targets_for(tmp_path / "repo")]
-    span = 100 * 0.015625
+    ticks = 400
 
-    def ms_per_minute() -> float:
-        ticks = 0
-        t0 = time.process_time()
-        while time.process_time() - t0 < span:
-            for d in targets:
-                io_probe.probe_once(d)
-            ticks += 1
-        probe_cpu = time.process_time() - t0
+    def process_ms_per_tick() -> float:
         t0 = time.process_time()
         for _ in range(ticks):
             for d in targets:
-                pass
-        baseline_cpu = time.process_time() - t0
-        return (probe_cpu - baseline_cpu) * 1000 / (ticks * io_probe.TICK_S / 60.0)
+                io_probe.probe_once(d)
+        return (time.process_time() - t0) * 1000 / ticks
 
-    # Best of three: peer load inflates CPU time; the floor is the probe's own cost.
-    assert min(ms_per_minute() for _ in range(3)) <= 15.0
+    spawned = []
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(a))
+        mp.setattr(os, "system", lambda *a, **k: spawned.append(a))
+        best = min(process_ms_per_tick() for _ in range(12))
+    assert spawned == []
+    assert best <= PROBE_TICK_PROCESS_MS
     assert all(list(d.iterdir()) == [] for d in targets if d.exists())

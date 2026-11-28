@@ -72,7 +72,8 @@ def commit_rows(root: Path, repo_root: Path, params: dict) -> dict:
     from coordinator_core.ops._path_guard import contained_path
     from coordinator_core.ops.dispatch_emit.commit_request import MalformedCommitRequestError, parse_marker
     from coordinator_core.ops.dispatch_emit.worktree_snapshot import tracked_at_head, worktree_snapshot
-    from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
+    from coordinator_core.git.ref_cas_retry import commit_v2_retrying
+    from coordinator_core.warm.entry_seam import OpUnavailableError
 
     out: dict = {"ok": True, "landed": [], "noop": [], "refused": []}
 
@@ -177,11 +178,14 @@ def commit_rows(root: Path, repo_root: Path, params: dict) -> dict:
         if isinstance(session_id, str) and _UUID_RE.fullmatch(session_id):
             commit_params["session_id"] = session_id
         try:
-            reply = reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
+            reply, _ = commit_v2_retrying(root, repo_root, commit_params)
         except OpUnavailableError:
             return fail("ceremony.commit_v2 is not registered")
         if not isinstance(reply, dict) or not reply.get("committed"):
-            out["refused"].append({"row": rid, "reason": str(reply.get("error") if isinstance(reply, dict) else reply)})
+            refusal = {"row": rid, "reason": str(reply.get("error") if isinstance(reply, dict) else reply)}
+            if isinstance(reply, dict) and reply.get("refused"):
+                refusal["refused"] = reply["refused"]
+            out["refused"].append(refusal)
             continue
         out["landed"].append({"row": rid, "sha": reply.get("sha"), "paths": paths + deleted})
     from coordinator_core.ops.dispatch_emit.run_close import sibling_release

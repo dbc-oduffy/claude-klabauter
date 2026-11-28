@@ -36,6 +36,7 @@ def peer(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(claim_index, "lookup", lambda paths, cwd=None: {p: ["peer1"] for p in paths})
     monkeypatch.setattr(touch_record, "kind_blocks_a_peer_commit", lambda kind: True)
     monkeypatch.setattr(liveness, "session_live", lambda sid, root: True)
+    monkeypatch.setattr(liveness, "session_live_with_basis", lambda sid, root: (True, "pid"))
     monkeypatch.setattr(liveness, "session_abandoned", lambda sid, root: False)
     monkeypatch.setattr(touch_record, "last_seen_hashes", lambda sid, paths, root: {p: state["hash"] for p in paths})
     monkeypatch.setattr(

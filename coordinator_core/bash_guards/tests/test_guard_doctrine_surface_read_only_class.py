@@ -16,8 +16,7 @@ the shape, not the command). The example-game-repo fire journal does not keep th
 agent 1's two commands that never completed (items 7 and 10) are the candidates, and the engine
 at this tree allows both, so they pin the allow side as regressions.
 
-``_RED_AT_BASE`` lists the witnesses the guard still denies; each is a strict xfail so the fix
-turns it into a failure that demands the marker's removal.
+``CLASS_ALLOW``/``CLASS_DENY`` pin the classifier's sink resolution beyond the witnesses.
 """
 
 from __future__ import annotations
@@ -166,13 +165,58 @@ WITNESSES = [
     ),
 ]
 
-_RED_AT_BASE = frozenset(
-    {
-        "open-0f46-pm-brief-reads-sizing",
-        "2026-08-28-python-c-reads-governed-writes-scratch",
-        "2026-09-01-suffix-decoy-scratch-write",
-    }
-)
+CLASS_ALLOW = [
+    "cat CLAUDE.md | head -5 > scratch/o",
+    "grep -rn foo CLAUDE.md | xargs grep bar",
+    "sed -n '1,5p' CLAUDE.md > scratch/o",
+    "sed -i s/a/b/ scratch/x.txt; cat CLAUDE.md",
+    "bash -c 'cat CLAUDE.md > scratch/o'",
+    "python3 scripts/x.py --out scratch/o CLAUDE.md",
+    "python3 scripts/x.py from-sizing CLAUDE.md --output=scratch/o",
+    "echo $(cat CLAUDE.md | wc -l) > scratch/n",
+    "cp CLAUDE.md scratch/CLAUDE.copy",
+    "cd scratch && cat ../CLAUDE.md",
+    'pwsh -NoProfile -Command "Get-Content CLAUDE.md | Select-String foo"',
+]
+CLASS_DENY = [
+    "cat x &> CLAUDE.md",
+    "cat x >& CLAUDE.md",
+    "cat CLAUDE.md & cp x CLAUDE.md",
+    "cat x | tee CLAUDE.md",
+    "sed -i s/a/b/ CLAUDE.md",
+    "sed -i -e s/a/b/ CLAUDE.md",
+    "cp x CLAUDE.md",
+    "mv x CLAUDE.md",
+    "cp x .\\CLAUDE.md",
+    "bash -c 'echo x > CLAUDE.md'",
+    "eval 'echo x > CLAUDE.md'",
+    "echo CLAUDE.md | xargs sed -i s/a/b/",
+    "echo CLAUDE.md | xargs tee",
+    "echo $(echo x > CLAUDE.md)",
+    "cat `echo CLAUDE.md`; echo x > CLAUDE.md",
+    "python3 scripts/x.py --out CLAUDE.md",
+    "python3 scripts/x.py --output=CLAUDE.md",
+    "python3 scripts/x.py -o CLAUDE.md",
+    "python3 scripts/x.py --in-place CLAUDE.md",
+    "python3 scripts/x.py CLAUDE.md",
+    "cd global-doctrine && echo x > CLAUDE.md",
+    f"cd state && echo x > ../{G}",
+    "echo x > ./CLAUDE.md.",
+    "echo x > scratch/../CLAUDE.md",
+    'pwsh -NoProfile -Command "Set-Content CLAUDE.md x"',
+    'pwsh -NoProfile -Command "Get-Content a > CLAUDE.md"',
+    "(cd x; echo y > CLAUDE.md)",
+    "awk '{print > \"CLAUDE.md\"}' x",
+    "python3 -c \"open('CLAUDE.md','w').write('x')\"",
+    "f=CLAUDE.md; echo x > $f",
+    "f=CLAUDE.md; f=a; echo x > $f",
+    "echo x > 'CLAU''DE.md'",
+    "cat x > scratch/o; echo y>CLAUDE.md",
+    "xargs -I{} sh -c 'echo {} > CLAUDE.md'",
+    "case x in x) cp y CLAUDE.md;; esac",
+    "sort -o CLAUDE.md x",
+    "sed -n 'w CLAUDE.md' x",
+]
 
 
 @pytest.fixture(autouse=True)
@@ -198,16 +242,7 @@ def _verdict(cmd: str, tool: str, cwd: Path):
     return guard.check(payload, list(SURFACES))
 
 
-def _allow_param(w: Witness):
-    marks = (
-        [pytest.mark.xfail(strict=True, reason=f"read-only class not yet allowed ({w.record})")]
-        if w.id in _RED_AT_BASE
-        else []
-    )
-    return pytest.param(w, id=w.id, marks=marks)
-
-
-@pytest.mark.parametrize("w", [_allow_param(w) for w in WITNESSES])
+@pytest.mark.parametrize("w", [pytest.param(w, id=w.id) for w in WITNESSES])
 def test_witness_with_no_governed_write_sink_is_allowed(w: Witness, tmp_path: Path) -> None:
     assert _verdict(w.allow, w.tool, tmp_path) is None, w.allow
 
@@ -217,5 +252,11 @@ def test_paired_genuine_write_onto_the_surface_still_denies(w: Witness, tmp_path
     assert _verdict(w.deny, w.tool, tmp_path) is not None, w.deny
 
 
-def test_every_red_marker_names_a_witness() -> None:
-    assert _RED_AT_BASE <= {w.id for w in WITNESSES}
+@pytest.mark.parametrize("cmd", CLASS_ALLOW)
+def test_class_read_only_command_is_allowed(cmd: str, tmp_path: Path) -> None:
+    assert _verdict(cmd, "Bash", tmp_path) is None, cmd
+
+
+@pytest.mark.parametrize("cmd", CLASS_DENY)
+def test_class_write_sink_on_the_surface_still_denies(cmd: str, tmp_path: Path) -> None:
+    assert _verdict(cmd, "Bash", tmp_path) is not None, cmd

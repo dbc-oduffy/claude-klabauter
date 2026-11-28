@@ -190,6 +190,62 @@ def test_adopt_agy_leg_refuses_unobserved_or_headless_evidence(
     assert agent_role.role_for_caller({}, SID_AGY) != "em"
 
 
+def _register_em_then(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, headless_argv) -> dict:
+    import json
+    import psutil
+
+    legs = _leg(tmp_path, monkeypatch, "agy", ["agy"], pid=601)
+    cwd = str(tmp_path / "work")
+    em_host = proc("agy", ["agy"], pid=601)
+    registry.register_current({"session_id": SID_AGY, "cwd": cwd, "provider": "agy", "hook_event_name": "SessionStart",
+                               "source": "startup"}, host_process=em_host)
+    assert registry.lookup(SID_AGY)["role"] == "em"
+    headless = proc("agy", headless_argv, pid=602)
+    monkeypatch.setattr(psutil, "Process", lambda p: headless)
+    (legs / f"{SID_AGY}.json").write_text(
+        json.dumps({"conversation": SID_AGY, "agy_pid": 602, "cwd": cwd}), encoding="utf-8")
+    return {"cwd": cwd, "headless": headless}
+
+
+def test_headless_register_never_demotes_a_live_em_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _register_em_then(tmp_path, monkeypatch, ["agy", "-p", "notice"])
+    row = registry.register_current({"session_id": SID_AGY, "cwd": ctx["cwd"], "provider": "agy",
+                                     "hook_event_name": "SessionStart", "source": "startup"},
+                                    host_process=ctx["headless"])
+    assert row["role"] == "em" and row["pid"] == 601
+    assert registry.lookup(SID_AGY)["role"] == "em"
+
+
+def test_adopt_agy_leg_never_demotes_a_live_em_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _register_em_then(tmp_path, monkeypatch, ["agy", "-p", "notice"])
+    registry.adopt_agy_leg(SID_AGY, {})
+    assert registry.lookup(SID_AGY)["role"] == "em"
+
+
+def test_headless_register_over_a_dead_em_row_stays_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _register_em_then(tmp_path, monkeypatch, ["agy", "-p", "notice"])
+    monkeypatch.setattr(core, "stable_pid_alive", lambda *a, **k: False)
+    row = registry.register_current({"session_id": SID_AGY, "cwd": ctx["cwd"], "provider": "agy",
+                                     "hook_event_name": "SessionStart", "source": "startup"},
+                                    host_process=ctx["headless"])
+    assert row["role"] == "unknown" and row["pid"] == 602
+
+
+def test_lookup_heals_a_clobbered_row_whose_live_host_is_interactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+    import psutil
+
+    _leg(tmp_path, monkeypatch, "agy", ["agy"], pid=701)
+    folder = tmp_path / "host-sessions" / "agy"
+    folder.mkdir(parents=True)
+    (folder / f"{SID_AGY}.json").write_text(json.dumps({
+        "schema_version": 1, "session_id": SID_AGY, "provider": "agy", "pid": 701, "start_epoch": 1,
+        "cwd": str(tmp_path), "name": "n", "role": "unknown", "observed_at": 1.0}), encoding="utf-8")
+    assert registry.lookup(SID_AGY)["role"] == "em"
+    monkeypatch.setattr(psutil, "Process", lambda p: proc("agy", ["agy", "-p", "x"], pid=701))
+    assert registry.lookup(SID_AGY)["role"] == "unknown"
+
+
 def test_adopt_agy_leg_without_a_leg_record_registers_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     assert registry.adopt_agy_leg(SID_AGY, {}) is None

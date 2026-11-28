@@ -4172,12 +4172,28 @@ def test_missing_host_registry_is_a_typed_refusal_at_use_not_at_import(tmp_path,
 
 
 def test_host_registry_resolves_from_the_engine_root_when_no_source_tree_is_beside_the_installer(tmp_path, monkeypatch, _engine):
-    monkeypatch.setattr(ui, "_BIN_DIR", tmp_path / "carried" / "a" / "b" / "bin")
+    carried = tmp_path / "carried" / "a" / "b" / "bin"
+    lib = carried / "lib"
+    lib.mkdir(parents=True)
+    for name in ui.VENDORED_LIB:
+        src = Path(ui._BIN_DIR) / "lib" / name
+        if src.is_file():
+            shutil.copy2(src, lib / name)
+    monkeypatch.setattr(ui, "_BIN_DIR", carried)
     registry = ui._load_host_registry()
     assert Path(registry.__file__) == _engine.joinpath(*ui.HOST_REGISTRY_REL)
+    real = Path.home() / ".codex"
+    watched = ("hooks.json", "AGENTS.md", "rules/unimatrix.rules")
+    before = {name: (real / name).read_bytes() if (real / name).is_file() else None for name in watched}
+    home = _bare_env(monkeypatch, tmp_path)
     buf = io.StringIO()
     ui.main(["--install", "--hosts", "codex"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf)
     assert "REFUSE: --hosts cannot be checked" not in buf.getvalue()
+    after = {name: (real / name).read_bytes() if (real / name).is_file() else None for name in watched}
+    assert after == before
+    staged = (home / ".codex" / "hooks.json").read_text(encoding="utf-8")
+    staged = staged.replace("\\\\", "/").replace("\\", "/")
+    assert (tmp_path / "d").as_posix() in staged and real.as_posix() not in staged
 
 
 def test_host_present_reads_path_and_home(monkeypatch, tmp_path):

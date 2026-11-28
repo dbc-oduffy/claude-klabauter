@@ -25,6 +25,24 @@ _FILLER = frozenset(
     "under dir directory directories folder folders path paths code tree".split()
 )
 _CLAUSE_END = re.compile(r"[;\n]|\.(?=\s|$)")
+_CONDITION = re.compile(
+    r"\b(?:until|till|once|after|unless|temporarily|for\s+now|hold\s+off"
+    r"|wait(?:s|ing)?\s+(?:for|on|until))\b",
+    re.IGNORECASE,
+)
+
+
+def is_conditional(clause: str) -> bool:
+    """True when `clause` carries a condition or time bound (until, once, after, wait for, ...)."""
+    return _CONDITION.search(clause) is not None
+
+
+def _clause_around(text: str, start: int, end: int) -> str:
+    left = 0
+    for b in _CLAUSE_END.finditer(text, 0, start):
+        left = b.end()
+    nxt = _CLAUSE_END.search(text, end)
+    return text[left : nxt.start() if nxt else len(text)]
 
 
 def _object_tokens(text: str) -> Iterator[str]:
@@ -72,8 +90,12 @@ def excluded_paths(sizing: Mapping[str, Any]) -> tuple[str, ...]:
     out: list[str] = []
     for text in _texts(sizing):
         for m in _TRIGGER.finditer(text):
+            if is_conditional(_clause_around(text, m.start(), m.end())):
+                continue
             out.extend(p for p in _object_tokens(text[m.end():]) if p not in out)
         for m in _LEAVE.finditer(text):
+            if is_conditional(_clause_around(text, m.start(), m.end())):
+                continue
             out.extend(p for p in _object_tokens(m.group(1)) if p not in out)
     return tuple(dict.fromkeys(out))
 

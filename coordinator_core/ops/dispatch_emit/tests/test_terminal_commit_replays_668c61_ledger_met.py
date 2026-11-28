@@ -40,7 +40,7 @@ DECLARED = (
 )
 CHANGED = f"{_TESTS}test_likeness_pipeline_snapshot.py"
 REPORT = ".coordinator-local/subagent-share/dispatch-reports/2026-11-09-clone-inputs-preflight-wiring-668c61/C1.md"
-_VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
+_VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 
 
 def _git(root: Path, *args: str) -> str:
@@ -117,7 +117,7 @@ def replay(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     return root
 

@@ -166,27 +166,35 @@ def _co_tenant_print(root: Path, run_id: str, path: str) -> Union[str, dict, Non
     attributed hunks, or ``{"kind": "co_tenant", "owner": <run id>}`` when no hunk is attributable to
     this run alone (equal baselines, a path absent from HEAD, an unreadable diff). None when no peer
     owns the path or the owner lookup fails: the caller prints the tree's bytes. No git spawn."""
-    from coordinator_core.ops.dispatch_emit import co_tenant_owner, own_hunk_stage, run_hunk_claims
+    from coordinator_core.ops.dispatch_emit import co_tenant_owner, own_hunk_candidate, own_hunk_stage, run_hunk_claims
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
     try:
-        owner = co_tenant_owner.owner_of(root, path, exclude_run_id=run_id).get("run_id")
+        peers = co_tenant_owner.peer_hunk_runs(root, path, exclude_run_id=run_id)
     except Exception:  # noqa: BLE001 -- no nameable owner: the tree's bytes stand
         return None
-    if not owner:
+    if not peers:
         return None
-    typed = {"kind": "co_tenant", "owner": owner}
+    typed = {"kind": "co_tenant", "owner": peers[0]}
+
+    def _latest_own() -> Optional[str]:
+        try:
+            return own_hunk_candidate.printed_blobs(record_dir(root, run_id)).get(path.replace("\\", "/")) or None
+        except Exception:  # noqa: BLE001 -- no readable print: typed
+            return None
+
     try:
         diff = own_hunk_stage.read_diff(root, [path]).get(path.replace("\\", "/"))
         if diff is None:
             return typed
         split = run_hunk_claims.own_hunks(
-            root, run_id, path, list(diff.hunks), {owner: False}, head_blob=diff.head_sha
+            root, run_id, path, list(diff.hunks), {r: False for r in peers}, head_blob=diff.head_sha
         )
-        if not split.own:
-            return typed
-        return own_hunk_stage.own_blob(root, path, diff.head_bytes, split.own)
-    except Exception:  # noqa: BLE001 -- unseparable hunks hold: typed, never the whole-tree blob
-        return typed
+        if split.own:
+            return own_hunk_stage.own_blob(root, path, diff.head_bytes, split.own)
+    except Exception:  # noqa: BLE001 -- unseparable hunks: the latest own print, else typed, never the whole-tree blob
+        pass
+    return _latest_own() or typed
 
 
 def _record_withheld_prints(root: Path, record_dir_rel: str, withheld: dict, paths: list) -> None:

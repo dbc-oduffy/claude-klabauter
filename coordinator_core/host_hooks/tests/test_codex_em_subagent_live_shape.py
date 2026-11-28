@@ -45,7 +45,7 @@ PAYLOADS = [
         "tool_input": {"command": _PATCH}}},
     {"id": "em-git-clean", "channel": "host hook", "expect": "allow", "payload": {
         "hook_event_name": "PreToolUse", "session_id": "codex-em-s1", "tool_name": "exec_command",
-        "tool_input": {"command": "git clean -fdx"}}},
+        "tool_input": {"command": "git reset --hard"}}},
     {"id": "subagent-git-clean", "channel": "host hook", "expect": "deny", "payload": {
         "hook_event_name": "PreToolUse", "session_id": "codex-em-s1", "tool_name": "exec_command",
         "tool_input": {"command": "git clean -fdx"}, **_SUBAGENT_KEYS}},

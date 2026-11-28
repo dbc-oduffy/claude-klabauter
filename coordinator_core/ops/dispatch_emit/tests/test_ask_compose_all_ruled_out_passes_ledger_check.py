@@ -52,7 +52,7 @@ def test_an_empty_verdict_passes_iff_no_items_are_owed_and_some_row_is_withheld(
         "&& Array.isArray(_withheldIds) && _withheldIds.length > 0;"
     ) in script
     assert "const _emptyVerdict = !!_ledger && (_ledger.items ?? []).length === 0 && !_allRuledOut;" in script
-    assert "!_ledger || _emptyVerdict || _ledgerBlocking(_ledger).length" in script
+    assert "!_ledger || _emptyVerdict || _missingIds.length || _ledgerBlocking(_ledger).length" in script
 
 
 def test_an_owed_but_unjudged_empty_verdict_blocks_on_the_owed_ids(monkeypatch: pytest.MonkeyPatch) -> None:

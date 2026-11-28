@@ -139,3 +139,28 @@ def test_write_row_mentioning_the_apm_stays_agent():
     assert row_is_em_performed(_row("Ask coordinator:apm: may we?", writes=["a.py"])) is False
     assert row_is_em_performed(_row("Ask coordinator:apm: may we?", writes=[], appends=["x.md"])) is False
     assert row_is_em_performed(_row("Update the doc; coordinator:apm ruled it.", writes=[])) is False
+
+
+def test_em_run_row_naming_a_non_claude_family_is_not_em_performed():
+    for family in ("codex", "grok", "agy"):
+        raw = {"em_run": True, "writes": ["a.md"], "family": family}
+        assert row_is_em_performed(raw) is False, family
+    assert row_is_em_performed({"performer": "em", "writes": ["a.md"], "family": "codex"}) is False
+    assert row_is_em_performed({"agent_type": "coordinator:em", "writes": ["a.md"], "family": "grok"}) is False
+
+
+def test_em_run_row_with_no_or_claude_family_stays_em_performed():
+    assert row_is_em_performed({"em_run": True, "writes": ["a.md"]}) is True
+    assert row_is_em_performed({"em_run": True, "writes": ["a.md"], "family": "claude"}) is True
+    assert row_is_em_performed({"em_run": True, "writes": ["a.md"], "family": ""}) is True
+
+
+def test_invalid_family_is_not_em_performed_so_spine_read_refuses_it():
+    assert row_is_em_performed({"em_run": True, "writes": ["a.md"], "family": "gpt"}) is False
+
+
+def test_a_family_does_not_lift_a_genuine_em_only_act():
+    blocked = _row("Do it.", writes=["a.md"], family="codex", blocked_on={"capability": "Workflow tool", "probe": "x"})
+    assert row_is_em_performed(blocked) is True
+    assert row_is_em_performed(_row(f"Run `{CMD}`.", writes=[], family="codex")) is True
+    assert row_is_em_performed(_row("Ask coordinator:apm: may we?", writes=[], family="codex")) is True

@@ -258,7 +258,7 @@ _BG_MAX = 2
 
 _DEV_REASON = (
     "BLOCKED: an Electron app or dev server is a Group EM slot leg; a subagent runs the scoped "
-    "single-file test instead (python -m coordinator_core.testing.scoped_pytest --allow ... -- ...)."
+    "single-file test instead (scoped-pytest --allow ... -- ...)."
 )
 _BG_REASON = (
     "BLOCKED: a background-shell fan-out (%d+ `&` launches, or one `&` inside a loop) is a Group EM slot leg; "

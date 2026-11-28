@@ -42,9 +42,14 @@ def _expect(reply, terminal, resumable, reason) -> None:
     assert reply == {"ok": True, "run_id": RUN, "terminal": terminal, "resumable": resumable, "reason": reason}
 
 
-def test_live_halt_is_resumable(tmp_path: Path, record) -> None:
+def test_halted_run_is_terminal_and_not_resumable(tmp_path: Path, record) -> None:
     _halt(record)
-    _expect(_call(tmp_path), False, True, "live halt")
+    _expect(_call(tmp_path), True, False, "halted run; refire starts a new run")
+
+
+def test_usage_limit_halt_is_terminal_and_resumable(tmp_path: Path, record) -> None:
+    _halt(record, halted="usage_limit")
+    _expect(_call(tmp_path), True, True, "halted run; refire starts a new run")
 
 
 def test_halt_then_mark_landed_is_terminal(tmp_path: Path, record) -> None:
@@ -59,10 +64,10 @@ def test_superseded_and_closed_are_terminal(tmp_path: Path, record, status) -> N
     _expect(_call(tmp_path), True, False, f"halt marker {status}")
 
 
-def test_released_halt_stays_resumable(tmp_path: Path, record) -> None:
+def test_released_halt_is_terminal_and_resumable_only_on_usage_limit(tmp_path: Path, record) -> None:
     _halt(record)
     assert halted_run.record_released(record, "b" * 40, "shipped elsewhere")
-    _expect(_call(tmp_path), False, True, "halt released; still resumable")
+    _expect(_call(tmp_path), True, False, "halt released; refire starts a new run")
 
 
 def test_resumed_is_neither(tmp_path: Path, record) -> None:
@@ -102,7 +107,7 @@ def test_non_terminal_run_outcome_fails_closed(tmp_path: Path, record) -> None:
 def test_marker_wins_over_run_outcome(tmp_path: Path, record) -> None:
     _outcome(record, "impossible")
     _halt(record)
-    _expect(_call(tmp_path), False, True, "live halt")
+    _expect(_call(tmp_path), True, False, "halted run; refire starts a new run")
 
 
 def test_empty_dir_is_neither(tmp_path: Path, record) -> None:
@@ -111,7 +116,7 @@ def test_empty_dir_is_neither(tmp_path: Path, record) -> None:
 
 def test_backslash_path_resolves(tmp_path: Path, record) -> None:
     _halt(record)
-    _expect(_call(tmp_path, f"{ask_contract.RECORD_DIR_ROOT}\\{RUN}".replace("/", "\\")), False, True, "live halt")
+    _expect(_call(tmp_path, f"{ask_contract.RECORD_DIR_ROOT}\\{RUN}".replace("/", "\\")), True, False, "halted run; refire starts a new run")
 
 
 @pytest.mark.parametrize("bad", [
@@ -149,6 +154,6 @@ def test_zero_spawns_and_under_50ms(tmp_path: Path, record, monkeypatch: pytest.
     reply = _call(tmp_path)
     elapsed = _cpu() - start
     monkeypatch.undo()
-    assert reply["ok"] is True and reply["resumable"] is True
+    assert reply["ok"] is True and reply["terminal"] is True
     assert spawned == []
     assert elapsed < 0.05

@@ -44,7 +44,7 @@ from coordinator_core.bash_guards._write_bump_applicability import (
     target_is_under_settings_home,
 )
 from coordinator_core.session import machinery_paths
-from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
+from coordinator_core.subagent_sandbox.path_segment import sanitize_segment as _sanitize_segment
 from coordinator_core.write_guards._case_fold_path import casefold_path
 
 SANCTIONED_DESTINATIONS: tuple[str, ...] = (

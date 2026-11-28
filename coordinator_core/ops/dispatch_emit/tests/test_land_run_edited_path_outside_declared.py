@@ -35,7 +35,7 @@ GROWTH = "wikisrc/growth.txt"
 CUT = "wikisrc/cut.txt"
 STRAY = "othersrc/stray.txt"
 PREFIX = "wikisrc/"
-VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 MET = {"status": "met", "observation": "obs", "sidecar": "j.md"}
 CUT_BEFORE = "".join(f"line {i}\n" for i in range(40))
 CUT_AFTER = "".join(f"line {i}\n" for i in range(10))
@@ -96,7 +96,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     session_core.init(SELF, cwd=str(root))
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     return root

@@ -1368,7 +1368,7 @@ def mark_landed(record_dir: Path, sha: str, *, without_verdict: bool = False) ->
 UNRECORDED_END_HALT = "run-ended-unrecorded"
 #: `zero_run_cause` a test-leg verdict reports -> the `halted` kind the run's script halts with; mirrors `ask_compose`'s co-tenant halts.
 CO_TENANT_HALT_BY_CAUSE = {
-    "co_tenant_dependency_on_halted_run": "co_tenant_dependency_on_halted_run",
+    "co_tenant_dependency": "co_tenant_dependency",
     "co-tenant-wait": "co_tenant_wait",
     "co_tenant_cycle": "co_tenant_cycle",
 }
@@ -1474,8 +1474,8 @@ def mark_superseded_by_refire(
     fresh refire closes the prior run and credits none of its kept chunks. False and no write for any other
     status (landed, closed, superseded) or an absent marker.
 
-    The run keeps its `halted_withheld_index` entry: a superseded run stays the owner of its withheld paths
-    until a successor lands (`co_tenant_owner.owner_of`).
+    The run keeps its `halted_withheld_index` entry: a superseded run's withheld paths stay attributed to it
+    until a successor lands (`co_tenant_owner.peer_hunk_runs`).
 
     The evidence records `prior_status` (the status overwritten) and, when known, the `successor` run id; a
     caller that mints the successor after this call stamps it with `stamp_refire_successor`. The pair lets

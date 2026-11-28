@@ -286,3 +286,19 @@ def test_registry_row_for_another_session_is_unknown_without_role_rule(monkeypat
     def forbidden(*args): raise AssertionError('role rule must not run for a mismatched row')
     monkeypatch.setattr(life, 'role_for_caller', forbidden)
     assert life._codex_role({}, SID) == 'unknown'
+
+
+def test_refresh_op_over_its_concurrency_cap_acks_busy_and_starts_no_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    from coordinator_core.ops import codex_status as op
+    started = []
+    monkeypatch.setattr(threading, 'Thread', lambda **kw: started.append(kw) or _InlineThread(lambda: None))
+    held = 0
+    while op._refresh_slots.acquire(blocking=False):
+        held += 1
+    try:
+        assert op.refresh({'event': 'Stop', 'session_id': SID, 'cwd': 'C:/r'}) == {'accepted': True, 'skipped': 'busy'}
+        assert started == []
+    finally:
+        for _ in range(held):
+            op._refresh_slots.release()

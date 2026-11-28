@@ -11,9 +11,8 @@ import coordinator_core.ops.dispatch_emit as _pkg
 import coordinator_core.sizing_assemble as sa
 from coordinator_core.ops.dispatch_emit import cli as cli_module
 from coordinator_core.ops.dispatch_emit import op as op_module
-from coordinator_core.ops.dispatch_emit import stage_family, stage_family_binding
+from coordinator_core.ops.dispatch_emit import stage_family
 from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_chain_parts
-from coordinator_core.ops.emit import doe_drift
 from coordinator_core.session import record_homes
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "pipeline_research"
@@ -33,14 +32,7 @@ premise:
   evidence: PLACEHOLDER - cite the evidence
 deliverable_id: null
 """
-_BINDING = """schema_version: 1
-runner: coordinator:family-stage-runner
-fallback: claude
-roles:
-  scout: grok
-  research: agy
-  review: codex
-"""
+_CHOSEN = {"scout": "grok", "research": "agy", "review": "codex"}
 _WEB_MANIFEST = """schema_version: 1
 pipeline: web
 description: Fixture web pipeline with a scout stage and a specialists stage.
@@ -89,29 +81,20 @@ def repo(monkeypatch, tmp_path):
     return root
 
 
-@pytest.fixture
-def content_root(tmp_path, monkeypatch):
-    root = tmp_path / "doe"
-    (root / "coordinator" / "pipelines").mkdir(parents=True)
-    (root / "coordinator" / "pipelines" / "stage-family-binding.yaml").write_text(
-        _BINDING, encoding="utf-8", newline="\n"
-    )
-    monkeypatch.setattr(doe_drift, "resolve_doe_clone", lambda: root)
-    return root
-
-
-def _write_sizing(repo: Path, binding: str | None) -> str:
+def _write_sizing(repo: Path, chosen: dict | None, retired: str | None = None) -> str:
     home = Path(record_homes.home_dir(str(repo), "sizings"))
     home.mkdir(parents=True, exist_ok=True)
     (home / _NAME).write_text(_DRAFT, encoding="utf-8")
     rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
     assert sa.main(["--tshirt", "XS", "--interaction-mode", "pm", "--write", rel, *_FLAGS]) == sa.EXIT_OK
-    if binding is not None:
+    extra = ""
+    if chosen is not None:
+        extra += "\nstage_families:" + "".join(f"\n  {r}: {f}" for r, f in chosen.items())
+    if retired is not None:
+        extra += f"\nstage_family_binding: {retired}"
+    if extra:
         path = repo / rel
-        path.write_text(
-            path.read_text(encoding="utf-8").rstrip("\n") + f"\nstage_family_binding: {binding}\n",
-            encoding="utf-8", newline="\n",
-        )
+        path.write_text(path.read_text(encoding="utf-8").rstrip("\n") + extra + "\n", encoding="utf-8", newline="\n")
     return rel
 
 
@@ -122,16 +105,16 @@ def _emit(capsys, rel: str):
     return code, out
 
 
-def _script(repo: Path, binding: str | None, capsys) -> tuple[str, dict]:
-    rel = _write_sizing(repo, binding)
+def _script(repo: Path, chosen: dict | None, capsys) -> tuple[str, dict]:
+    rel = _write_sizing(repo, chosen)
     code, out = _emit(capsys, rel)
     assert code == cli_module.EXIT_OK, out.err
     reply = json.loads(out.out)
     return Path(reply["path"]).read_text(encoding="utf-8"), reply
 
 
-def test_opted_in_scout_stage_runs_through_the_runner_on_grok(repo, content_root, capsys):
-    script, reply = _script(repo, stage_family_binding.BINDING_REF, capsys)
+def test_opted_in_scout_stage_runs_through_the_runner_on_grok(repo, capsys):
+    script, reply = _script(repo, _CHOSEN, capsys)
     assert f"agentType: '{stage_family.RUNNER_AGENT}'" in script
     assert "async function _familyStage(family, role, prompt, label, opts)" in script
     assert "_familyStage('grok', 'scout'," in script
@@ -140,8 +123,8 @@ def test_opted_in_scout_stage_runs_through_the_runner_on_grok(repo, content_root
     assert receipt["stage_families"] == {"web.scout": "grok", "web.specialists": "agy"}
 
 
-def test_opted_in_specialists_stage_records_agy_failed_then_the_claude_fallback(repo, content_root, capsys):
-    script, _ = _script(repo, stage_family_binding.BINDING_REF, capsys)
+def test_opted_in_specialists_stage_records_agy_failed_then_the_claude_fallback(repo, capsys):
+    script, _ = _script(repo, _CHOSEN, capsys)
     assert "_familyStage('agy', 'research'," in script
     assert "family: agy\\n" in script and "stage: research\\n" in script
     arm = script[script.index("async function _familyStage("):]
@@ -161,15 +144,12 @@ def test_opted_in_specialists_stage_records_agy_failed_then_the_claude_fallback(
     assert record["attempts"][1]["fallback_for"] == "agy"
 
 
-def test_a_sizing_without_the_binding_emits_the_unmapped_compose_unchanged(repo, monkeypatch, capsys):
-    monkeypatch.setattr(
-        stage_family_binding, "load", lambda *a, **k: pytest.fail("binding read without opt-in")
-    )
+def test_a_sizing_without_stage_families_emits_the_unmapped_compose_unchanged(repo, capsys):
     script, _ = _script(repo, None, capsys)
     assert "family-stage-runner" not in script and "_familyStage" not in script
     rel = _write_sizing(repo, None)
     ctx, _, _ = op_module._research_route_setup({}, repo, rel, None)
-    assert ctx["stage_family_opted_in"] is False
+    assert ctx["stage_family_binding"] is None
     baseline = compose_chain_parts(
         ctx["segments"], run_id=ctx["run_id"], agent_type_host=None,
         next_action=ctx["next_action"], legs=ctx["legs"],
@@ -182,19 +162,30 @@ def test_a_sizing_without_the_binding_emits_the_unmapped_compose_unchanged(repo,
     assert "family-stage-runner" not in baseline
 
 
-def test_an_unknown_binding_ref_refuses_the_emit(repo, content_root, capsys):
-    rel = _write_sizing(repo, "coordinator-content-repo:somewhere/else.yaml")
+def test_the_emit_stage_families_param_routes_the_scout_stage_without_a_sizing_key(repo):
+    rel = _write_sizing(repo, None)
+    ctx, _, _ = op_module._research_route_setup({"stage_families": {"scout": "grok"}}, repo, rel, None)
+    assert ctx["stage_family_binding"].roles == {"scout": "grok"}
+
+
+def test_an_unknown_emit_family_refuses_the_emit(repo):
+    rel = _write_sizing(repo, None)
+    with pytest.raises(op_module.PipelineEmitRefused, match="stage_families"):
+        op_module._research_route_setup({"stage_families": {"scout": "gpt"}}, repo, rel, None)
+
+
+def test_the_retired_binding_key_refuses_the_emit_naming_stage_families(repo, capsys):
+    rel = _write_sizing(repo, None, retired="coordinator-content-repo:retired")
     code, out = _emit(capsys, rel)
     assert code != cli_module.EXIT_OK
-    assert "is not the binding" in out.err
+    assert "stage_families" in out.err
 
 
-def test_an_unresolvable_binding_refuses_with_its_message_not_a_silent_claude(repo, monkeypatch, capsys):
-    def gone():
-        raise doe_drift.DoeResolveError("no clone")
-
-    monkeypatch.setattr(doe_drift, "resolve_doe_clone", gone)
-    rel = _write_sizing(repo, stage_family_binding.BINDING_REF)
-    code, out = _emit(capsys, rel)
-    assert code != cli_module.EXIT_OK
-    assert "cannot resolve the DoE root" in out.err
+def test_emit_stage_families_param_shapes():
+    assert op_module._emit_stage_families({}) == {}
+    assert op_module._emit_stage_families({"stage_families": {}}) == {}
+    assert op_module._emit_stage_families({"stage_families": {"scout": " grok "}}) == {"stage_families": {"scout": "grok"}}
+    with pytest.raises(ValueError, match="mapping"):
+        op_module._emit_stage_families({"stage_families": ["scout"]})
+    with pytest.raises(ValueError, match="stage_families"):
+        op_module._emit_stage_families({"stage_families": {"scout": None}})

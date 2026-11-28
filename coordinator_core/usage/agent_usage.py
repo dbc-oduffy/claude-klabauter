@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Optional
 
 from coordinator_core.usage.price_table import TOKEN_FIELDS, estimate_usd
@@ -60,7 +61,7 @@ def agent_meta(run_dir: str, agent_id: str, transcript: Optional[str]) -> dict:
 
 
 _REFUSED_MARKERS = ("connection refused", "connect refused", "econnrefused")
-_TIMEOUT_MARKERS = ("timed out", "timeout", "stalled_stage")
+_TIMEOUT_MARKERS = ("timed out", "timeout", "stalled_stage", "call_deadline", "backpressure")
 
 
 def _failure_kind(content: Any) -> str:
@@ -91,16 +92,62 @@ def _errored_ids(raw: str) -> dict:
             if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error")}
 
 
-def _messages(path: str, failed: Optional[dict] = None) -> list[dict]:
+_NOT_INDEXED_MARKERS = ("not indexed", "not_indexed")
+_RESULT_LISTS = ("results", "hits", "matches", "symbols", "items")
+
+
+def _result_text(content: Any) -> str:
+    if isinstance(content, list):
+        return " ".join(str(b.get("text", "")) for b in content if isinstance(b, dict)).strip()
+    return str(content or "").strip()
+
+
+def _is_empty_result(content: Any) -> bool:
+    """True for a non-error tool_result that is blank, an empty JSON container, an empty result list, or says not indexed."""
+    text = _result_text(content)
+    if text.lower() in ("", "[]", "{}", "null", "none"):
+        return True
+    if len(text) < 200 and any(m in text.lower() for m in _NOT_INDEXED_MARKERS):
+        return True
+    if text[0] in "{[":
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return False
+        if isinstance(data, dict):
+            return any(k in data and data[k] == [] for k in _RESULT_LISTS)
+        return data == []
+    return False
+
+
+def _empty_ids(raw: str) -> set:
+    """tool_use ids of the non-error tool_result blocks on this transcript line whose result is empty."""
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        return set()
+    msg = event.get("message") if isinstance(event, dict) else None
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if not isinstance(content, list):
+        return set()
+    return {b.get("tool_use_id") for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_result" and not b.get("is_error")
+            and _is_empty_result(b.get("content"))}
+
+
+def _messages(path: str, failed: Optional[dict] = None, empty: Optional[set] = None) -> list[dict]:
     """Assistant usage messages, one per (message.id, requestId), last row wins.
 
-    When `failed` is given, errored tool_results are recorded in it as {tool_use id: kind}."""
+    When `failed` is given, errored tool_results are recorded in it as {tool_use id: kind};
+    when `empty` is given, tool_use ids whose non-error result is empty are added to it."""
     latest: dict[Any, dict] = {}
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
             for n, raw in enumerate(handle):
                 if failed is not None and '"is_error"' in raw and '"tool_result"' in raw:
                     failed.update(_errored_ids(raw))
+                if empty is not None and '"tool_result"' in raw:
+                    empty.update(_empty_ids(raw))
                 parsed = usage_line(raw, n)
                 if parsed is not None:
                     key, model, usage, _speed = parsed
@@ -114,15 +161,27 @@ def _messages(path: str, failed: Optional[dict] = None) -> list[dict]:
     return list(latest.values())
 
 
-def _tool_uses(raw: str, n: int) -> dict[Any, tuple[str, Optional[str], Optional[str]]]:
-    """{tool_use id: (name, input.file_path, input.command)} of one transcript line's tool_use blocks."""
+def _names_engine_band(inp: Any) -> bool:
+    """True when the tool input's band/bands/corpus value (str or list of str) starts with `engine`."""
+    if not isinstance(inp, dict):
+        return False
+    for key in ("band", "bands", "corpus"):
+        v = inp.get(key)
+        for item in (v if isinstance(v, list) else [v]):
+            if isinstance(item, str) and item.strip().lower().startswith("engine"):
+                return True
+    return False
+
+
+def _tool_uses(raw: str, n: int) -> dict[Any, tuple[str, Optional[str], Optional[str], bool]]:
+    """{tool_use id: (name, input.file_path, input.command, names_engine_band)} of one transcript line's tool_use blocks."""
     try:
         event = json.loads(raw)
     except ValueError:
         return {}
     msg = event.get("message") if isinstance(event, dict) else None
     content = msg.get("content") if isinstance(msg, dict) else None
-    out: dict[Any, tuple[str, Optional[str], Optional[str]]] = {}
+    out: dict[Any, tuple[str, Optional[str], Optional[str], bool]] = {}
     if not isinstance(content, list):
         return out
     for i, block in enumerate(content):
@@ -133,9 +192,11 @@ def _tool_uses(raw: str, n: int) -> dict[Any, tuple[str, Optional[str], Optional
         cmd = inp.get("command") if isinstance(inp, dict) else None
         out[block.get("id") or ("line", n, i)] = (
             str(block.get("name") or ""), path if isinstance(path, str) else None,
-            cmd[:64] if isinstance(cmd, str) else None)
+            cmd[:512] if isinstance(cmd, str) else None, _names_engine_band(inp))
     return out
 
+
+_UE_ADDON_PREFIXES = ("mcp__project-rag__project_engine_", "mcp__project-rag__project_cpp_symbol")
 
 _SEARCH_TOOLS = frozenset({"Grep", "Glob"})
 _SEARCH_COMMANDS = frozenset({"grep", "rg", "find"})
@@ -151,6 +212,37 @@ def _is_search(name: str, command: Optional[str]) -> bool:
         return False
     words = command.split(None, 1)
     return bool(words) and words[0] in _SEARCH_COMMANDS
+
+
+_SEGMENT_SPLIT = re.compile(r"\|\||&&|[|;&\n(`]|\$\(")
+_SHELLS = frozenset({"bash", "sh", "zsh"})
+_COMMAND_WRAPPERS = frozenset({"xargs", "sudo", "time", "command", "env", "nohup", "exec"})
+
+
+def _segment_runs_search(segment: str) -> bool:
+    words = segment.split()
+    while words and (words[0] in _COMMAND_WRAPPERS or ("=" in words[0] and not words[0].startswith("-"))):
+        words.pop(0)
+    if not words:
+        return False
+    head = words[0].replace("\\", "/").rsplit("/", 1)[-1]
+    if head.endswith(".exe"):
+        head = head[:-4]
+    if head == "git":
+        return "grep" in words[1:4] and "-m" not in words[1:4]
+    if head in _SHELLS and "-c" in words[1:]:
+        inner = segment.split("-c", 1)[1].strip().strip("\"'")
+        return any(_segment_runs_search(s) for s in _SEGMENT_SPLIT.split(inner))
+    return head in _SEARCH_COMMANDS
+
+
+def _is_grep_call(name: str, command: Optional[str]) -> bool:
+    """Grep, Glob, or a Bash command with any pipeline segment that runs grep, rg or find (incl. `git grep`)."""
+    if name in _SEARCH_TOOLS:
+        return True
+    if name != "Bash" or not command:
+        return False
+    return any(_segment_runs_search(s) for s in _SEGMENT_SPLIT.split(command))
 
 
 def _norm_path(path: str) -> str:
@@ -181,30 +273,45 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict[str, Any]:
     row: dict[str, Any] = {
         "agent_id": agent_id, "label": label, "model": None, "speed": None,
         **_zero(), "unpriced": False, "unpriced_tokens": 0,
-        "tool_calls": 0, "rag_calls": 0, "search_calls": 0, "rag_failed": 0, "rag_fallback": 0,
+        "tool_calls": 0, "rag_calls": 0, "ue_calls": 0, "search_calls": 0, "grep_calls": 0, "rag_failed": 0, "rag_errors": 0,
+        "rag_fallback": 0,
         "rag_timeouts": 0, "rag_refused": 0, "peak_context": 0, "max_same_file_reads": 0,
     }
     priced = 0
     models: dict[str, int] = {}
     reads: dict[str, int] = {}
     failed: dict = {}
-    messages = _messages(path, failed) if path else []
+    empty: set = set()
+    messages = _messages(path, failed, empty) if path else []
+    meta_type = agent_meta(run_dir, agent_id, path).get("agentType")
+    row["agent_type"] = meta_type if isinstance(meta_type, str) and meta_type else None
+    row["rag_positions"] = []
+    row["rag_empty"] = 0
     rag_failed_seen = False
     for m in messages:
         usage = m["usage"]
         row["peak_context"] = max(row["peak_context"], sum(
             _num(usage, f) for f in
             ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")))
-        for tid, (name, fp, cmd) in m["tools"].items():
+        for tid, (name, fp, cmd, engine_band) in m["tools"].items():
+            position = row["tool_calls"]
             row["tool_calls"] += 1
+            if _is_grep_call(name, cmd):
+                row["grep_calls"] += 1
             if _is_search(name, cmd):
                 row["search_calls"] += 1
                 if rag_failed_seen:
                     row["rag_fallback"] += 1
             if isinstance(name, str) and name.startswith("mcp__project-rag__"):
                 row["rag_calls"] += 1
+                row["rag_positions"].append(position)
+                if name.startswith(_UE_ADDON_PREFIXES) or engine_band:
+                    row["ue_calls"] += 1
+                if name.startswith(_UE_ADDON_PREFIXES) and tid in empty:
+                    row["rag_empty"] += 1
                 if tid in failed:
                     row["rag_failed"] += 1
+                    row["rag_errors"] += 1
                     kind = failed[tid]
                     if kind == "timeout":
                         row["rag_timeouts"] += 1
@@ -272,6 +379,8 @@ def scan_run(run_dir: str) -> dict[str, Any]:
         total["unpriced_tokens"] += a["unpriced_tokens"]
     searching = sum(1 for a in agents if a["search_calls"] or a["rag_calls"])
     rag_agents = sum(1 for a in agents if a["rag_calls"])
+    total["grep_calls"] = sum(a["grep_calls"] for a in agents)
+    total["rag_calls"] = sum(a["rag_calls"] for a in agents)
     total["rag_uptake"] = {"searching_agents": searching, "rag_agents": rag_agents,
                            "fallback_agents": sum(1 for a in agents if a["rag_fallback"]),
                            "ratio": rag_agents / searching if searching else None}

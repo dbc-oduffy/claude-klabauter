@@ -266,6 +266,7 @@ from coordinator_core.session.output_tree_layout import locate, write_rel
 
 from coordinator_core.ops.sizing_acceptance import ENGINE_SIZE_RULE, sizing_acceptance_skipped  # noqa: F401 -- ENGINE_SIZE_RULE re-exported
 from coordinator_core.roadmap.consumer_clause import consumer_clause_refusal, unowned_seams
+from coordinator_core.roadmap.wiring_clause import wiring_clause_refusal
 from coordinator_core.roadmap.post_stamp_clause import doc_approval_refusal, suite_tier_refusal
 
 from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
@@ -323,7 +324,9 @@ def _derive_register_cli(
     except Exception as exc:  # noqa: BLE001
         print(f"{prog}: cannot read {write_path} or its scout report: {exc}", file=sys.stderr)
         return EXIT_USAGE
-    rows, unrelated, refs, dropped = derive_register(doc, scout if isinstance(scout, dict) else None)
+    rows, unrelated, refs, dropped = derive_register(
+        doc, scout if isinstance(scout, dict) else None, root=root
+    )
     if not rows:
         print(f"{prog}: {write_path} carries no PM words to derive a register from", file=sys.stderr)
         return EXIT_BUSINESS_FAIL
@@ -1780,13 +1783,23 @@ def _scout_unrelated(accounting: Any) -> dict[int, str]:
     return out
 
 
-RELAYED_TURN_REASON = "relayed ask: session PM turn, not the relayed ask's text"
+def _scout_rulings(scout_unrelated: dict[int, str], root: Any) -> Optional[dict[str, str]]:
+    """`{ruling id: status}` from the ruling register under `root`, loaded only when a scout
+    reason cites a `ruling:<id>` token; None otherwise."""
+    from coordinator_core.ops import requirement_register as rr
+
+    if root is None or not any(rr._RULING_TOKEN_RE.search(r) for r in scout_unrelated.values()):
+        return None
+    from coordinator_core.rulings import store
+
+    return {r.id: r.status for r in store.load(root)}
 
 
 def derive_register(
     doc: dict[str, Any],
     scout: Optional[dict[str, Any]] = None,
     relayed_ask: Optional[str] = None,
+    root: Any = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], list[str]]:
     """The requirement register a sizing's PM words imply: `(rows, unrelated_turns, refs, dropped)`.
 
@@ -1794,31 +1807,34 @@ def derive_register(
       - the scout's `register_rows` whose `source_text` is verbatim (whitespace-normalised) in
         some PM text; one that is not is listed in `dropped` by id, never paraphrased in;
       - the scout's `verbatim_accounting` `unrelated — <reason>` turns, for an embedded turn
-        no kept row covers;
+        no kept row covers and whose reason carries a valid backing
+        (`rr.unrelated_turn_backing`; `root` resolves a `ruling:<id>` token); an unbacked one
+        falls through to row minting;
       - an uncovered text with two or more enumerated lines: one row per clause;
       - any other uncovered text: one row per PM-worded segment between `<agent-message>`
         blocks; a turn with none is `unrelated` (relayed agent message only).
     Rows are `open`, unclaimed, `surface` the scout's when valid else `internal`.
-    With `relayed_ask` text: exactly one row `R1` carrying that text, every embedded `T<n>` turn
-    listed unrelated, and the scout's rows not admitted. Pure."""
+    With `relayed_ask` text: row `R1` carrying that text, an open row for each embedded `T<n>`
+    turn R1 does not cover, and the scout's rows not admitted. Pure apart from the ruling read."""
     from coordinator_core.ops import requirement_register as rr
 
-    texts = _pm_texts(doc)
-    if relayed_ask is not None and relayed_ask.strip():
-        from coordinator_core.ops.dispatch_emit.requirements_ledger import ORIGIN_RELAYED
-
-        row = {
-            rr.ROW_ID: "R1", rr.ROW_TEXT: relayed_ask.strip(), rr.ROW_ANCHOR: ORIGIN_RELAYED,
-            rr.ROW_SURFACE: "internal", rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
-        }
-        turns = sorted(int(k[1:]) for k, _ in texts if k.startswith("T"))
-        rows = [row] + _seam_rows(doc, texts, relayed_ask, [row])
-        return rows, [{"turn": t, "reason": RELAYED_TURN_REASON} for t in turns], ["relayed ask"], []
+    sourced = texts = _pm_texts(doc)
     normed = {key: rr._norm(text) for key, text in texts}
     rows: list[dict[str, Any]] = []
     refs: list[str] = []
     dropped: list[str] = []
     taken: set[str] = set()
+    relayed = relayed_ask is not None and bool(relayed_ask.strip())
+    if relayed:
+        from coordinator_core.ops.dispatch_emit.requirements_ledger import ORIGIN_RELAYED
+
+        rows.append({
+            rr.ROW_ID: "R1", rr.ROW_TEXT: relayed_ask.strip(), rr.ROW_ANCHOR: ORIGIN_RELAYED,
+            rr.ROW_SURFACE: "internal", rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
+        })
+        taken.add("R1")
+        refs.append("relayed ask")
+        texts = [(k, t) for k, t in texts if k.startswith("T")]
 
     def add(rid: str, source_text: str, key: str, anchor: str, surface: str = "internal") -> None:
         base, k = rid, 1
@@ -1837,7 +1853,7 @@ def derive_register(
     def covered(key: str) -> bool:
         return any(rr._norm(r[rr.ROW_TEXT]) in normed[key] for r in rows)
 
-    scout = scout if isinstance(scout, dict) else {}
+    scout = scout if isinstance(scout, dict) and not relayed else {}
     for n, proposed in enumerate(scout.get("register_rows") or [], 1):
         if not isinstance(proposed, dict):
             continue
@@ -1855,9 +1871,13 @@ def derive_register(
 
     unrelated: list[dict[str, Any]] = []
     turn_keys = {int(k[1:]): k for k, _ in texts if k.startswith("T")}
-    for turn, reason in sorted(_scout_unrelated(scout.get("verbatim_accounting")).items()):
+    scout_unrelated = _scout_unrelated(scout.get("verbatim_accounting"))
+    rulings = _scout_rulings(scout_unrelated, root)
+    for turn, reason in sorted(scout_unrelated.items()):
         if turn in turn_keys and not covered(turn_keys[turn]):
-            unrelated.append({"turn": turn, "reason": reason})
+            entry = {"turn": turn, "reason": reason}
+            if rr.unrelated_turn_backing(doc, entry, rulings) is None:
+                unrelated.append(entry)
     waived = {e["turn"] for e in unrelated}
 
     for key, text in texts:
@@ -1876,7 +1896,7 @@ def derive_register(
         for k, segment in enumerate(segments, 1):
             add(key if len(segments) == 1 else f"{key}.p{k}", segment, key, _anchor_stem(key))
     unrelated.sort(key=lambda e: e["turn"])
-    rows.extend(_seam_rows(doc, texts, relayed_ask, rows))
+    rows.extend(_seam_rows(doc, sourced, relayed_ask, rows))
     return rows, unrelated, refs, dropped
 
 
@@ -2188,6 +2208,9 @@ def _write_back(
             mode = doc.get("interaction_mode") or interaction_mode
             route_now, tshirt_now = decision["route"], decision["resolved_estimate"]["tshirt"]
             skipped = bool(statement) and sizing_acceptance_skipped(route_now, tshirt_now)
+            unwired = wiring_clause_refusal(statement) if skipped else None
+            if unwired is not None:
+                raise MutateAbort(unwired)
             accepted = (
                 {
                     "source": ENGINE_SIZE_RULE,
@@ -2261,7 +2284,7 @@ def _write_back(
             ruled = isinstance(ruled, dict) and REGISTER_KEY in ruled
             if REGISTER_KEY not in new_doc and not ruled:
                 rows, unrelated, refs, dropped[:] = derive_register(
-                    new_doc, scout_register, relayed_ask_text
+                    new_doc, scout_register, relayed_ask_text, root=root
                 )
                 if rows:
                     text = _mint_register(
@@ -2821,6 +2844,7 @@ def amend_exit_criterion(root: Path, sizing: str, statement: str, ruling: str) -
         or suite_tier_refusal(statement)
         or doc_approval_refusal(statement)
         or consumer_clause_refusal(statement)
+        or wiring_clause_refusal(statement)
     )
     if refusal is not None:
         raise SizingAssembleError(refusal)
@@ -2905,7 +2929,7 @@ def _usage(prog: str, stream=None) -> int:
         "    [--name <short label>]\n"
         "    [--precedent shipped-before|novel]\n"
         "    [--probe-raise-basis ask-scope|substrate-condition|breadth]\n"
-        "    [--exit-criterion <str>]\n"
+        "    [--exit-criterion <str> (name the entry point and a runnable check: `coordinator-invoke <op>` ...; `python -m pytest <file>` passes)]\n"
         "    [--interaction-mode hands-on|pm|ceo]\n"
         "    [--research-class scouts|corpus|unblock|spike (required with any other --research-*)]\n"
         "    [--research-appetite small|medium|large (research budget; distinct from --appetite)]\n"
@@ -2924,7 +2948,7 @@ def _usage(prog: str, stream=None) -> int:
         "    [--acceptance-rows-json '[{\"statement\":..,\"writes\":[..],\"check\":..}]' (requires --write)]\n"
         "    [--write <state/sizings/x.yaml> [--json (print the decision instead of 'written: <path>')]\n"
         "    [--verbatim-turns A-B | --no-verbatims]\n"
-        "    [--relayed-ask-file <path> (register only that text; embedded PM turns go to unrelated_turns)]]\n"
+        "    [--relayed-ask-file <path> (register that text as R1; embedded PM turns it does not cover get open rows)]]\n"
         "or: --amend-research <state/sizings/x.yaml> --research-* ... (rewrites only the research block;\n"
         "    --clear-research-seeds drops every seed, --research-seed replaces them)\n"
         "or: --amend-route <state/sizings/x.yaml> --route <route> (re-routes in place; leaving research\n"

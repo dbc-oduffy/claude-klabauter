@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 _MappingProxyType = type(type.__dict__)
 
 _OP_KEY_SCOPE: Dict[str, str] = {
+    "box.dir_census": "none",
     "box_memory.admit": "none",
     "box_memory.register": "none",
     "box_memory.release": "none",
@@ -60,6 +61,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.track_dispatched_agents":         "common_dir",
     "hooks.agent_postuse_dispatch":          "common_dir",
     "hooks.postuse_agent_dispatch":          "common_dir",
+    "hooks.dispatch_event":                  "common_dir",
     "hooks.subagent_zero_tool_use":          "common_dir",
     "hooks.subagent_zero_tool_use_surface":  "common_dir",
     "hooks.subagent_zero_tool_use_resolve":  "common_dir",
@@ -365,6 +367,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "rulings.search":                        "common_dir",
     "rulings.gate":                          "common_dir",
     "rulings.coverage":                      "common_dir",
+    "deferral.challenge":                    "common_dir",
     "plan.mise_prep_probe":                  "common_dir",
     "plan.mise_upgrade_apply":               "common_dir",
     "plan.mise_certify_probe":               "common_dir",
@@ -416,6 +419,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "memo.list_outbox":                       "common_dir",
     "memo.blitz_buckets":                     "common_dir",
     "push.outstanding":                      "common_dir",
+    "governed_by.ledger":                    "common_dir",
+    "push.state":                            "common_dir",
     "p4.register_workspace":                 "common_dir",
     "p4.session_state":                      "common_dir",
     # strang-10 A+B residual writer strangle — changelog / completion / review-trail write ops.
@@ -644,13 +649,14 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "groupem.stamp":                          "none",
     "groupem.resolve_addressee":              "none",
     "groupem.idle_report":                    "none",
-    "groupem.standing":                       "none",
-    "groupem.box_hold":                       "none",
     "groupem.roll_call":                      "none",
     "groupem.roll_call_reply":                "none",
     "groupem.roll_call_status":               "none",
+    "groupem.standing":                       "none",
+    "groupem.box_hold":                       "none",
     "groupem.goal_board_refresh":             "none",
     "groupem.admission_post":                 "none",
+    "groupem.admission_spool_read":           "none",
     "groupem.slot_grant":                     "none",
     "groupem.slot_check":                     "none",
     "runs.withheld_overlap":                  "show_top",
@@ -662,6 +668,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "groupem.capacity_admit":                 "none",
     "groupem.capacity_place":                 "none",
     "groupem.idle_capacity_watch":            "none",
+    "groupem.fleet_book":                     "none",
+    "groupem.job_ledger":                     "none",
+    "groupem.job_ledger_local":               "none",
+    "groupem.job_progress":                   "none",
+    "groupem.capacity_local":                 "none",
+    "groupem.file_cache_report":              "none",
+    "groupem.file_cache_trim":                "none",
     "groupem.suite_grant_receive":            "none",
     "groupem.box_key_pin":                    "none",
     "groupem.box_key_pin_from_peer":          "none",
@@ -765,6 +778,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "proc.stop_own_child":                    "none",
     # run.hold — "show_top", MUTATING: the holding session sets or clears its run's hold record.
     "run.hold":                               "show_top",
+    # run.false_finished_sweep — "none": reads the caller-named repo_roots, not the calling worktree.
+    "run.false_finished_sweep":               "none",
     "cartography.count_references":           "none",
     "doctrine.assert_cross_reference_counts": "common_dir",
     "percolate.check_inverse_drift":          "none",
@@ -872,6 +887,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.land_run — MUTATING: lands a run's product and record in one scoped commit via
     # git.commit.commit_paths; the caller's own worktree, never a params override.
     "dispatch.land_run":                        "common_dir",
+    "dispatch.ship_hand_landed_batons":         "common_dir",
     # dispatch.land_blobs — MUTATING: index-only declared-blob landing;
     # the caller's own worktree, never a params override.
     "dispatch.land_blobs":                      "common_dir",
@@ -891,6 +907,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.docs_check_rag_gate — COMPUTE_ONLY, "common_dir": detects UE and example-retrieval-repo in the CALLING
     # repo (`repo_root`), so the warm engine must resolve the caller's worktree.
     "dispatch.docs_check_rag_gate":             "common_dir",
+    # dispatch.stage_rag_gate — COMPUTE_ONLY, "common_dir": serves_repo and the transcripts resolve from the
+    # CALLING repo (`repo_root`), so the warm engine must resolve the caller's worktree.
+    "dispatch.stage_rag_gate":                  "common_dir",
+    # dispatch.run_rag_use — COMPUTE_ONLY, "common_dir": same caller-repo resolution as stage_rag_gate.
+    "dispatch.run_rag_use":                     "common_dir",
     # close.background — MUTATING: pays the run's queued close legs; the caller's own worktree.
     "close.background":                         "common_dir",
     # close.review — MUTATING: pays the run's queued review leg; the caller's own worktree.
@@ -908,6 +929,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.ask_fanout":                      "common_dir",
     # dispatch.sibling_status — reads the same parent record and status files under the caller's own worktree.
     "dispatch.sibling_status":                  "common_dir",
+    "dispatch.stage_wait_status":               "common_dir",
     "dispatch.reap_abandoned_runs":             "common_dir",
     # dispatch.minted_run — starts or abandons one minted-only run under the caller's own worktree's state/warp/.
     "dispatch.minted_run":                      "common_dir",
@@ -920,6 +942,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.record_halted_run_landed":        "common_dir",
     "dispatch.close_halted_run_superseded":     "common_dir",
     "dispatch.close_halted_run_rejected":       "common_dir",
+    "dispatch.rebind_plan_base":                "common_dir",
+    "dispatch.adopt_predecessor_work":          "common_dir",
     "dispatch.close_plan_checkpoints":          "common_dir",
     "dispatch.land_combined_index":             "common_dir",
     "dispatch.release_run_token":               "common_dir",
@@ -964,6 +988,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "test_verdict.record":                      "common_dir",
     # testing.suite_runs — COMPUTE_ONLY: reads the caller's own repo records.
     "testing.suite_runs":                       "common_dir",
+    "test_leg.remote_run":                      "none",
+    "test_leg.remote_poll":                     "none",
+    "agent_leg.remote_run":                     "none",
+    "agent_leg.remote_poll":                    "none",
     "receipt.approve":                          "common_dir",
     "fanout.poll_scratch_dir":                  "none",
     "fanout.compose":                           "none",
@@ -1131,6 +1159,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # repo.setup — "none": the target is the caller-supplied `root` param, never the worktree
     # the engine runs in.
     "repo.setup":                                "none",
+    "repo.declared_project_type":                "none",
     # governed_by.ledger — handler derives worktree root from main_worktree_root(repo_root) when
     # params["repo_root"] is omitted, reading git history for a repo-relative path.
     "governed_by.ledger":                        "common_dir",

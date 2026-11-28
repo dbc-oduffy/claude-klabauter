@@ -154,6 +154,7 @@ from coordinator_core.roadmap.post_stamp_clause import (
     suite_tier_body_refusal,
     suite_tier_refusal,
 )
+from coordinator_core.roadmap.wiring_clause import wiring_clause_refusal
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -187,7 +188,7 @@ ENGINE_ERROR = "ENGINE-ERROR"
 CLASS_ORDER = (
     "SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "EXECUTOR_COMMIT",
     "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE", "EXECUTOR_MERGE", "GITIGNORED_WRITES", "CAPABILITIES",
-    "SCHEMA", "RULINGS", "REGISTER", "DONE_CLAUSE",
+    "ANCHOR", "SCHEMA", "RULINGS", "REGISTER", "DONE_CLAUSE",
 )
 
 #: ``classes["CAPABILITIES"]["kind"]`` for an absent ``capabilities`` key; the
@@ -435,6 +436,11 @@ _FINDING_CLASSIFICATION: Dict[str, Any] = {
         "edit the prime_exit_criterion statement or the named row's `acceptance:`: drop the "
         "approval of a doc and name the check that proves its content — {detail}",
     ),
+    "prime-exit-unwired": (
+        True,
+        "edit the prime_exit_criterion statement: name the entry point (`coordinator-invoke <op>`) "
+        "and a runnable check (`python -m pytest <test file>` passes) — {detail}",
+    ),
     "test-runner-out-of-role-row": (
         True,
         "per named row: if it writes nothing, add `performer: em`; if it writes files, keep its "
@@ -451,6 +457,21 @@ _FINDING_CLASSIFICATION: Dict[str, Any] = {
         True,
         "append the clause verbatim to the named row's `acceptance:` beside its existing "
         "command — {detail}",
+    ),
+    "anchor-check-malformed": (
+        True,
+        "rewrite each named check as grep -c -F '<exact text>' <file> or a real regex with .*; "
+        "rerun it at HEAD; never delete the premise — {detail}",
+    ),
+    "anchor-check-mismatch": (
+        True,
+        "rerun each named check at HEAD: fix the pattern, or correct the claim if the premise "
+        "is false — {detail}",
+    ),
+    "anchor-check-unevaluable": (
+        True,
+        "rewrite each named check into the in-process form (no shell operator, no pipe) and rerun it "
+        "at HEAD until its output meets expect — {detail}",
     ),
     "census-unscreenable": (
         True,
@@ -1875,6 +1896,53 @@ def _capabilities(fm: Dict[str, Any]) -> Dict[str, Any]:
     return _pass("capabilities key declared")
 
 
+def _anchors(fm: Dict[str, Any], text: str, edge_root: Any) -> Dict[str, Any]:
+    """Dry-run every declared anchor check against the tree at authoring time.
+
+    An elided (`...`) pattern that fails is ``anchor-check-malformed``; any other failing
+    check is ``anchor-check-mismatch``. No spine rows are passed (the run-wrote-file refusal
+    is readiness's concern) and ``base_ref`` is ``premise_ref`` (run base, else HEAD): the tree is never
+    read as landed; one cat-file spawn.
+    """
+    if not fm.get("anchor_premises"):
+        return _pass("no anchor premises declared")
+    from coordinator_core.ops import _anchor_check, _anchor_premise
+    from coordinator_core.ops.dispatch_emit.ask_contract import UNCOMMITTED_NOT_LANDED, premise_ref
+
+    root = Path(edge_root)
+    anchors, _findings = _anchor_premise.parse_anchors(fm, root)
+    verdicts = _anchor_premise.anchor_verdicts(anchors, [], [], text, root, base_ref=premise_ref(root, fm.get("sizing_object")))
+    by_id = {a["id"]: a for a in anchors}
+    malformed: List[str] = []
+    mismatched: List[str] = []
+    uncommitted: List[str] = []
+    unevaluable: List[str] = []
+    for entry in verdicts:
+        if entry["verdict"] == "RESOLVES":
+            continue
+        if str(entry.get("observed") or "").startswith(UNCOMMITTED_NOT_LANDED):
+            uncommitted.append(f"{entry['id']}: {entry['observed']}")
+            continue
+        check = by_id[entry["id"]].get("check") or {}
+        pattern = _anchor_check.elided_pattern(str(check.get("command") or ""))
+        if pattern is not None:
+            malformed.append(f"{entry['id']}: {pattern}")
+        elif entry["verdict"] == "CONTRADICTED":
+            observed = " then ".join(str(entry["observed"]).split()) or "none"
+            mismatched.append(f"{entry['id']}: observed {observed}, expected {check.get('expect')}")
+        elif entry["verdict"] is None and entry.get("observed"):
+            unevaluable.append(f"{entry['id']}: {entry['observed']}")
+    if malformed:
+        return _defect("anchor-check-malformed", "; ".join(malformed))
+    if mismatched:
+        return _defect("anchor-check-mismatch", "; ".join(mismatched))
+    if unevaluable:
+        return _defect("anchor-check-unevaluable", "; ".join(unevaluable))
+    if uncommitted:
+        return _defect("anchor-check-uncommitted", "; ".join(uncommitted))
+    return _pass("every declared anchor check holds at the base ref")
+
+
 def _gitignored_writes(rows: List[Dict[str, Any]], gitignored_roots: frozenset) -> Dict[str, Any]:
     """Refuse a row whose every declared write lies under a root the gated tree's ``.gitignore`` ignores.
 
@@ -2390,12 +2458,14 @@ def _prime_exit(
             "prime_exit_criterion.derived_from is still a scaffold placeholder "
             "(replace it with the sizing object or goal KR it derives from)",
         )
+    inherits_accepted = False
     if repo_root is not None:
         sizing_exit = _read_sizing_exit_criterion(repo_root, str(derived_from).strip())
         accepted = sizing_exit.get("accepted") if isinstance(sizing_exit, dict) else None
         # The engine's skip record names no accepted criterion for a plan to inherit; this leaf
         # stays free of ops imports (test_import_closure_gains_no_ops_module).
         if isinstance(accepted, dict) and accepted.get("source") != "engine-size-rule":
+            inherits_accepted = True
             sizing_statement = str(sizing_exit.get("statement") or "")
             if " ".join(str(statement).split()) != " ".join(sizing_statement.split()):
                 return _defect(
@@ -2404,6 +2474,10 @@ def _prime_exit(
                     f"exit_criterion on {derived_from} (plans inherit an accepted "
                     "criterion; they do not re-author it)",
                 )
+    if not inherits_accepted:
+        unwired = wiring_clause_refusal(statement)
+        if unwired is not None:
+            return _defect("prime-exit-unwired", unwired)
     shape_defect = _falsifier_shape_defect(fm, repo_root)
     if shape_defect is not None:
         return _defect("prime-exit-falsifier-shape", shape_defect)
@@ -3127,6 +3201,7 @@ def evaluate_plan(
             "EXECUTOR_MERGE": _executor_merge(raw_spine_rows(text)),
             "GITIGNORED_WRITES": _gitignored_writes(raw_spine_rows(text), gitignored_roots),
             "CAPABILITIES": _capabilities(fm),
+            "ANCHOR": _anchors(fm, text, edge_root),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
             "RULINGS": _rulings(text, edge_root),
             "REGISTER": _register(

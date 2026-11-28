@@ -29,7 +29,7 @@ from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-MET = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
+MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 
 
 def _git(root, *a):
@@ -143,7 +143,7 @@ def _terminal(root, token, resume):
         {
             "script_path": SCRIPT2, "run_id": RUN2, "run_token": token, "incomplete_chunks": [],
             "inline_review": _REVIEWED, "session_id": _SID, "resume_ledger": resume,
-            "ledger_verdict": {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]},
+            "ledger_verdict": {"items": [{"id": "R1", "status": "met", "wired": True}]},
         },
         repo_root=root / ".git",
     )

@@ -26,16 +26,55 @@ _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+def halted_refire_call(script_path: Any) -> Optional[str]:
+    """The refire call of a warp run whose script returned a halt, else None.
+
+    `script_path` is `<root>/scratch/warp/<run_id>.workflow.mjs`; one read of that run's `halted.json`.
+    A returned halt replays to the same halt, so its marker's `next_action` call (else the sizing's
+    fire call) is the progress. A usage-limit halt, a non-halted marker, an unreadable marker or any
+    other script path answers None: the resume stands.
+    """
+    if not isinstance(script_path, str) or not script_path.endswith(".workflow.mjs"):
+        return None
+    try:
+        from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
+
+        norm = script_path.replace("\\", "/")
+        marker_dir = "/" + RUN_DIR_ROOT + "/"
+        head, sep, name = norm.rpartition(marker_dir)
+        run_id = name[: -len(".workflow.mjs")]
+        if not sep or not run_id or "/" in run_id or not _SAFE_ID_RE.match(run_id):
+            return None
+        with open(os.path.join(head, str(RECORD_DIR_ROOT), run_id, "halted.json"), encoding="utf-8") as fh:
+            marker = json.load(fh)
+        if not isinstance(marker, dict) or marker.get("status") != "halted" or marker.get("halted") == "usage_limit":
+            return None
+        action = marker.get("next_action")
+        call = action.get("call") if isinstance(action, dict) else None
+        if isinstance(call, str) and call and not _CONTROL_CHAR_RE.search(call):
+            return call
+        from coordinator_core.warp_fire import fire_command
+
+        sizing = marker.get("sizing_rel")
+        return fire_command(sizing if isinstance(sizing, str) and sizing else None)
+    except Exception:
+        return None
+
+
 def render_resume_call(run_id: Any, script_path: Any, args: Any,
                        task_id: Optional[str] = None) -> str:
     """The exact `Workflow({...})` resume call; "" when run_id is unusable.
 
     Every value goes through json.dumps so an embedded quote cannot splice text. A missing
     scriptPath degrades to a named-unknown form. With task_id the call is prefixed by the
-    TaskStop of the old task.
+    TaskStop of the old task. A run whose script returned a halt gets its marker's refire call
+    instead (`halted_refire_call`): resuming it only replays the halt.
     """
     if not isinstance(run_id, str) or not run_id or _CONTROL_CHAR_RE.search(run_id):
         return ""
+    refire = halted_refire_call(script_path)
+    if refire:
+        return refire
     prefix = f'TaskStop({{"task_id": {json.dumps(task_id)}}}) then ' if task_id else ""
     if (not isinstance(script_path, str) or not script_path
             or _CONTROL_CHAR_RE.search(script_path)):

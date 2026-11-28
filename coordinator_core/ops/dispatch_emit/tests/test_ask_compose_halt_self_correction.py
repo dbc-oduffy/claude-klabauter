@@ -67,7 +67,8 @@ def test_halt_reverify_carries_the_test_runner_clause_and_degrades_on_a_bare_hos
 def test_halt_reverify_names_the_one_engine_test_command_and_no_rerun_loop():
     js = _recover()
     prompt = js[js.index("Halt re-verify leg (review).") : js.index(f"label: '{HALT_REVERIFY_LABEL}'")]
-    assert prompt.count("coordinator_core.ops.test_leg_run") == 1
+    assert prompt.count("coordinator_core.ops.test_leg_remote") == 1
+    assert "coordinator_core.ops.test_leg_run" not in prompt
     assert "halt-reverify-tests.json" in prompt
     for word in ("alone", "background", "sleep", "poll"):
         assert word not in prompt.lower()
@@ -261,3 +262,33 @@ def test_the_xs_arm_runs_no_self_correction_leg():
     assert out["calls"] == []
     assert out["halted"]["halted"] == "review_blocked"
     assert out["halted"]["self_correction"] is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_failing_test_halt_carries_a_reason_and_blocking_items_the_trailer_reads():
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_NO_REASON_TEXT, halted_record_message
+
+    out = _drive(reverify=_red(_OWNED), replies={}, arm=ask_compose.ARM_XS)
+    halted = out["halted"]
+
+    assert _OWNED in halted["reason"]
+    assert halted["blocking_items"] == [{"id": _OWNED, "remaining": halted["gaps"][0].split(": ", 1)[1]}]
+    message = halted_record_message("r1", halted)
+    assert _OWNED in message and HALT_NO_REASON_TEXT not in message
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_blocked_slice_halt_carries_a_reason_and_blocking_items_the_trailer_reads():
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_NO_REASON_TEXT, halted_record_message
+
+    wave = [{"slice_id": "s1", "verdict": "BLOCKED", "findings": 2, "applied": 0, "sidecar_path": "rev/s1.md"}]
+    out = _drive(reverify=_green(), wave=wave, replies={}, arm=ask_compose.ARM_XS)
+    halted = out["halted"]
+
+    assert "s1" in halted["reason"]
+    assert halted["blocking_items"] == [{"id": "slice:s1", "remaining": "2 unapplied finding(s), see rev/s1.md"}]
+    message = halted_record_message("r1", halted)
+    assert "s1" in message
+    assert HALT_NO_REASON_TEXT not in message

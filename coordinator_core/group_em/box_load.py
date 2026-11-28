@@ -1,8 +1,9 @@
-"""Box load alarm primitives for the group-em watch: load5, top processes, session attribution.
+"""Box load alarm primitives for the group-em watch: load5, busy percent, top processes, session attribution.
 
 Every reader is injectable and no function raises. One `ps` spawn per
 `top_processes` call (bounded by `_PS_TIMEOUT_S`); no per-process lsof/cwd
-spawn -- cwd comes only from the session records.
+spawn -- cwd comes only from the session records. `cpu_busy_pct` and
+`windows_top_processes` spawn nothing.
 """
 
 from __future__ import annotations
@@ -10,6 +11,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -76,6 +79,118 @@ def _ps_rows(run: Callable) -> list[dict]:
             continue
     rows.sort(key=lambda r: r["pcpu"], reverse=True)
     return rows
+
+
+def _windows_system_times() -> Optional[tuple]:
+    """(idle, kernel, user) FILETIME ticks from GetSystemTimes; kernel includes idle."""
+    import ctypes
+    from ctypes import wintypes
+
+    idle, kern, user = (wintypes.FILETIME() for _ in range(3))
+    fn = ctypes.WinDLL("kernel32").GetSystemTimes
+    fn.argtypes = [ctypes.POINTER(wintypes.FILETIME)] * 3
+    fn.restype = wintypes.BOOL
+    if not fn(ctypes.byref(idle), ctypes.byref(kern), ctypes.byref(user)):
+        return None
+    return tuple((f.dwHighDateTime << 32) | f.dwLowDateTime for f in (idle, kern, user))
+
+
+def _linux_cpu_times() -> Optional[tuple]:
+    """(idle, total) jiffies from the aggregate `cpu` line of /proc/stat; idle includes iowait."""
+    with open("/proc/stat", "r", encoding="ascii") as fh:
+        fields = [int(x) for x in fh.readline().split()[1:]]
+    return fields[3] + (fields[4] if len(fields) > 4 else 0), sum(fields[:8])
+
+
+def cpu_busy_pct(
+    prev,
+    *,
+    platform: Optional[str] = None,
+    read_windows: Callable = _windows_system_times,
+    read_linux: Callable = _linux_cpu_times,
+    load5: Callable = read_load5,
+    cores: Callable = core_count,
+) -> tuple[Optional[float], dict]:
+    """`(busy_pct, state)`: whole-box CPU busy percent since `prev`, and the state to pass next tick.
+
+    Windows (GetSystemTimes) and Linux (/proc/stat) report the delta against `prev`;
+    the first sample has no delta and returns None. macOS reports load5/cores. Spawns
+    nothing; a failed read returns None and a state that restarts the delta.
+    """
+    plat = platform or ("windows" if _IS_WINDOWS else sys.platform)
+    prev = prev if isinstance(prev, dict) else {}
+    try:
+        if plat in ("windows", "win32"):
+            times = read_windows()
+            if times is None:
+                return None, {}
+            idle, kern, user = times
+            cur = {"idle": idle, "total": kern + user}
+        elif plat == "darwin":
+            lo = load5()
+            return (None if lo is None else round(100.0 * lo / max(cores(), 1), 1)), {}
+        else:
+            times = read_linux()
+            if times is None:
+                return None, {}
+            cur = {"idle": times[0], "total": times[1]}
+    except Exception:
+        return None, {}
+    try:
+        d_total = cur["total"] - prev["total"]
+        d_idle = cur["idle"] - prev["idle"]
+    except (KeyError, TypeError):
+        return None, cur
+    if d_total <= 0:
+        return None, cur
+    return round(max(0.0, min(100.0, 100.0 * (d_total - d_idle) / d_total)), 1), cur
+
+
+def windows_top_processes(
+    prev,
+    n: int = 8,
+    *,
+    host=None,
+    clock: Callable[[], float] = time.monotonic,
+) -> tuple[list[dict], dict]:
+    """`(rows, state)`: top `n` as `{pid, ppid, pcpu, comm}` from a spawn-free process snapshot.
+
+    pcpu is CPU seconds consumed since `prev` over elapsed seconds, percent of one core
+    (the `ps` convention). State is `{"t", "cpu": {pid: (ctime, cpu_s)}}`; a pid absent
+    from `prev`, or whose ctime changed (pid reuse), has no delta and is omitted, so the
+    first call returns no rows. Never raises.
+    """
+    try:
+        if host is None:
+            from coordinator_core.bash_guards._host_probe import HostPrimitives as host
+        now = clock()
+        procs = host.snapshot() or []
+        cur: dict = {}
+        rows: list[dict] = []
+        old = prev.get("cpu", {}) if isinstance(prev, dict) else {}
+        elapsed = now - prev["t"] if isinstance(prev, dict) and "t" in prev else 0.0
+        for p in procs:
+            if not p.pid:
+                continue
+            cpu = host.cpu_time_s(p.pid)
+            if cpu is None:
+                continue
+            cur[p.pid] = (p.ctime, cpu)
+            before = old.get(p.pid)
+            if before is None or before[0] != p.ctime or elapsed <= 0:
+                continue
+            rows.append(
+                {
+                    "pid": p.pid,
+                    "ppid": p.ppid,
+                    "pcpu": round(max(0.0, cpu - before[1]) / elapsed * 100.0, 1),
+                    "comm": p.name,
+                }
+            )
+        rows.sort(key=lambda r: r["pcpu"], reverse=True)
+        return rows[: max(n, 0)], {"t": now, "cpu": cur}
+    except Exception:
+        return [], {}
 
 
 def read_sessions(config_dir: Optional[Path] = None) -> dict[int, dict]:

@@ -1,4 +1,5 @@
-"""Two-slot (current, previous) suite-run record per repo and named collection.
+"""Suite-run record per repo and named collection: rotating (current, previous) slots plus a
+``main`` slot overwritten by each run recorded while ``.git/HEAD`` is on main/master.
 
 Pure stdlib plus one lazy engine import (``session.core.pid_alive``), no git spawn.
 Layout: ``<repo>/.coordinator-local/suite-runs/<collection>/{current,previous}.{json,log}``. Writers are serialized by the suite mutex; every write is
@@ -17,6 +18,8 @@ from pathlib import Path, PurePosixPath
 
 SCHEMA = "suite-run-record/1"
 SLOTS = ("current", "previous")
+MAIN_SLOT = "main"
+MAIN_BRANCHES = ("main", "master")
 COLLECTION_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
 NAMED_FIELDS = (
     "schema", "repo_root", "collection", "command", "head_sha", "started_at", "ended_at",
@@ -129,8 +132,11 @@ def write_run(rec_dir: str | os.PathLike, fields: dict, log_path: str | os.PathL
         os.replace(log_path, tmp_log)
     else:
         tmp_log.write_text("", encoding="utf-8")
+    on_main = read_branch(body["repo_root"]) in MAIN_BRANCHES
     for ext, staged in (("log", tmp_log), ("json", tmp_json)):
         _demote_current(rec, ext)
+        if on_main:
+            _write_main_slot(rec, ext, ordered, log_text)
         os.replace(staged, rec / f"current.{ext}")
     _sweep_orphan_tmp_logs(rec)
     try:
@@ -247,12 +253,51 @@ def _demote_current(rec: Path, ext: str) -> None:
     os.replace(staged, prev)
 
 
+def _write_main_slot(rec: Path, ext: str, record: dict, log_text: str) -> None:
+    """Overwrite ``main.<ext>`` with the run being recorded; json names ``main.log``."""
+    tmp = rec / f"{MAIN_SLOT}.{ext}.tmp"
+    if ext == "json":
+        tmp.write_text(json.dumps({**record, "log": f"{MAIN_SLOT}.log"}, indent=2) + "\n", encoding="utf-8")
+    else:
+        tmp.write_text(log_text, encoding="utf-8")
+    os.replace(tmp, rec / f"{MAIN_SLOT}.{ext}")
+
+
 def read_runs(rec_dir: str | os.PathLike) -> dict:
     """``{"current": dict|None, "previous": dict|None}``; unreadable slots read as None."""
+    return {slot: _read_slot(rec_dir, slot) for slot in SLOTS}
+
+
+def read_main(rec_dir: str | os.PathLike) -> dict | None:
+    """The main-slot record (last run recorded while on main), None when absent or unreadable."""
+    return _read_slot(rec_dir, MAIN_SLOT)
+
+
+def _read_slot(rec_dir: str | os.PathLike, slot: str) -> dict | None:
+    try:
+        return json.loads((Path(rec_dir) / f"{slot}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def classify_failures(ids, previous: dict | None, main: dict | None, current: dict | None = None) -> dict:
+    """Per failing id, red at the previous banked record or at main (``pre-existing``) versus
+    ``new``. Returns ``{"previous_sha", "main_sha", "ids": {id: {"status", "red_at"}}}``;
+    ``red_at`` lists ``previous``/``main``. A record without parsed ``failed_ids`` has no red ids.
+    A ``main`` that is the ``current`` run itself (recorded while on main) is no baseline: every
+    failure would read pre-existing against itself, so it is dropped."""
+    def red(rec: dict | None) -> set:
+        return set((rec or {}).get("failed_ids") or ())
+
+    if main and current and all(main.get(k) == current.get(k) for k in ("started_at", "head_sha")):
+        main = None
+    prev_red, main_red = red(previous), red(main)
     out: dict = {}
-    for slot in SLOTS:
-        try:
-            out[slot] = json.loads((Path(rec_dir) / f"{slot}.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            out[slot] = None
-    return out
+    for fid in ids:
+        at = [n for n, s in (("previous", prev_red), ("main", main_red)) if fid in s]
+        out[fid] = {"status": "pre-existing" if at else "new", "red_at": at}
+    return {
+        "previous_sha": (previous or {}).get("head_sha"),
+        "main_sha": (main or {}).get("head_sha"),
+        "ids": out,
+    }

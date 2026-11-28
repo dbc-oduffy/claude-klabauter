@@ -52,7 +52,7 @@ def run(tmp_path: Path) -> tuple[Path, Path, list]:
 def _verdict(ids: list, **extra) -> dict:
     """The first register row judged not_met with ``extra``; every other row met."""
     return {"items": [
-        {"id": i, "status": "not_met", **extra} if n == 0 else {"id": i, "status": "met"}
+        {"id": i, "status": "not_met", **extra} if n == 0 else {"id": i, "status": "met", "evidence": "verified"}
         for n, i in enumerate(ids)
     ]}
 

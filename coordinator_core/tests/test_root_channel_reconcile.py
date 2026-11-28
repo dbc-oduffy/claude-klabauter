@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import subprocess
 
 import pytest
 
@@ -86,7 +88,7 @@ def test_a_present_path_that_disagrees_is_still_a_finding(
     report = rcr.reconcile("claude_klabauter", machine_local)
 
     assert not report.ok
-    assert report.absent_targets == ()
+    assert report.absent_targets == ("pointer .claude-klabauter-root",)
     assert len(report.disagreeing) == 2
 
 
@@ -152,6 +154,27 @@ def test_cli_exits_nonzero_on_a_split_and_zero_when_reconciled(
     assert rcr.main(["--machine-local", str(machine_local)]) == 0
 
 
+def test_every_flagged_channel_carries_a_runnable_remedy_and_agreeing_roots_none(
+    tmp_path: Path, machine_local: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = tmp_path / "klabauter"
+    real.mkdir()
+    _stub_registry(monkeypatch, {"repos.claude_klabauter": str(real)})
+    pointer = machine_local / ".claude-klabauter-root"
+    pointer.write_text(str(tmp_path / "gone"), encoding="utf-8")
+    report = rcr.reconcile("claude_klabauter", machine_local)
+
+    lines = rcr.remedy_lines([report])
+
+    assert len(lines) == 2
+    pointer_line = next(l for l in lines if str(pointer) in l)
+    assert str(real) in pointer_line and "write_text" in pointer_line
+    registry_line = next(l for l in lines if "repos.claude_klabauter" in l)
+    assert "machine-local" in registry_line and " set " in registry_line
+    assert "/slash" not in "".join(lines) and "/coordinator:" not in "".join(lines)
+    assert rcr.remedy_lines([rcr.reconcile("claude_klabauter", machine_local)]) == []
+
+
 def test_message_cites_no_decision_record(
     tmp_path: Path, machine_local: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -166,24 +189,62 @@ def test_message_cites_no_decision_record(
     assert "DR-" not in message
 
 
-def test_registry_set_with_pointer_missing_is_a_finding(
+def test_missing_pointer_has_a_remedy_but_unconfigured_roots_stay_silent(
     tmp_path: Path, machine_local: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    real = tmp_path / "klabauter"
-    real.mkdir()
-    _stub_registry(monkeypatch, {"repos.claude_klabauter": str(real)})
-
+    _stub_registry(monkeypatch, {"repos.claude_klabauter": str(tmp_path)})
     report = rcr.reconcile("claude_klabauter", machine_local)
+    pointer = machine_local / ".claude-klabauter-root"
 
     assert not report.ok
-    assert report.missing_pointers == ("pointer .claude-klabauter-root",)
     message = rcr.disagreement_message([report])
-    assert message is not None and str(machine_local / ".claude-klabauter-root") in message
-
-
-def test_pointer_missing_with_registry_unset_is_not_a_finding(
-    machine_local: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+    assert message is not None and str(pointer) in message
+    assert "write_text" in message
     _stub_registry(monkeypatch, {})
+    assert rcr.disagreement_message([rcr.reconcile("claude_klabauter", machine_local)]) is None
 
-    assert rcr.reconcile("claude_klabauter", machine_local).ok
+
+def test_ambiguous_existing_roots_require_an_operator_choice(tmp_path: Path) -> None:
+    channels = tuple(
+        rcr.Channel(f"registry {key}", key, str(tmp_path / key), True)
+        for key in ("first", "second")
+    )
+    report = rcr.RootReconciliation("root", "purpose", channels,
+                                    tuple(c.name for c in channels), ())
+    lines = rcr.remedy_lines([report])
+    assert len(lines) == 2
+    assert all("<real-root>" in line for line in lines)
+
+
+def test_registry_remedy_names_the_installed_script(
+    tmp_path: Path, machine_local: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings home"))
+    _stub_registry(monkeypatch, {"repos.claude_klabauter": str(tmp_path / "gone")})
+
+    message = rcr.disagreement_message([rcr.reconcile("claude_klabauter", machine_local)])
+
+    assert message is not None
+    assert str(tmp_path / "settings home" / "bin" / "machine-local") in message
+    assert "<settings-home>" not in message
+
+
+def test_pointer_remedy_runs_with_shell_metacharacters(tmp_path: Path) -> None:
+    root = tmp_path / "example-operator $root café"
+    root.mkdir()
+    pointer = tmp_path / "example-operator $settings" / ".claude-klabauter-root"
+    channel = rcr.Channel("pointer .claude-klabauter-root", str(pointer), None, False)
+    command = rcr._remedy_for(channel, str(root))
+    argv = (
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+         "-Command", command]
+        if os.name == "nt" else ["/bin/sh", "-c", command]
+    )
+
+    result = subprocess.run(
+        argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert pointer.read_text(encoding="utf-8") == str(root)

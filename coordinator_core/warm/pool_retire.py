@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import threading
 import time
 from typing import Any, Callable, Optional
@@ -61,17 +63,9 @@ def retire_worker(
     on_done: Optional[Callable[[], None]] = None,
     ledger: Optional[list] = None,
 ) -> bool:
-    """Retire the one worker `pid` of `pool`; its peers keep serving and the pool is not broken.
+    """Retire the one worker `pid` of `pool` while its peers keep serving; True when it was taken out.
 
-    True when `pid` was taken out of the pool (its executor slot is free, so the next submit that
-    finds no idle worker spawns a fresh one); False, nothing touched, when `pid` is not a worker of
-    this pool or the pool cannot respawn dynamically (a fork context). Returns at once; the worker
-    is terminated on a helper thread, after the executor manager has stopped watching its sentinel
-    (a watched worker dying marks the whole executor broken and fails every neighbour). `future`,
-    the op that worker held, is dropped from the executor's pending items and resolved with
-    `WorkerRetired`. Safe only for a worker mid-op: an idle worker may own the shared call-queue
-    lock, which a terminated holder would leave locked. `on_done` runs once the worker is gone.
-    Raises nothing.
+    trap: safe only for a worker mid-op; an idle worker may own the shared call-queue lock.
     """
     try:
         procs = getattr(pool, "_processes", None)
@@ -79,25 +73,26 @@ def retire_worker(
             return False
         if not getattr(pool, "_safe_to_dynamically_spawn_children", False):
             return False
-        proc = procs.pop(pid, None)
+        with getattr(pool, "_shutdown_lock", None) or contextlib.nullcontext():
+            proc = procs.pop(pid, None)
         if proc is None:
             return False
         if ledger is not None:
             ledger.append(proc)
         _resolve_retired_future(pool, future)
-        threading.Thread(
-            target=_finish_worker,
-            args=(
-                proc,
-                getattr(pool, "_executor_manager_thread_wakeup", None),
-                getattr(pool, "_executor_manager_thread", None),
-                on_done,
-            ),
-            daemon=True,
-            name="worker-retire",
-        ).start()
+        finish_args = (
+            proc,
+            getattr(pool, "_executor_manager_thread_wakeup", None),
+            getattr(pool, "_executor_manager_thread", None),
+            on_done,
+        )
+        try:
+            threading.Thread(target=_finish_worker, args=finish_args, daemon=True, name="worker-retire").start()
+        except Exception:  # noqa: BLE001 -- no thread to spare: terminate inline, never leave a live unlisted worker
+            _finish_worker(*finish_args)
         return True
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("retire_worker failed for pid %s: %s", pid, type(exc).__name__)
         return False
 
 

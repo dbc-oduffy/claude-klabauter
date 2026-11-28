@@ -100,6 +100,8 @@ __all__ = [
     "replace_engine_stamp_bytes",
     "write_engine_stamp",
     "read_engine_stamp_sha",
+    "ENGINE_SOURCE_HEAD_FILENAME",
+    "read_engine_source_head",
     "ENGINE_PUBLISHED_AT_FILENAME",
     "read_engine_published_at",
     "PublishLag",
@@ -469,6 +471,30 @@ def read_engine_stamp_sha(engine_root: Path) -> Optional[str]:
     # straight to a git history check that cannot resolve a decorated ref.
     sha = sha.split("+", 1)[0].strip()
     return sha or None
+
+
+#: Sibling of `ENGINE_STAMP_FILENAME`: one `sha:<source-head>` line naming the
+#: source commit the publish round was pinned to. Never folded into the stamp
+#: (its bytes feed `compute_client_token`, and this value moves every commit).
+#: Pinned equal to `publish.py`'s `_ENGINE_SOURCE_HEAD_FILENAME` and
+#: `round.py`'s writer by `coordinator/bin/tests/test_publish_engine_stamp.py`.
+ENGINE_SOURCE_HEAD_FILENAME = "_engine_source_head"
+
+
+def read_engine_source_head(engine_root: Path) -> Optional[str]:
+    """Source sha the engine's last publish round was pinned to, or `None`
+    for a missing/unreadable/malformed record (an older mirror)."""
+    try:
+        raw = (
+            (Path(engine_root) / "coordinator_core" / ENGINE_SOURCE_HEAD_FILENAME)
+            .read_text(encoding="utf-8")
+            .strip()
+        )
+    except (OSError, ValueError):
+        return None
+    if not raw.startswith("sha:"):
+        return None
+    return raw[len("sha:"):].strip() or None
 
 
 #: Sibling of `ENGINE_STAMP_FILENAME`: one ISO-8601 UTC line naming when the

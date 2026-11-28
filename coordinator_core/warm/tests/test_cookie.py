@@ -687,3 +687,66 @@ def test_restricted_token_is_refused_a_credential_file_without_the_grant(tmp_pat
     plain = tmp_path / "plain-secret"
     plain.write_text("x")
     assert read_file_as_restricted_token(plain, [logon, "S-1-1-0"]) is False
+
+
+_SANDBOX_SID = "S-1-5-21-1-2-3-1006"
+_FOREIGN_SID = "S-1-5-21-1-2-3-1007"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DACL semantics are Windows-only")
+def test_mint_grants_each_sandbox_principal_read_only_and_nobody_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.warm import election
+
+    monkeypatch.setattr(election, "sandbox_principal_sids", lambda: (_SANDBOX_SID,))
+    cookie.mint(tmp_path, port=1234)
+    for path in (cookie.cookie_path(tmp_path), cookie.curl_config_path(tmp_path)):
+        aces = _aces(path)
+        assert [(a[0], a[2]) for a in aces if a[5] == _SANDBOX_SID] == [("A", "FR")]
+        assert not [a for a in aces if a[5] == _FOREIGN_SID]
+        for ace in aces:
+            assert ace[5] not in _BROAD_TRUSTEES
+        assert not [a for a in _aces(path.parent) if a[5] == _SANDBOX_SID]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DACL semantics are Windows-only")
+def test_sandbox_grant_is_idempotent_and_keeps_the_logon_ace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.warm import election
+
+    monkeypatch.setattr(election, "sandbox_principal_sids", lambda: (_SANDBOX_SID,))
+    cookie.mint(tmp_path)
+    path = cookie.cookie_path(tmp_path)
+    before = _aces(path)
+    assert cookie.grant_logon_sid_read(path) is True
+    assert _aces(path) == before
+    assert len([a for a in before if a[5] == _SANDBOX_SID]) == 1
+    assert len([a for a in before if a[5] == election.current_logon_sid()]) == 1
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DACL semantics are Windows-only")
+def test_sandbox_principal_alone_is_granted_when_there_is_no_logon_sid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.warm import election
+
+    monkeypatch.setattr(election, "current_logon_sid", lambda: None)
+    monkeypatch.setattr(election, "sandbox_principal_sids", lambda: (_SANDBOX_SID,))
+    cookie.mint(tmp_path)
+    assert [a[2] for a in _aces(cookie.cookie_path(tmp_path)) if a[5] == _SANDBOX_SID] == ["FR"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DACL semantics are Windows-only")
+def test_no_logon_and_no_sandbox_principal_grants_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.warm import election
+
+    monkeypatch.setattr(election, "current_logon_sid", lambda: None)
+    monkeypatch.setattr(election, "sandbox_principal_sids", lambda: ())
+    cookie.mint(tmp_path)
+    path = cookie.cookie_path(tmp_path)
+    assert cookie.grant_logon_sid_read(path) is False
+    assert not [a for a in _aces(path) if a[5] in (_SANDBOX_SID, _FOREIGN_SID)]

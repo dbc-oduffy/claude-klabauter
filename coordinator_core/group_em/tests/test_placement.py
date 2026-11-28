@@ -150,3 +150,53 @@ def test_candidates_skips_stale_boxes_and_unmeasured_job_types(tmp_path: Path) -
 
 def test_candidates_never_raises_on_an_empty_registry(tmp_path: Path) -> None:
     assert placement.candidates("render", directory=tmp_path / "nowhere", home=tmp_path / "nohome") == []
+
+
+def _membership(home, twins):
+    import json
+
+    d = home / "unimatrix" / "membership"
+    d.mkdir(parents=True, exist_ok=True)
+    members = [
+        {"box": name, "host": f"{name}.local", "user": "u", **({"same_hardware_as": t} if t else {})}
+        for name, t in twins.items()
+    ]
+    (d / "snapshot.json").write_text(
+        json.dumps({"collective": "unimatrix", "epoch": 1, "prev_digest": "0", "members": members}), encoding="utf-8"
+    )
+    (d / "snapshot.sig").write_bytes(b"unverified")
+
+
+def test_same_hardware_twins_only_newest_fresh_sample_is_a_candidate(tmp_path: Path) -> None:
+    primary, home = _fleet(tmp_path)
+    capacity_record.stamp({**_sample("Windows"), "box_id": "win"}, tmp_path / "win", now=1005.0)
+    _membership(home, {"win": None, "lin": ["win"], "mac": None})  # one-sided declaration pairs both
+    rows = placement.candidates("render", directory=primary, home=home, now=1010.0)
+    assert [r["box_id"] for r in rows] == ["win"]
+    later = placement.candidates("render", directory=primary, home=home, now=1000.0 + capacity_record.TTL_S + 3)
+    assert [r["box_id"] for r in later] == ["win"]  # lin's sample went stale, win's is newer
+
+
+def test_without_the_field_both_twins_stay_candidates(tmp_path: Path) -> None:
+    primary, home = _fleet(tmp_path)
+    _membership(home, {"win": None, "lin": None})
+    assert [r["box_id"] for r in placement.candidates("render", directory=primary, home=home, now=1010.0)] == ["lin", "win"]
+    (home / "unimatrix" / "membership" / "snapshot.json").write_text("garbage", encoding="utf-8")
+    assert [r["box_id"] for r in placement.candidates("render", directory=primary, home=home, now=1010.0)] == ["lin", "win"]
+
+
+def test_place_run_refuses_a_box_whose_twin_holds_a_fresh_sample(tmp_path: Path) -> None:
+    primary, home = _fleet(tmp_path)
+    capacity_record.stamp({**_sample("Linux"), "box_id": "lin"}, tmp_path / "lin", now=1000.0)
+    _membership(home, {"win": ["lin"], "lin": None, "mac": None})
+    now = capacity_record.read({"box_id": "win", "root": tmp_path / "win"}, 1010.0)["ts"] + 10
+    # equal sample ages: the lower box id (lin) is the booted twin, so win is refused
+    res = placement.place_run("r", {}, box_id="win", directory=primary, home=home, now=now)
+    assert res == {"ok": False, "reason": "same_hardware_booted", "box_id": "win"}
+    assert placement.read_intake(tmp_path / "win") == []
+    ok = placement.place_run("r", {}, box_id="lin", directory=primary, home=home, now=now)
+    assert ok["ok"] and ok["placement"]["box_id"] == "lin"
+    implicit = placement.place_run("r2", {}, directory=primary, home=home, now=now)
+    assert implicit["ok"] and implicit["placement"]["box_id"] == "lin"
+    # no membership: unchanged behaviour
+    assert placement.place_run("r3", {}, box_id="win", directory=primary, home=tmp_path / "nohome", now=now)["ok"]

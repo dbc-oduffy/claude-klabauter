@@ -138,3 +138,25 @@ def test_route_verdict_independent_on_match():
     assert "did not decide it" in v["message"]
     none_basis = rp.route_verdict(rp.parse("plan", None), "plan", reason=None, basis=None)
     assert none_basis["basis"] is None
+
+
+_RESEARCH = {"class": "scouts", "appetite": "small", "questions": []}
+
+
+def test_honours_plan_true_for_plan_preference_with_no_missing_fact():
+    sizing = {"route": "spec-dispatch", "research": dict(_RESEARCH)}
+    assert rp.honours_plan(rp.parse("plan", "mechanism and paths"), sizing) is True
+
+
+def test_honours_plan_false_when_research_names_a_question_or_missing_fact():
+    pref = rp.parse("plan", None)
+    assert not rp.honours_plan(pref, {"route": "plan", "research": {"questions": ["which op?"]}})
+    assert not rp.honours_plan(pref, {"route": "plan", "research": {"missing_facts": ["the target path"]}})
+    assert rp.honours_plan(pref, {"route": "plan", "research": {"questions": ["  "]}})
+
+
+def test_honours_plan_false_for_research_route_other_preference_or_empty():
+    sizing = {"route": "research", "research": dict(_RESEARCH)}
+    assert not rp.honours_plan(rp.parse("plan", None), sizing)
+    assert not rp.honours_plan(rp.parse("roadmap", None), {"route": "plan", "research": {}})
+    assert not rp.honours_plan(rp.parse(None, "why"), {"route": "plan"})

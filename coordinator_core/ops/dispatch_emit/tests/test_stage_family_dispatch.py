@@ -173,14 +173,7 @@ def test_sizing_unknown_family_is_refused(repo) -> None:
         stage(repo, run_id="x1run", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
 
 
-BINDING_YAML = """schema_version: 1
-runner: coordinator:family-stage-runner
-fallback: claude
-roles:
-  scout: grok
-  research: agy
-  review: codex
-"""
+CHOSEN = {"scout": "grok", "research": "agy", "review": "codex"}
 
 _ROLE_PLAN = """---
 deliverable_id: dlv-family-abc123
@@ -225,32 +218,15 @@ Rows with stage roles.
 """
 
 
-@pytest.fixture
-def content_root(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from coordinator_core.ops.emit import doe_drift
-
-    root = tmp_path_factory.mktemp("doe")
-    (root / "coordinator" / "pipelines").mkdir(parents=True)
-    (root / "coordinator" / "pipelines" / "stage-family-binding.yaml").write_text(
-        BINDING_YAML, encoding="utf-8", newline="\n"
-    )
-    monkeypatch.setattr(doe_drift, "resolve_doe_clone", lambda: root)
-    return root
-
-
 def _stage_roles(repo, **sizing_over):
-    from coordinator_core.ops.dispatch_emit import stage_family_binding
-
     (repo / PLAN_REL).write_text(_ROLE_PLAN, encoding="utf-8", newline="\n")
     sizing = _sizing(**sizing_over)
     (repo / SIZING_REL).write_text(yaml.safe_dump(sizing), encoding="utf-8", newline="\n")
     return stage(repo, run_id="r1", plan_rel=PLAN_REL, commit_sizing_rel=SIZING_REL)
 
 
-def test_opted_in_role_rows_route_to_the_runner_from_the_binding(repo, content_root) -> None:
-    from coordinator_core.ops.dispatch_emit import stage_family_binding
-
-    m = _stage_roles(repo, stage_family_binding=stage_family_binding.BINDING_REF)
+def test_role_rows_route_to_the_runner_from_the_sizing_stage_families(repo) -> None:
+    m = _stage_roles(repo, stage_families=CHOSEN)
     by_id = {r.id: r for r in m.rows}
     for rid, fam, role in (("C1", "grok", "scout"), ("C2", "agy", "research"), ("C3", "codex", "review")):
         row = by_id[rid]
@@ -266,13 +242,7 @@ def test_opted_in_role_rows_route_to_the_runner_from_the_binding(repo, content_r
     assert "family" not in plain.to_json() and "fallback_brief_path" not in plain.to_json()
 
 
-def test_role_rows_without_opt_in_never_open_the_binding(repo, monkeypatch: pytest.MonkeyPatch) -> None:
-    from coordinator_core.ops.dispatch_emit import stage_family_binding
-
-    def boom(*a, **k):
-        raise AssertionError("binding read without opt-in")
-
-    monkeypatch.setattr(stage_family_binding, "load", boom)
+def test_role_rows_without_an_em_choice_run_claude(repo) -> None:
     m = _stage_roles(repo)
     assert {r.agent_type for r in m.rows} == {"coordinator:executor"}
     for r in m.rows:
@@ -280,37 +250,27 @@ def test_role_rows_without_opt_in_never_open_the_binding(repo, monkeypatch: pyte
         assert not (repo / r.brief_path).with_name(f"{r.id}.fallback.md").exists()
 
 
-def test_binding_read_once_per_stage_call(repo, content_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    from coordinator_core.ops.dispatch_emit import stage_family_binding
+def test_a_role_the_em_left_out_runs_claude_not_a_refusal(repo) -> None:
+    m = _stage_roles(repo, stage_families={"review": "codex"})
+    by_id = {r.id: r for r in m.rows}
+    assert by_id["C3"].agent_type == stage_family.RUNNER_AGENT and by_id["C3"].family == "codex"
+    for rid in ("C1", "C2", "C4"):
+        assert by_id[rid].agent_type == "coordinator:executor" and by_id[rid].family == ""
 
-    real, calls = stage_family_binding.load, []
-    monkeypatch.setattr(stage_family_binding, "load", lambda *a, **k: calls.append(1) or real(*a, **k))
-    _stage_roles(repo, stage_family_binding=stage_family_binding.BINDING_REF)
-    assert len(calls) == 1
 
-
-def test_sizing_naming_family_and_binding_is_refused(repo, content_root) -> None:
-    from coordinator_core.ops.dispatch_emit import stage_family_binding
-
+def test_sizing_naming_family_and_stage_families_is_refused(repo) -> None:
     with pytest.raises(AskStageError, match="keep one"):
-        _stage_roles(repo, family="codex", stage_family_binding=stage_family_binding.BINDING_REF)
+        _stage_roles(repo, family="codex", stage_families=CHOSEN)
 
 
-def test_unknown_binding_value_is_refused(repo, content_root) -> None:
-    with pytest.raises(AskStageError, match="stage-family-binding.yaml"):
-        _stage_roles(repo, stage_family_binding="somewhere-else")
+def test_retired_binding_key_is_refused_naming_stage_families(repo) -> None:
+    with pytest.raises(AskStageError, match="stage_families"):
+        _stage_roles(repo, stage_family_binding="coordinator-content-repo:retired")
 
 
-def test_unresolvable_content_root_is_a_typed_refusal(repo, monkeypatch: pytest.MonkeyPatch) -> None:
-    from coordinator_core.ops.dispatch_emit import stage_family_binding
-    from coordinator_core.ops.emit import doe_drift
-
-    def gone():
-        raise doe_drift.DoeResolveError("no clone")
-
-    monkeypatch.setattr(doe_drift, "resolve_doe_clone", gone)
-    with pytest.raises(AskStageError, match="engine.working_repos.content_root"):
-        _stage_roles(repo, stage_family_binding=stage_family_binding.BINDING_REF)
+def test_unknown_stage_families_family_is_refused(repo) -> None:
+    with pytest.raises(AskStageError, match="stage_families"):
+        _stage_roles(repo, stage_families={"review": "gpt"})
 
 
 def test_manifest_row_round_trips_family_fields_and_omits_them_when_empty() -> None:

@@ -95,6 +95,42 @@ def test_nested_retry_does_not_retry_again(stall_env, tmp_path: Path) -> None:
         go.retry_past_stall(tmp_path, lambda: go.retry_past_stall(tmp_path, lambda: _read(tmp_path)))
 
 
+def _list_packs(common: Path, n: int) -> None:
+    names = [f"pack-{i:040d}.idx" for i in range(n)]
+    go._PACK_LISTING_CACHE[str(common)] = (None, go._PackListing(common / "objects" / "pack", names, [0] * n))
+
+
+@pytest.fixture
+def listed_400(tmp_path: Path):
+    _list_packs(tmp_path, 400)
+    yield tmp_path
+    go._PACK_LISTING_CACHE.clear()
+
+
+def test_always_stalling_read_spends_two_walls_not_four(stall_env, listed_400: Path) -> None:
+    _, walls, script = stall_env
+    script.extend([True] * 8)
+    with pytest.raises(go.PackReadStalled):
+        go.retry_past_stall(listed_400, lambda: _read(listed_400))
+    assert len(walls) == 2
+    assert go._NO_INNER_RETRY.get() is False
+
+
+def test_stall_once_inside_retry_returns_the_object(stall_env, listed_400: Path) -> None:
+    _, walls, script = stall_env
+    script.append(True)
+    assert go.retry_past_stall(listed_400, lambda: _read(listed_400)) == "payload"
+    assert walls == [True, False]
+
+
+def test_bare_read_outside_retry_past_stall_retries_inside_the_wall(stall_env, listed_400: Path) -> None:
+    _, walls, script = stall_env
+    script.append(True)
+    assert _read(listed_400) == "payload"
+    assert walls == [True, False]
+    assert go._PACK_STALL_UNTIL == {}
+
+
 def test_healthy_call_runs_once(tmp_path: Path) -> None:
     calls = []
     assert go.retry_past_stall(tmp_path, lambda: calls.append(1) or "ok") == "ok"

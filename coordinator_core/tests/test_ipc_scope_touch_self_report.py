@@ -27,7 +27,8 @@ coordinatorstaff-eng-48c065fd.md) — F1/F2/F3/F4 regression coverage:
   10. test_cross_repo_declaration_does_not_steal_target_repos_native_claim
       (F1, security-critical — the reviewer's own reproduced attack, closed)
   11. test_declared_directory_is_rejected_not_recorded  (F2)
-  12. test_declaration_list_over_cap_is_truncated_and_logged  (F4)
+  12. test_declaration_list_past_the_old_cap_is_recorded_whole  (no count cap)
+      test_many_repos_* / test_foreign_claim_* — foreign-repo rule (c)
   13. test_real_queue_append_write_lands_in_compute_offer_safe_paths
       (F3 — drives the REAL queue.append handler end-to-end)
   14. test_real_queue_promote_cross_repo_write_is_skipped_and_surfaced
@@ -229,10 +230,10 @@ def test_recording_failure_is_fail_open(tmp_path, monkeypatch):
     (repo / "written.yaml").write_text("z")
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-6")
 
-    def _boom(sid, path, cwd=None):
+    def _boom(sink, events):
         raise OSError("simulated disk failure")
 
-    monkeypatch.setattr(scope, "touch", _boom)
+    monkeypatch.setattr(touch_record, "append_events", _boom)
 
     with _RegistryScope({"test.declare": _handler_declaring([str(repo / "written.yaml")])}):
         d = _dispatch("test.declare", {}, origin_worktree=repo)
@@ -322,6 +323,7 @@ def test_cross_repo_declaration_does_not_steal_target_repos_native_claim(
     scope.touch("sid-bnative", "shared.yaml", cwd=str(repo_b))
 
     monkeypatch.setattr(liveness, "live_session_ids", _live_dirs_liveness)
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: sid == "sid-bnative")
 
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -348,9 +350,10 @@ def test_cross_repo_declaration_does_not_steal_target_repos_native_claim(
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-bnative")
     assert core.resolve_session_id(cwd=str(repo_b)) == "sid-bnative"
 
-    assert any(
-        "outside the caller's own repo" in rec.message for rec in caplog.records
-    )
+    assert d["result"][ipc._TOUCH_SKIPPED_CLAIMED_KEY] == {
+        os.path.realpath(repo_b): 1
+    }
+    assert any("claimed by a live session" in rec.message for rec in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -382,9 +385,9 @@ def test_declared_directory_is_rejected_not_recorded(tmp_path, monkeypatch, capl
     )
 
 
-def test_declaration_list_over_cap_is_truncated_and_logged(tmp_path, monkeypatch, caplog):
+def test_declaration_list_past_the_old_cap_is_recorded_whole(tmp_path, monkeypatch, caplog):
     repo = _make_repo(tmp_path)
-    n = ipc._MAX_DECLARED_TOUCH_PATHS + 4
+    n = 100
     paths = []
     for i in range(n):
         p = repo / f"over-cap-{i}.txt"
@@ -399,24 +402,12 @@ def test_declaration_list_over_cap_is_truncated_and_logged(tmp_path, monkeypatch
     with _RegistryScope({"test.declare": _handler_declaring(paths)}):
         d = _dispatch("test.declare", {}, origin_worktree=repo)
     assert "error" not in d
+    assert d["result"] == {"ok": True}
 
     events = _touched_events(repo, "sid-12")
-    assert len(events) == ipc._MAX_DECLARED_TOUCH_PATHS
-    assert any(
-        "exceeding the cap" in rec.message for rec in caplog.records
-        if rec.levelno == logging.WARNING
-    )
-
-
-def _handler_declaring_with_bound(paths, bound):
-    def _h(params, ctx=None, repo_root=None):
-        return {
-            "ok": True,
-            _SCOPE_TOUCH_PATHS_KEY: list(paths),
-            ipc._SCOPE_TOUCH_MAX_PATHS_KEY: bound,
-        }
-
-    return _h
+    assert sorted(e.path for e in events) == sorted(f"over-cap-{i}.txt" for i in range(n))
+    assert all(e.kind == touch_record.KIND_WRITE for e in events)
+    assert not any(rec.levelno >= logging.WARNING for rec in caplog.records)
 
 
 def _write_files(repo, n, prefix="bound"):
@@ -434,92 +425,118 @@ def _session_env(monkeypatch, sid):
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
 
 
-def test_default_cap_is_unchanged():
-    assert ipc._MAX_DECLARED_TOUCH_PATHS == 16
-
-
-def test_declared_bound_claims_every_path_without_truncation_warning(tmp_path, monkeypatch, caplog):
+def test_batch_takes_one_lock_and_one_append_per_repo(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
-    n = ipc._DECLARED_TOUCH_BOUND_CEILING - 5
-    assert n > ipc._MAX_DECLARED_TOUCH_PATHS
-    paths = _write_files(repo, n)
-    _session_env(monkeypatch, "sid-bound-all")
-    caplog.set_level(logging.INFO, logger="coordinator_core.ipc")
-
-    handler = _handler_declaring_with_bound(paths, ipc._DECLARED_TOUCH_BOUND_CEILING)
-    with _RegistryScope({"test.declare": handler}):
-        d = _dispatch("test.declare", {}, origin_worktree=repo)
-    assert "error" not in d
-
-    assert len(_touched_events(repo, "sid-bound-all")) == n
-    assert not any("exceeding the cap" in rec.message for rec in caplog.records)
-
-
-def test_bound_key_never_reaches_the_wire(tmp_path, monkeypatch):
-    repo = _make_repo(tmp_path)
-    paths = _write_files(repo, 1)
-    _session_env(monkeypatch, "sid-bound-wire")
-
-    handler = _handler_declaring_with_bound(paths, ipc._DECLARED_TOUCH_BOUND_CEILING)
-    with _RegistryScope({"test.declare": handler}):
-        d = _dispatch("test.declare", {}, origin_worktree=repo)
-    assert d["result"] == {"ok": True}
-
-    def lone_bound(params, ctx=None, repo_root=None):
-        return {"ok": True, ipc._SCOPE_TOUCH_MAX_PATHS_KEY: ipc._DECLARED_TOUCH_BOUND_CEILING}
-
-    with _RegistryScope({"test.lone": lone_bound}):
-        d = _dispatch("test.lone", {}, origin_worktree=repo)
-    assert d["result"] == {"ok": True}
-
-
-@pytest.mark.parametrize("kind", ["ceiling_plus_one", "zero", "true", "string"])
-def test_unusable_bound_records_the_default_cap_and_warns(tmp_path, monkeypatch, caplog, kind):
-    repo = _make_repo(tmp_path)
-    bound = {
-        "ceiling_plus_one": ipc._DECLARED_TOUCH_BOUND_CEILING + 1,
-        "zero": 0,
-        "true": True,
-        "string": "48",
-    }[kind]
-    paths = _write_files(repo, ipc._MAX_DECLARED_TOUCH_PATHS + 4)
-    sid = f"sid-bad-bound-{kind}"
-    _session_env(monkeypatch, sid)
-    caplog.set_level(logging.INFO, logger="coordinator_core.ipc")
-
-    with _RegistryScope({"test.declare": _handler_declaring_with_bound(paths, bound)}):
-        d = _dispatch("test.declare", {}, origin_worktree=repo)
-    assert "error" not in d
-
-    assert len(_touched_events(repo, sid)) == ipc._MAX_DECLARED_TOUCH_PATHS
-    assert any(
-        "unusable touch bound" in rec.message
-        for rec in caplog.records
-        if rec.levelno == logging.WARNING
-    )
-
-
-def test_bounded_batch_takes_the_lock_once(tmp_path, monkeypatch):
-    repo = _make_repo(tmp_path)
-    n = ipc._DECLARED_TOUCH_BOUND_CEILING - 5
-    paths = _write_files(repo, n)
+    paths = _write_files(repo, 60)
     _session_env(monkeypatch, "sid-bound-lock")
 
-    real = ipc.held_lock
+    real_lock = ipc.held_lock
     acquisitions = []
 
-    def counting(*args, **kwargs):
+    def counting_lock(*args, **kwargs):
         acquisitions.append(args)
-        return real(*args, **kwargs)
+        return real_lock(*args, **kwargs)
 
-    monkeypatch.setattr(ipc, "held_lock", counting)
+    real_append = touch_record.append_events
+    appends = []
 
-    handler = _handler_declaring_with_bound(paths, ipc._DECLARED_TOUCH_BOUND_CEILING)
-    with _RegistryScope({"test.declare": handler}):
+    def counting_append(sink, events):
+        events = list(events)
+        appends.append(len(events))
+        return real_append(sink, events)
+
+    monkeypatch.setattr(ipc, "held_lock", counting_lock)
+    monkeypatch.setattr(touch_record, "append_events", counting_append)
+
+    with _RegistryScope({"test.declare": _handler_declaring(paths)}):
         _dispatch("test.declare", {}, origin_worktree=repo)
 
-    assert len(_touched_events(repo, "sid-bound-lock")) == n
+    assert len(_touched_events(repo, "sid-bound-lock")) == 60
     assert len(acquisitions) == 1
+    assert appends == [60]
+
+
+def _make_repos(tmp_path, n):
+    repos = []
+    for i in range(n):
+        d = tmp_path / f"repo-{i}"
+        d.mkdir()
+        repos.append(_make_repo(d))
+    return repos
+
+
+def _spread_files(repos, total):
+    paths = []
+    for i in range(total):
+        p = repos[i % len(repos)] / f"spread-{i}.txt"
+        p.write_text(str(i))
+        paths.append(str(p))
+    return paths
+
+
+def test_many_repos_records_every_path_in_its_own_sink(tmp_path, monkeypatch):
+    repos = _make_repos(tmp_path, 3)
+    paths = _spread_files(repos, 40)
+    _session_env(monkeypatch, "sid-many")
+
+    with _RegistryScope({"test.declare": _handler_declaring(paths)}):
+        d = _dispatch("test.declare", {}, origin_worktree=repos[0])
+    assert "error" not in d
+    assert d["result"] == {"ok": True}
+
+    total = 0
+    for idx, repo in enumerate(repos):
+        events = _touched_events(repo, "sid-many")
+        want = sorted(f"spread-{i}.txt" for i in range(40) if i % 3 == idx)
+        assert sorted(e.path for e in events) == want
+        assert all(e.kind == touch_record.KIND_WRITE for e in events)
+        total += len(events)
+    assert total == 40
+    assert (_sdir(repos[0], "sid-many") / "meta.json").is_file()
+    for foreign in repos[1:]:
+        assert not (_sdir(foreign, "sid-many") / "meta.json").exists()
+
+
+def test_many_repos_live_claim_is_skipped_counted_and_left_alone(tmp_path, monkeypatch):
+    repos = _make_repos(tmp_path, 3)
+    paths = _spread_files(repos, 40)
+    claimed_rel = "spread-1.txt"
+    foreign = repos[1]
+    core.init("sid-native", cwd=str(foreign))
+    scope.touch("sid-native", claimed_rel, cwd=str(foreign))
+    native_before = (_sdir(foreign, "sid-native") / "touch-record.jsonl").read_bytes()
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: sid == "sid-native")
+    _session_env(monkeypatch, "sid-many-claim")
+
+    with _RegistryScope({"test.declare": _handler_declaring(paths)}):
+        d = _dispatch("test.declare", {}, origin_worktree=repos[0])
+    assert "error" not in d
+
+    assert d["result"] == {
+        "ok": True,
+        ipc._TOUCH_SKIPPED_CLAIMED_KEY: {os.path.realpath(foreign): 1},
+    }
+    assert sum(len(_touched_events(r, "sid-many-claim")) for r in repos) == 39
+    assert claimed_rel not in {e.path for e in _touched_events(foreign, "sid-many-claim")}
+    assert (_sdir(foreign, "sid-native") / "touch-record.jsonl").read_bytes() == native_before
+    assert not (_sdir(foreign, "sid-many-claim") / "meta.json").exists()
+
+
+def test_foreign_claim_of_a_dead_session_does_not_block_recording(tmp_path, monkeypatch):
+    repos = _make_repos(tmp_path, 2)
+    foreign = repos[1]
+    target = foreign / "dead-claim.txt"
+    target.write_text("z")
+    core.init("sid-dead", cwd=str(foreign))
+    scope.touch("sid-dead", "dead-claim.txt", cwd=str(foreign))
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: False)
+    _session_env(monkeypatch, "sid-live-caller")
+
+    with _RegistryScope({"test.declare": _handler_declaring([str(target)])}):
+        d = _dispatch("test.declare", {}, origin_worktree=repos[0])
+
+    assert d["result"] == {"ok": True}
+    assert [e.path for e in _touched_events(foreign, "sid-live-caller")] == ["dead-claim.txt"]
 
 
 def test_real_queue_append_write_lands_in_compute_offer_safe_paths(tmp_path, monkeypatch):
@@ -589,5 +606,5 @@ def test_real_queue_promote_cross_repo_write_is_skipped_and_surfaced(
     assert _touched_events(repo, "sid-14") == []
 
     assert any(
-        "outside the caller's own repo" in rec.message for rec in caplog.records
+        "no owning git repo" in rec.message for rec in caplog.records
     )

@@ -16,6 +16,34 @@ def test_creates_scratch_and_warp_and_returns_scratch(tmp_path: Path) -> None:
     assert out == tmp_path / "scratch" and (out / "warp").is_dir()
 
 
+def test_creates_the_state_warp_record_home(tmp_path: Path) -> None:
+    ss.ensure_sandbox_scratch(tmp_path)
+    assert (tmp_path / "state" / "warp").is_dir()
+
+
+def test_a_ready_scratch_warp_does_not_skip_a_missing_state_warp(tmp_path: Path) -> None:
+    (tmp_path / "scratch" / "warp").mkdir(parents=True)
+    (tmp_path / "state").mkdir()
+    ss.ensure_sandbox_scratch(tmp_path)
+    assert (tmp_path / "state" / "warp").is_dir()
+
+
+def test_refused_state_warp_raises_typed_refusal_naming_that_directory(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "scratch" / "warp").mkdir(parents=True)
+    real = Path.mkdir
+
+    def deny_state(self, *a, **kw):
+        if self.name == "warp" and self.parent.name == "state":
+            raise PermissionError(5, "Access is denied")
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "mkdir", deny_state)
+    with pytest.raises(ss.ScratchGrantRefused) as ei:
+        ss.ensure_sandbox_scratch(tmp_path)
+    assert ei.value.path == tmp_path / "state" / "warp"
+
+
 def test_ready_path_spawns_nothing_and_does_not_mkdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ss.ensure_sandbox_scratch(tmp_path)
 

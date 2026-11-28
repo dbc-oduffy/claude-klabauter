@@ -395,6 +395,139 @@ def test_held_refreshes_the_heartbeat_until_release(monkeypatch) -> None:
     assert not suite_mutex.lock_path().exists()
 
 
+_SLEEPER = "import time; time.sleep(60)"
+_LAUNCHER = (
+    "import subprocess, sys, time\n"
+    "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+    "print(c.pid, flush=True)\n"
+    "time.sleep(60)\n"
+)
+
+
+def _reap(*procs) -> None:
+    for proc in procs:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                stream.close()
+
+
+def _wait_stale_then_acquire(peer: str, deadline_secs: float = 15.0) -> bool:
+    import time
+
+    end = time.monotonic() + deadline_secs
+    while time.monotonic() < end:
+        if suite_mutex.acquire(peer, "pytest"):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _fast_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(suite_mutex, "HEARTBEAT_INTERVAL_SECS", 0.05)
+    monkeypatch.setattr(suite_mutex, "HEARTBEAT_STALE_SECS", 1.0)
+
+
+def test_held_tracking_a_live_child_keeps_the_lock_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+    import sys
+    import time
+
+    _fast_heartbeat(monkeypatch)
+    child = subprocess.Popen([sys.executable, "-c", _SLEEPER])
+    try:
+        with suite_mutex.held("wrapper", "pytest", track_pid=child.pid) as acquired:
+            assert acquired is True
+            time.sleep(1.6)
+            assert suite_mutex.acquire("peer", "pytest") is False
+            assert suite_mutex.holder()["owner"] == "wrapper"
+    finally:
+        _reap(child)
+
+
+def test_peer_acquires_after_the_tracked_child_dies_under_a_live_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+    import sys
+
+    _fast_heartbeat(monkeypatch)
+    child = subprocess.Popen([sys.executable, "-c", _SLEEPER])
+    try:
+        with suite_mutex.held("wrapper", "pytest", track_pid=child.pid) as acquired:
+            assert acquired is True
+            child.kill()
+            child.wait()
+            assert _wait_stale_then_acquire("peer") is True
+            assert suite_mutex.holder()["owner"] == "peer"
+        assert suite_mutex.holder()["owner"] == "peer"
+    finally:
+        _reap(child)
+
+
+def test_peer_acquires_after_the_real_test_dies_under_a_live_launcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+    import sys
+
+    _fast_heartbeat(monkeypatch)
+    launcher = subprocess.Popen([sys.executable, "-c", _LAUNCHER], stdout=subprocess.PIPE, text=True)
+    try:
+        import psutil
+
+        grandchild = psutil.Process(int(launcher.stdout.readline()))
+        with suite_mutex.held("wrapper", "pytest", track_pid=launcher.pid) as acquired:
+            assert acquired is True
+            doomed = grandchild.children(recursive=True) + [grandchild]
+            for victim in doomed:
+                victim.kill()
+            psutil.wait_procs(doomed, timeout=10)
+            assert launcher.poll() is None
+            assert _wait_stale_then_acquire("peer") is True
+    finally:
+        _reap(launcher)
+
+
+_BUSY_ROOT = (
+    "import subprocess, sys, time\n"
+    "subprocess.run([sys.executable, '-c', 'pass'])\n"
+    "print('spawned', flush=True)\n"
+    "while True:\n"
+    "    sum(i * i for i in range(20000))\n"
+)
+
+
+def test_busy_root_that_dropped_its_last_child_keeps_the_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+    import sys
+    import time
+
+    _fast_heartbeat(monkeypatch)
+    root = subprocess.Popen([sys.executable, "-c", _BUSY_ROOT], stdout=subprocess.PIPE, text=True)
+    try:
+        assert root.stdout.readline().strip() == "spawned"
+        with suite_mutex.held("wrapper", "pytest", track_pid=root.pid) as acquired:
+            assert acquired is True
+            time.sleep(1.6)
+            assert suite_mutex.acquire("peer", "pytest") is False
+            assert suite_mutex.holder()["owner"] == "wrapper"
+    finally:
+        _reap(root)
+
+
+def test_held_without_track_pid_heartbeats_regardless_of_children(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    _fast_heartbeat(monkeypatch)
+    with suite_mutex.held("wrapper", "pytest") as acquired:
+        assert acquired is True
+        time.sleep(1.6)
+        assert suite_mutex.acquire("peer", "pytest") is False
+
+
 def test_dead_pid_past_stale_ttl_still_expires_at_the_short_ceiling() -> None:
     _write_meta(
         pid=_dead_pid(),

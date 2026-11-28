@@ -30,12 +30,12 @@ def test_empty_scope_carries_no_launcher() -> None:
 
 def test_review_edits_targets_use_the_launcher_with_diff_limited_allow() -> None:
     text = _steps(base="a" * 40)
-    assert text.count(f"-m {MODULE}") >= 2
+    assert text.count(f"-m {MODULE}") == 1
+    assert "through the same scoped-test launcher command given above" in text
     assert "only for targets covering files in that edited set" in text
 
 
-def test_foreign_repo_gets_claude_klabauters_interpreter(tmp_path: Path) -> None:
-    import sys
-
+def test_foreign_repo_gets_the_installed_launcher(tmp_path: Path) -> None:
     cmd = emit._launcher_command(["t.py"], "t.py", tmp_path)
-    assert cmd.startswith(sys.executable.replace("\\", "/"))
+    assert cmd == "scoped-pytest --allow t.py -- t.py"
+    assert MODULE not in cmd

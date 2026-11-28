@@ -32,10 +32,35 @@ TOOL_OWNED_DOTFILES = frozenset(
 )
 
 # Names carry no path, so the message holds one fact plus one alternative.
-DENY_REASON = (
-    "DENY: file created directly in the home dir. "
-    "Instead: write under <repo>/scratch/ or the session scratchpad."
-)
+_INSTEAD = "Instead: write under <repo>/scratch/ or the session scratchpad."
+DENY_REASON = "DENY: file created directly in the home dir. " + _INSTEAD
+
+
+_CLAUDE_JSON_WRITER = "Claude Code"
+
+
+def writer_of(target: str) -> Optional[str]:
+    """The tool that writes `target`'s basename into the home dir, or None when it is not a known tool artifact.
+
+    `.claude.json` and its atomic-write temp (`.claude.json.tmp.<pid>.<id>`), lock and backup siblings are
+    Claude Code's; no other name is attributed.
+    """
+    name = _basename(target).casefold()
+    if name == ".claude.json" or name.startswith(".claude.json."):
+        return _CLAUDE_JSON_WRITER
+    return None
+
+
+def _basename(target: str) -> str:
+    return target.strip().replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def deny_reason(target: str) -> str:
+    """`DENY_REASON`, naming the writer when `writer_of(target)` knows it."""
+    writer = writer_of(target)
+    if writer is None:
+        return DENY_REASON
+    return f"DENY: {_basename(target)} is {writer}'s file, created directly in the home dir. " + _INSTEAD
 
 
 def _norm(path: str) -> str:

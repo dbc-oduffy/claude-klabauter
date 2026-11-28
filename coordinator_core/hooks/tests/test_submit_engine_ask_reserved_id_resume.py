@@ -86,8 +86,7 @@ def test_resume_hook_process_time_stays_under_the_bar(tmp_path, seams):  # noqa:
 def _drop_index_entry(root: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run as hr
 
-    hr.rebuild_lookup_index(root)
-    (root / hr.LOOKUP_INDEX_DIR / hr._lookup_key(SIZING_REL) / HALTED_ID).unlink()
+    (root / hr.LOOKUP_INDEX_DIR / hr._lookup_key(SIZING_REL) / HALTED_ID).unlink(missing_ok=True)
 
 
 def test_a_lookup_index_miss_still_resumes_the_halted_run_over_the_parent(tmp_path, seams):  # noqa: F811

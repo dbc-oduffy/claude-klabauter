@@ -35,6 +35,7 @@ import tempfile
 import textwrap
 import time
 import uuid
+from typing import Callable
 
 from coordinator_core.temp_layout import managed_tempdir
 
@@ -213,10 +214,10 @@ if IS_WINDOWS:
             raise ctypes.WinError(ctypes.get_last_error())
         return [i for i in range(ctypes.sizeof(ctypes.c_size_t) * 8) if proc_mask.value >> i & 1]
 
-    def _apply_background_affinity(process_handle) -> None:
-        """Pin the (still suspended) child to `background_cpus`; descendants inherit the mask."""
+    def _apply_background_affinity(process_handle, cpus) -> None:
+        """Pin the (still suspended) child to `cpus` (from `background_leg_cpus`); descendants inherit the mask."""
         mask = 0
-        for cpu in background_cpus(_current_affinity_cpus()):
+        for cpu in cpus or ():
             mask |= 1 << cpu
         if mask and not _kernel32.SetProcessAffinityMask(process_handle, mask):
             raise ctypes.WinError(ctypes.get_last_error())
@@ -292,6 +293,72 @@ def background_cpus(allowed) -> list[int]:
     return allowed[: max(1, len(allowed) // BACKGROUND_CPU_DIVISOR)]
 
 
+TEST_AFFINITY_KEY = "engine.test_affinity"
+
+
+class LegAffinityError(ValueError):
+    """`engine.test_affinity` is unparseable or names no cpu this process may use."""
+
+
+def parse_cpu_list(text: str) -> set[int]:
+    """`"0-15"`, `"0,2,4-6"` -> the cpu ids; raises `LegAffinityError` naming `TEST_AFFINITY_KEY` on anything else."""
+    cpus: set[int] = set()
+    for part in str(text).split(","):
+        lo, sep, hi = part.strip().partition("-")
+        try:
+            first = int(lo)
+            last = int(hi) if sep else first
+        except ValueError:
+            first, last = 0, -1
+        if first < 0 or last < first:
+            raise LegAffinityError(
+                f"{TEST_AFFINITY_KEY}={text!r} is not a cpu list (e.g. '0-15' or '0,2,4-6')"
+            )
+        cpus.update(range(first, last + 1))
+    return cpus
+
+
+def _allowed_cpus() -> list[int] | None:
+    """The cpus this process may run on; None where the OS exposes no affinity (macOS)."""
+    if IS_WINDOWS:
+        return _current_affinity_cpus()
+    if hasattr(os, "sched_getaffinity") and hasattr(os, "sched_setaffinity"):
+        return sorted(os.sched_getaffinity(0))
+    return None
+
+
+def configured_leg_cpus(allowed=None) -> list[int] | None:
+    """`engine.test_affinity` as a sorted cpu list, or None when the key is unset or the OS cannot pin.
+
+    Read in-process from the machine-local registry (no spawn). The result is the configured set
+    intersected with `allowed` (default: this process's own affinity); an empty intersection raises
+    `LegAffinityError`. Engine test-leg spawn sites apply it so the leg and its descendants inherit it.
+    """
+    from coordinator_core.machine_resolver import registry_get
+
+    value = (registry_get(TEST_AFFINITY_KEY) or "").strip()
+    if not value:
+        return None
+    wanted = parse_cpu_list(value)
+    allowed = _allowed_cpus() if allowed is None else list(allowed)
+    if allowed is None:
+        return None
+    usable = sorted(wanted & set(allowed))
+    if not usable:
+        raise LegAffinityError(
+            f"{TEST_AFFINITY_KEY}={value!r} names no cpu this process may use (allowed: {sorted(allowed)})"
+        )
+    return usable
+
+
+def background_leg_cpus() -> list[int] | None:
+    """A background leg's cpu set: `configured_leg_cpus()` when the key is set, else `background_cpus` of the allowed set."""
+    allowed = _allowed_cpus()
+    if allowed is None:
+        return None
+    return configured_leg_cpus(allowed) or background_cpus(allowed)
+
+
 def _background_env(env) -> dict:
     """`env` (default: this process's) with each BLAS pool capped at one thread unless the caller set it."""
     from coordinator_core.testing.spawn_depth import BLAS_THREAD_KEYS
@@ -302,10 +369,8 @@ def _background_env(env) -> dict:
     return out
 
 
-def _posix_background_preexec(prior):
-    cpus = None
-    if hasattr(os, "sched_getaffinity") and hasattr(os, "sched_setaffinity"):
-        cpus = set(background_cpus(os.sched_getaffinity(0)))
+def _posix_background_preexec(prior) -> "Callable[[], None]":
+    cpus = set(background_leg_cpus() or ())
 
     def preexec() -> None:
         if prior is not None:
@@ -432,7 +497,9 @@ def spawn_in_capped_job(
     refuse fork for every peer session of the same user.
     """
     kwargs = dict(popen_kwargs or {})
+    leg_cpus = None
     if background:
+        leg_cpus = background_leg_cpus()
         kwargs["env"] = _background_env(kwargs.get("env"))
     if not IS_WINDOWS:
         kwargs["start_new_session"] = True
@@ -473,7 +540,7 @@ def spawn_in_capped_job(
             )
             _assign_to_job(job, int(proc._handle))
         if background:
-            _apply_background_affinity(int(proc._handle))
+            _apply_background_affinity(int(proc._handle), leg_cpus)
         _resume_suspended_process(proc.pid)
     except BaseException:
         if proc is not None and proc.poll() is None:

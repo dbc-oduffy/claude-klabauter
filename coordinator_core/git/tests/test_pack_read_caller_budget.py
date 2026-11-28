@@ -26,7 +26,10 @@ def env(monkeypatch: pytest.MonkeyPatch):
 
     def fake_run_bounded(key, work, deadline, default):
         walls.append(deadline)
-        return default if (stall.pop(0) if stall else False) else work()
+        if stall.pop(0) if stall else False:
+            clock.now += deadline
+            return default
+        return work()
 
     monkeypatch.setattr(go, "run_bounded", fake_run_bounded)
     yield clock, walls, stall
@@ -91,17 +94,38 @@ def test_budget_expiry_raises_without_arming_the_stall_latch(env, tmp_path: Path
 
 
 def test_full_wall_stall_still_arms_the_latch_with_or_without_budget(env, tmp_path: Path) -> None:
-    _, _, stall = env
-    stall.append(True)
+    _, walls, stall = env
+    stall.extend([True, True])
     with pytest.raises(go.PackReadDeadline):
         _read(tmp_path)
     assert str(tmp_path) in go._PACK_STALL_UNTIL
+    assert len(walls) == 2
     go._PACK_STALL_UNTIL.clear()
-    stall.append(True)
+    stall.extend([True, True])
     with go.read_budget(60.0):
         with pytest.raises(go.PackReadDeadline):
             _read(tmp_path)
     assert str(tmp_path) in go._PACK_STALL_UNTIL
+
+
+def test_budget_caps_the_retry_wall_too_and_never_arms_the_latch(env, tmp_path: Path) -> None:
+    _, walls, stall = env
+    full = go.PACK_READ_DEADLINE_SECS
+    stall.extend([True, True])
+    with go.read_budget(full * 1.5):
+        with pytest.raises(go.PackReadDeadline, match="budget exhausted"):
+            _read(tmp_path)
+    assert walls == [pytest.approx(full), pytest.approx(full * 0.5)]
+    assert go._PACK_STALL_UNTIL == {}
+
+
+def test_budget_spent_by_the_first_wall_skips_the_retry(env, tmp_path: Path) -> None:
+    _, walls, stall = env
+    stall.extend([True, True])
+    with go.read_budget(go.PACK_READ_DEADLINE_SECS):
+        with pytest.raises(go.PackReadDeadline, match="budget exhausted"):
+            _read(tmp_path)
+    assert len(walls) == 1
 
 
 def test_budgeted_pack_read_has_no_reopen_retry(env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

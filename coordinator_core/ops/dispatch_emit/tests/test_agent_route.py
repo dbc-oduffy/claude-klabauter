@@ -334,6 +334,18 @@ def test_routed_type_with_no_model_raises(env) -> None:
     with pytest.raises(ar.RouteAdmissionError) as exc:
         ar.route_rows([_row()], env)
     assert "agent_model" in str(exc.value)
+    assert "not found in installed plugins" not in str(exc.value)
+
+
+def test_routed_type_absent_from_installed_plugins_names_the_plugin(env) -> None:
+    ghost = "ghost-plugin:ue-ghost"
+    cls = {**_table()["work_classes"][0], "agent_type": ghost}
+    _write(env, _table(work_classes=[cls], agent_tool_ranges={ghost: [MCP]}))
+    with pytest.raises(ar.RouteAdmissionError) as exc:
+        ar.route_rows([_row()], env)
+    msg = str(exc.value)
+    assert "not found in installed plugins (is ghost-plugin installed?)" in msg
+    assert "no model pin" not in msg
 
 
 def test_routed_class_agent_lacking_its_own_required_tools_raises(env) -> None:

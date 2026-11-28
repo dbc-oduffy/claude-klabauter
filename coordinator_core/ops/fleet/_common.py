@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -960,8 +961,12 @@ ARCHIVE_ROOT_SUBDIRS: Tuple[str, ...] = (
 )
 
 
+MONTH_DIR_RE = re.compile(r"\d{4}-\d{2}")
+
+
 def collect_live_handoff_paths(worktree_root: Path) -> List[Path]:
-    """Return sorted absolute paths for all live handoffs in state/handoffs/*.md.
+    """Return sorted absolute paths for all live handoffs in state/handoffs/*.md
+    and state/handoffs/YYYY-MM/*.md.
 
     Named export shared by archive_handoffs (C1) and archive_shipped_handoffs (C2).
 
@@ -1007,6 +1012,10 @@ def collect_live_handoff_paths(worktree_root: Path) -> List[Path]:
         return []
     try:
         entries = list(handoff_dir.iterdir())
+        # Live batons also sit one level down at state/handoffs/YYYY-MM/.
+        for sub in entries:
+            if MONTH_DIR_RE.fullmatch(sub.name) and sub.is_dir():
+                entries.extend(sub.iterdir())
     except OSError as exc:
         _LOG.warning(
             "collect_live_handoff_paths: cannot scan %s — %s", handoff_dir, exc,

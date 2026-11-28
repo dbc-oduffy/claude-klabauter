@@ -47,7 +47,7 @@ def test_second_ask_on_a_reused_sizing_lands_as_a_revision(repo) -> None:
     first, second = ledger.items
     assert (first.origin, second.origin) == ("ask", rl.ORIGIN_REVISION)
     verdict = {"items": [{"id": first.id, "status": "superseded", "superseded_by": second.id},
-                         {"id": second.id, "status": "met", "met_by": "a.py"}]}
+                         {"id": second.id, "status": "met", "evidence": "verified"}]}
     assert rl.judge(ledger, verdict)["pass"] is True
 
 
@@ -65,7 +65,7 @@ def test_rebinding_the_same_ask_adds_no_row(repo) -> None:
 
 def test_revise_after_the_ledger_check_adds_a_row_the_cached_verdict_leaves_unjudged(repo) -> None:
     ledger = _bound(repo, "run-one", ask="first ask")
-    verdict = {"items": [{"id": i.id, "status": "met", "met_by": "a.py"} for i in ledger.items]}
+    verdict = {"items": [{"id": i.id, "status": "met", "evidence": "verified"} for i in ledger.items]}
     assert rl.judge(ledger, verdict)["pass"] is True
     rl.revise(repo, "run-one", verbatim="also do this")
     live = rl.read_ledger(repo, rl.run_dir(repo, "run-one"))
@@ -76,7 +76,7 @@ def test_revise_after_the_ledger_check_adds_a_row_the_cached_verdict_leaves_unju
 
 def test_revise_on_a_finished_run_names_a_refire_whose_fresh_run_rereads_and_rejudges_the_ledger(repo) -> None:
     ledger = _bound(repo, "run-one", ask="first ask")
-    cached = {"items": [{"id": i.id, "status": "met", "met_by": "a.py"} for i in ledger.items]}
+    cached = {"items": [{"id": i.id, "status": "met", "evidence": "verified"} for i in ledger.items]}
     reply = rl._handler({"run_id": "run-one", "verbatim": "also do this"}, repo_root=repo)
     assert reply["run_live"] is False and reply["next"]["kind"] == "refire"
     fresh = _bound(repo, "run-two")

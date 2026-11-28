@@ -1921,7 +1921,8 @@ def _no_ambient_plugin_root(request: pytest.FixtureRequest, monkeypatch: pytest.
 # An unhoisted, unstaged script is a shape production never emits; only these literal-text modules lift the
 # runner cap, never dispatch_emit-wide (emit.py and ask_roadmap.py share it, and cap tests expect the refusal).
 _LITERAL_TEXT_MODULES = frozenset({
-    "test_ask_compose.py", "test_ask_compose_end_to_end.py", "test_ask_compose_prompt_fragments.py",
+    "test_ask_compose.py", "test_ask_compose_end_to_end.py", "test_ask_compose_prompt_fragments.py", "test_ask_compose_anchor_premises.py",
+    "test_ask_compose_bound_sizing_path.py", "test_ledger_clause_narrowing_keeps_tree.py",
 })
 
 
@@ -2027,6 +2028,7 @@ def diff_engine_records(before: dict[str, frozenset], after: dict[str, frozenset
 
 
 _SESSION_TEMP_ATTR = "_managed_temp_session"
+_CHOSEN_BASETEMP_ATTR = "_managed_temp_chosen_basetemp"
 
 
 def default_basetemp_to_temp_layout(config) -> None:
@@ -2041,11 +2043,41 @@ def default_basetemp_to_temp_layout(config) -> None:
     root.mkdir(parents=True, exist_ok=True)
     chosen = str(root / ("%d-%s" % (os.getpid(), os.urandom(3).hex())))
     config.option.basetemp = chosen
+    setattr(config, _CHOSEN_BASETEMP_ATTR, Path(chosen))
     config._claude_klabauter_default_basetemp = chosen
     # tmpdir's pytest_configure may already have built its factory from the empty option.
     factory = getattr(config, "_tmp_path_factory", None)
     if factory is not None and getattr(factory, "_given_basetemp", None) is None:
         factory._given_basetemp = Path(chosen)
+
+
+_ROOT_BEFORE_ATTR = "_managed_temp_root_before"
+MANAGED_TEMP_ROOT_LEFT_PREFIX = "managed-temp: left under coordinator root: "
+
+
+def managed_temp_own_root_entries() -> set[Path]:
+    """Own-pid entries in every pid-owned ``COORDINATOR_ROOT_WRITERS`` dir: listdir per writer dir, no walk."""
+    from coordinator_core import temp_layout
+
+    mine = f"{os.getpid()}-"
+    found: set[Path] = set()
+    for root in temp_layout.pytest_sweep_roots():
+        try:
+            owners = [p for p in root.iterdir() if p.is_dir()]
+        except OSError:
+            continue
+        for owner_dir in owners:
+            is_fleet = owner_dir.name == temp_layout.FLEET_DIRNAME
+            scope = temp_layout.SCOPE_FLEET if is_fleet else temp_layout.SCOPE_REPO
+            for writer in temp_layout.COORDINATOR_ROOT_WRITERS:
+                if writer.scope != scope or writer.owner != temp_layout.OWNER_SIGNAL_PID:
+                    continue
+                try:
+                    names = os.listdir(writer.directory(owner_dir))
+                except OSError:
+                    continue
+                found.update(writer.directory(owner_dir) / n for n in names if n.startswith(mine))
+    return found
 
 
 def managed_temp_session_start(session: pytest.Session) -> None:
@@ -2054,6 +2086,7 @@ def managed_temp_session_start(session: pytest.Session) -> None:
 
     if getattr(session.config, _SESSION_TEMP_ATTR, None) is not None:
         return
+    setattr(session.config, _ROOT_BEFORE_ATTR, managed_temp_own_root_entries())
     default_basetemp_to_temp_layout(session.config)
     path = temp_layout.make_managed_temp_dir("pytest-session")
     setattr(session.config, _SESSION_TEMP_ATTR, (path, tempfile.tempdir))
@@ -2139,7 +2172,9 @@ def managed_temp_session_finish(session: pytest.Session, exitstatus) -> None:
         except OSError:
             pass
     try:
-        left = sorted(p.name for p in path.iterdir())
+        from coordinator_core.owner_mark import MARK_FILE
+
+        left = sorted(p.name for p in path.iterdir() if p.name != MARK_FILE)
     except OSError:
         left = []
     for name in left[:20]:
@@ -2155,6 +2190,32 @@ def managed_temp_session_finish(session: pytest.Session, exitstatus) -> None:
             f"; {MANAGED_TEMP_LEFT_BY_PREFIX}{_managed_temp_left_by(seen, left[0])}: {left[0]}",
         )
     shutil.rmtree(path, ignore_errors=True)
+    chosen = getattr(session.config, _CHOSEN_BASETEMP_ATTR, None)
+    setattr(session.config, _CHOSEN_BASETEMP_ATTR, None)
+    if chosen is not None and not hasattr(session.config, "workerinput"):
+        if int(getattr(session, "exitstatus", exitstatus)) in (0, 5) and chosen.exists():
+            from coordinator_core.testing.fs_containment import remove_or_tombstone
+
+            remove_or_tombstone(chosen)
+    before = getattr(session.config, _ROOT_BEFORE_ATTR, None)
+    setattr(session.config, _ROOT_BEFORE_ATTR, None)
+    if before is None:
+        return
+    basetemps = {Path(str(b)) for b in (chosen, getattr(session.config.option, "basetemp", None)) if b}
+    stranded = sorted(managed_temp_own_root_entries() - before - basetemps)
+    for p in stranded[:20]:
+        print(f"{MANAGED_TEMP_ROOT_LEFT_PREFIX}{p}", file=sys.stderr)
+    if stranded and int(exitstatus) == 0:
+        from coordinator_core.testing.fs_containment import force_exit_status
+
+        force_exit_status(
+            session,
+            pytest.ExitCode.TESTS_FAILED,
+            f"{len(stranded)} own-pid entr{'y' if len(stranded) == 1 else 'ies'} left under the coordinator "
+            f"Temp root: {stranded[0]}",
+        )
+    for p in stranded:
+        shutil.rmtree(p, ignore_errors=True)
 
 
 _ENGINE_RECORDS_BEFORE: dict | None = None

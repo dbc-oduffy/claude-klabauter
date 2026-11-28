@@ -640,8 +640,6 @@ def record_write_claims(
         from coordinator_core.bash_guards.bump_outside_repo_write import (
             _iter_write_sink_candidates,
         )
-        from coordinator_core.session.touch_record import KIND_WRITE, append_touch_claims
-
         rels = []
         skip_next = False
         for resolved_target, head_base, raw_target in _iter_write_sink_candidates(
@@ -666,6 +664,12 @@ def record_write_claims(
             rel = _rel_if_inside(resolved_target, root)
             if rel is not None:
                 rels.append(rel)
+
+        # TRAP: `touch_record` is imported only when a claim exists; a command with no write target
+        # (the common Bash call) must not pay its import closure on the cold hook path.
+        if not rels:
+            return
+        from coordinator_core.session.touch_record import KIND_WRITE, append_touch_claims
 
         # KIND_WRITE: every target reaching here came from a write-shaped
         # command. This is the claim that SHOULD refuse a peer's commit.

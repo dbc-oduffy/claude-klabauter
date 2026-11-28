@@ -440,7 +440,12 @@ def _model_of(
     if override:
         return override
     fm = defs.get(agent_type)
-    model = declared_model_pin(fm) if fm else None
+    if fm is None:
+        plugin = agent_type.partition(":")[0]
+        raise RouteAdmissionError(
+            f"routed agent {agent_type} not found in installed plugins (is {plugin} installed?)"
+        )
+    model = declared_model_pin(fm)
     if not model:
         raise RouteAdmissionError(
             f"routed agent {agent_type} has no model pin; add model: to its definition "

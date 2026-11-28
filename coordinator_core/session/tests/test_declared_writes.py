@@ -300,44 +300,10 @@ def test_ipc_merges_declare_write_into_the_self_report_key():
     ], "key-declared paths keep their order and precede call-declared ones; dupes dropped"
 
 
-def test_max_paths_over_the_ceiling_refuses_before_the_body_runs(monkeypatch, tmp_path):
-    from coordinator_core import ipc
-
-    called = {"n": 0}
-    monkeypatch.setattr(
-        cli_entry, "_record", lambda *a, **k: called.__setitem__("n", called["n"] + 1)
-    )
-    target = tmp_path / "body-wrote-this.txt"
-    with pytest.raises(ValueError):
-        with cli_entry.recording_declared_writes(
-            cwd=str(tmp_path), max_paths=ipc._DECLARED_TOUCH_BOUND_CEILING + 1
-        ):
-            target.write_text("x")
-    assert not target.exists()
-    assert called["n"] == 0
-
-
-@pytest.mark.parametrize("bad", [0, True, "8", 1.5])
-def test_max_paths_not_an_int_in_range_refuses(bad):
-    with pytest.raises(ValueError):
-        with cli_entry.recording_declared_writes(max_paths=bad):
+def test_max_paths_parameter_is_retired():
+    with pytest.raises(TypeError):
+        with cli_entry.recording_declared_writes(max_paths=8):
             pass
-
-
-def test_max_paths_reaches_record_and_absence_reaches_it_as_none(monkeypatch):
-    from coordinator_core import ipc
-
-    seen = []
-    monkeypatch.setattr(
-        cli_entry, "_record", lambda declared, cwd, max_paths=None: seen.append(max_paths)
-    )
-    with cli_entry.recording_declared_writes(
-        cwd="/repo", max_paths=ipc._DECLARED_TOUCH_BOUND_CEILING
-    ):
-        declare_write("a.md")
-    with cli_entry.recording_declared_writes(cwd="/repo"):
-        declare_write("b.md")
-    assert seen == [ipc._DECLARED_TOUCH_BOUND_CEILING, None]
 
 
 @pytest.mark.spawns_process
@@ -345,7 +311,6 @@ def test_max_paths_reaches_record_and_absence_reaches_it_as_none(monkeypatch):
 def test_bounded_batch_of_ceiling_minus_five_files_leaves_every_touch_event(monkeypatch, tmp_path):
     import subprocess
 
-    from coordinator_core import ipc
     from coordinator_core.session import claimed_write, touch_record
     from coordinator_core.win_portability import no_console_passthrough_kwargs
 
@@ -358,11 +323,8 @@ def test_bounded_batch_of_ceiling_minus_five_files_leaves_every_touch_event(monk
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-declared-bound")
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
-    n = ipc._DECLARED_TOUCH_BOUND_CEILING - 5
-    assert n > ipc._MAX_DECLARED_TOUCH_PATHS
-    with cli_entry.recording_declared_writes(
-        cwd=str(tmp_path), max_paths=ipc._DECLARED_TOUCH_BOUND_CEILING
-    ):
+    n = 43
+    with cli_entry.recording_declared_writes(cwd=str(tmp_path)):
         for i in range(n):
             claimed_write.replace_bytes(tmp_path / f"f{i}.txt", b"x")
 

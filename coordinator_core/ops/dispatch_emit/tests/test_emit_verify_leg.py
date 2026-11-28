@@ -307,7 +307,8 @@ def test_the_tests_leg_prompt_carries_the_detached_run_and_the_measured_rev_inst
         head="H", anchor="A", test_js=ask_compose._test_instruction_js("HEAD", "REPO"), docs_parts=(),
         verdict_parts=("v",), judged=False, schema={}, run_id="r1", test_result_var="_verifyTest",
     )
-    assert "coordinator_core.ops.test_leg_run" in tests and "dispatch.measured_rev" in tests
+    assert "coordinator_core.ops.test_leg_remote" in tests and "dispatch.measured_rev" in tests
+    assert "coordinator_core.ops.test_leg_run" not in tests
     assert "dispatch.measured_rev" not in verify and "Run the scoped test targets" not in verify
 
 

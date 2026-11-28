@@ -1061,3 +1061,23 @@ def validate_digest(obj: dict) -> list:
     validator_cls.check_schema(load_schema())
     validator = validator_cls(load_schema())
     return [str(err) for err in validator.iter_errors(obj)]
+
+
+_DOE_SCHEMA_PATH = _SCHEMA_PATH.with_name("doe-wake-digest.schema.json")
+
+
+@functools.cache
+def load_doe_schema() -> dict:
+    """The vendored DoE wake-digest schema (the kind plan/close digest), read once per process."""
+    return json.loads(_DOE_SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def validate_doe_digest(obj: dict) -> list:
+    """Validate a plan/close wake digest (carrying `rag_use`, `rag_degraded`, `halted_by`) against the
+    vendored DoE schema; returns error strings, empty when valid.
+    """
+    import jsonschema
+
+    schema = load_doe_schema()
+    validator_cls = jsonschema.validators.validator_for(schema)
+    return [str(err) for err in validator_cls(schema).iter_errors(obj)]

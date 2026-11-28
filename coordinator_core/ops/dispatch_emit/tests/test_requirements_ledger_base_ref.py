@@ -9,7 +9,14 @@ import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
-from coordinator_core.ops.dispatch_emit.ask_contract import BASE_REF_FILE, RECORD_DIR_ROOT, read_base_ref, run_base_ref
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    BASE_REF_FILE,
+    RECORD_DIR_ROOT,
+    UNCOMMITTED_NOT_LANDED,
+    premise_ref,
+    read_base_ref,
+    run_base_ref,
+)
 from pathlib import Path
 
 RUN = "ask-20261029T000000-abc123"
@@ -149,3 +156,12 @@ def test_none_when_no_run_of_that_sizing_carries_one(run) -> None:
     assert run_base_ref(repo, REL) is None
     assert run_base_ref(repo, None) is None and run_base_ref(repo, "") is None
     assert run_base_ref(repo, "state/sizings/undated.yaml") is None
+
+
+def test_premise_ref_is_the_marker_else_head(run) -> None:
+    repo, _ = run
+    assert premise_ref(repo, REL) == "HEAD"
+    assert premise_ref(repo, None) == "HEAD"
+    _revise(repo, base_ref="origin/main")
+    assert premise_ref(repo, REL) == "origin/main"
+    assert UNCOMMITTED_NOT_LANDED == "uncommitted, not landed"

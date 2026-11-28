@@ -116,6 +116,27 @@ def test_a_pass_with_skips_records_pass_and_keeps_the_skip(tmp_path):
     assert tests["status"] == "pass" and tests["skipped"] is True
 
 
+def test_every_pytest_batch_is_directed_to_a_per_run_basetemp(tmp_path):
+    from coordinator_core.testing import scoped_pytest
+
+    root = scoped_pytest.per_run_root(tmp_path).as_posix()
+    tests = [f"coordinator_core/tests/test_t_{i:03d}.py" for i in range(rd._BATCH_SIZE + 1)]
+    for clause in (rd._scope_clause(tests[:2], "", "abc", repo_root=tmp_path), rd._scope_clause(tests, "", "abc", repo_root=tmp_path)):
+        assert f"--basetemp {root}/reverify-<N>" in clause
+        assert "argv" in clause and "test_infra_failure" in clause
+    assert "--basetemp" not in rd._scope_clause([], "", "abc", repo_root=tmp_path)
+
+
+def test_the_default_scope_clause_pins_basetemp_without_a_repo_root():
+    assert "--basetemp " in rd._scope_clause(["coordinator_core/tests/test_a.py"], "", "abc")
+
+
+def test_the_tests_prompt_carries_the_basetemp_clause(tmp_path):
+    scope = (["coordinator_core/tests/test_a.py"], "", [], "")
+    prompt = rd._tests_prompt("a" * 40, "p.md", "b" * 40, tmp_path, scope=scope)
+    assert "--basetemp " in prompt
+
+
 def test_the_emitted_tests_field_names_both_baseline_keys():
     import inspect
 

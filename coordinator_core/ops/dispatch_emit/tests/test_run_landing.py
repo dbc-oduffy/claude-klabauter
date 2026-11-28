@@ -18,6 +18,9 @@ from coordinator_core.ops.dispatch_emit.tests.test_landing_parity import (
 )
 from pathlib import Path
 
+from coordinator_core.ops.dispatch_emit.tests import test_register_gate as trg
+from coordinator_core.ops.dispatch_emit.tests.test_register_gate import wb_repo  # noqa: F401 -- fixture
+
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
@@ -191,3 +194,22 @@ def test_a_mode_param_is_not_a_product_landing(repo) -> None:
 
     assert out["committed"] is False
     assert out["refused"] == "mode-ambiguous"
+
+
+def test_landing_stamps_an_unclaimed_ledger_met_row_and_names_the_rest_unreconciled(wb_repo: Path) -> None:
+    review = trg._wb_review([trg._wb_judged("r1"), trg._wb_judged("r3")])
+    out = run_landing._write_register(wb_repo, trg._PLAN, review, "abc1234")
+
+    assert out["register_sizing"] == trg._SIZING
+    r1, r2, r3 = trg._wb_register(wb_repo)["rows"]
+    assert (r1["status"], r3["status"], r3["wired"]) == ("met", "met", True)
+    assert r3["met_by"] == [f"{trg._PLAN}@abc1234"]
+    assert r2["status"] == "open"
+    assert [o["id"] for o in out["register_unreconciled"]] == ["r2"]
+
+
+def test_landing_with_every_row_met_reports_no_unreconciled(wb_repo: Path) -> None:
+    review = trg._wb_review([trg._wb_judged(r) for r in ("r1", "r2", "r3")])
+    out = run_landing._write_register(wb_repo, trg._PLAN, review, "abc1234")
+
+    assert out == {"register_sizing": trg._SIZING}

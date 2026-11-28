@@ -174,6 +174,34 @@ def _is_grok_host(process) -> bool:
     return len(argv) > 1 and "grok" in Path(str(argv[1]).replace("\\", "/")).name.lower()
 
 
+def _live_interactive_prior(prior: dict) -> dict | None:
+    """The prior agy row when it holds a non-unknown role on a still-live pid, else None."""
+    role, pid, epoch = prior.get("role"), prior.get("pid"), prior.get("start_epoch")
+    if role in (None, "unknown") or "ended_at" in prior:
+        return None
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return None
+    if isinstance(epoch, bool) or not isinstance(epoch, (int, float)) or not math.isfinite(epoch) or epoch <= 0:
+        return None
+    from coordinator_core.session import core
+    return prior if core.stable_pid_alive(pid, stored_start_epoch=str(int(epoch))) else None
+
+
+def _heal_agy_role(row: dict) -> dict:
+    """An agy row clobbered to `unknown` reads back `em` when its live host is an interactive agy CLI."""
+    if row.get("provider") != "agy" or row.get("role") != "unknown":
+        return row
+    import psutil
+    try:
+        from coordinator_core.session.agent_role import observed_agy_audience
+        host = psutil.Process(row["pid"])
+        if _is_agy_host(host) and observed_agy_audience(host.cmdline()) == "em":
+            return {**row, "role": "em"}
+    except (ImportError, OSError, ValueError, KeyError, TypeError, psutil.Error):
+        pass
+    return row
+
+
 def register_current(payload: dict, directory: Path | None = None, *,
                      host_pid: int | None = None, env: "Mapping[str, str] | None" = None,
                      host_process=None) -> dict:
@@ -296,6 +324,10 @@ def register_current(payload: dict, directory: Path | None = None, *,
                                 valid = False
                         if valid:
                             record[field] = value
+                if provider == "agy" and record.get("role") == "unknown":
+                    kept = _live_interactive_prior(prior)
+                    if kept is not None:
+                        record.update({"role": kept["role"], "pid": kept["pid"], "start_epoch": kept["start_epoch"]})
         except (OSError, ValueError):
             pass
         if "session_start_model" in record and "session_start_model_initial" not in record:
@@ -451,7 +483,7 @@ def lookup(session_id: str, directory: Path | None = None) -> dict | None:
         for folder in _search_dirs(directory):
             row = _verified_row(session_id, folder, PROVIDERS)
             if row is not None:
-                return row
+                return _heal_agy_role(row)
         return None
     except Exception:
         return None

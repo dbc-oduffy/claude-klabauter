@@ -80,6 +80,40 @@ def test_a_named_failing_node_is_still_retested_unchanged():
     assert step["exhausted"] is False
 
 
+FORCED = {
+    "status": "fail", "tests_run": 78, "tests_failed": 1, "baseline": None,
+    "summary": "clean-overlay verdict red: [forced-exit] rc=1: checkout-guard: moved HEAD e1368ad3dc -> 5e5fbacc4c | ",
+}
+
+
+def test_a_forced_rc_with_zero_failing_nodes_is_not_targeted_tests_failed():
+    findings, check = ltt.failed_targeted_tests(FORCED)
+
+    assert check == ltt.ZERO_FAIL_CHECK
+    assert [f.reason for f in findings] == [ltt.ZERO_FAIL_UNATTRIBUTED]
+    assert "no baseline to attribute" not in findings[0].detail
+    assert "78 tests ran" in findings[0].detail and "checkout-guard: moved HEAD" in findings[0].detail
+
+
+def test_the_observed_shape_without_a_cause_line_names_the_cause_unrecorded():
+    findings, check = ltt.failed_targeted_tests({"status": "fail", "tests_run": 78, "tests_failed": 1, "baseline": None})
+
+    assert check == ltt.ZERO_FAIL_CHECK and "cause: unrecorded" in findings[0].detail
+
+
+@pytest.mark.parametrize("verdict", [
+    {**FORCED, "tests_failed": 2},
+    {**FORCED, "failed_tests": ["t/test_a.py::test_x"]},
+    {**FORCED, "tests_run": None},
+    {**FORCED, "tests_run": 0},
+])
+def test_a_red_with_a_node_or_a_real_count_or_no_run_is_not_reclassified(verdict):
+    findings, check = ltt.failed_targeted_tests(verdict)
+
+    assert check != ltt.ZERO_FAIL_CHECK
+    assert not any(f.reason == ltt.ZERO_FAIL_UNATTRIBUTED for f in findings)
+
+
 def test_other_evidence_kinds_keep_their_step_with_no_nodes():
     step = ltt.retest_step([ltt.zero_fail_finding("d")], {})
 

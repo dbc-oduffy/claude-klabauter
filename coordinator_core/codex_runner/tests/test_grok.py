@@ -198,3 +198,91 @@ def test_env_allowlist():
     src = {"PATH": "/p", "HOME": "/h", "XAI_API_KEY": "k", "GROK_HOME": "/g", "SYSTEMROOT": "S"}
     assert {k:v for k,v in grok._build_env(src, windows=False).items() if not k.startswith("COORDINATOR_")} == {"PATH": "/p", "HOME": "/h", "GROK_HOME": "/g"}
     assert grok._build_env(src, windows=True)["SYSTEMROOT"] == "S"
+
+
+_STAGE_SCHEMA = {"type": "object", "properties": {"tshirt": {"type": "string"}}, "required": ["tshirt"]}
+
+
+def _stage_stream(*events: dict) -> str:
+    return "\n".join(json.dumps(event) for event in events)
+
+
+@pytest.fixture
+def grok_stage(tmp_path, monkeypatch):
+    """Runs a grok sizing-scout stage whose child wrote `stdout`/`stderr`; returns (result-or-raise callable, argv log)."""
+    from coordinator_core.codex_runner import workflow
+
+    seen: list[list[str]] = []
+
+    def run(stdout: str, stderr: str = ""):
+        def spawn_writing(argv, prompt, *, stdout, stderr, **_kw):
+            seen.append(list(argv))
+            stdout.write(out_text.encode())
+            stderr.write(err_text.encode())
+            return type("Done", (), {"returncode": 0, "pid": 1})()
+
+        out_text, err_text = stdout, stderr
+        monkeypatch.setattr(workflow, "_run_admitted", spawn_writing)
+        monkeypatch.setattr(workflow, "_persona", lambda _agent_type: "")
+        monkeypatch.setattr(workflow, "resolve_grok", lambda: ["grok"])
+        return workflow.run_agent("size it", {"schema": _STAGE_SCHEMA, "agentType": "coordinator:sizing-scout"},
+                                  repo_root=tmp_path, artifact_dir=tmp_path / "art", backend="grok",
+                                  parent_session_id="sid")
+
+    return run, seen
+
+
+def test_sizing_scout_argv_grants_bash_and_powershell_never_a_blanket_bypass(tmp_path):
+    from coordinator_core.codex_runner import workflow
+
+    argv = workflow._family_argv("grok", tmp_path, "coordinator:sizing-scout")
+    granted = [argv[i + 1] for i, flag in enumerate(argv) if flag == "--allow"]
+    assert granted == ["Bash", "PowerShell"]
+    assert not set(grok.FORBIDDEN_FLAGS) & set(argv)
+    relay = workflow._family_argv("grok", tmp_path, "coordinator:op-relay")
+    assert [relay[i + 1] for i, flag in enumerate(relay) if flag == "--allow"] == ["Bash(coordinator-invoke:*)"]
+
+
+def test_answer_object_followed_by_later_narration_is_returned(grok_stage):
+    run, _ = grok_stage
+    stream = _stage_stream(
+        {"type": "text", "data": "Sizing it now."},
+        {"type": "tool_call", "toolCallId": "1"},
+        {"type": "text", "data": '{"tshirt":"XS","nested":{"tshirt":"L"}}'},
+        {"type": "text", "data": "The sizing-file check exited 0."},
+        {"type": "end", "stopReason": "end_turn"},
+    )
+    assert run(stream) == {"tshirt": "XS", "nested": {"tshirt": "L"}}
+
+
+def test_text_without_a_schema_valid_object_names_the_text_tail_not_a_decode_error(grok_stage):
+    run, _ = grok_stage
+    stream = _stage_stream({"type": "text", "data": 'Done. {"other": 1} that is all.'},
+                           {"type": "end", "stopReason": "end_turn"})
+    with pytest.raises(Exception) as caught:
+        run(stream)
+    message = str(caught.value)
+    assert "no JSON object matching the schema" in message and "that is all" in message
+    assert "Expecting value" not in message
+
+
+@pytest.mark.parametrize("stream,cause", [
+    ("", "grok wrote nothing to stdout"),
+    (_stage_stream({"type": "end", "stopReason": "end_turn"}), "grok reply has no final text (stopReason end_turn"),
+    (_stage_stream({"type": "text", "data": "  "}, {"type": "end", "stopReason": "max_tokens"}),
+     "grok reply has no final text (stopReason max_tokens"),
+])
+def test_reply_without_text_is_a_typed_failure_naming_the_cause(grok_stage, stream, cause):
+    run, _ = grok_stage
+    with pytest.raises(Exception) as caught:
+        run(stream, stderr="child said hello")
+    message = str(caught.value)
+    assert cause in message and "child said hello" in message
+    assert "Expecting value" not in message
+
+
+def test_a_text_free_reply_with_a_stray_object_elsewhere_is_still_refused(grok_stage):
+    run, _ = grok_stage
+    stream = _stage_stream({"type": "end", "stopReason": "end_turn", "extra": {"tshirt": "XS"}})
+    with pytest.raises(Exception, match="no final text"):
+        run(stream)

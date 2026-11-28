@@ -35,7 +35,7 @@ def _git(root, *a):
 
 
 def _verdict(*closed, status: str = "met"):
-    item = {"id": "R1", "status": status, "wired": True, **({"met_by": "a.py"} if status == "met" else {})}
+    item = {"id": "R1", "status": status, "wired": True}
     if closed:
         item[GAPS_CLOSED_FIELD] = list(closed)
     return {"items": [item]}
@@ -127,7 +127,7 @@ def test_no_payload_and_no_record_means_no_failures(tmp_path: Path) -> None:
 def test_halted_commit_params_keeps_gaps_closed() -> None:
     digest = {
         "halted_by": {"halted": "commit"}, "run_id": "r", "arm": "xs",
-        "ledger": {"items": [{"id": "R1", "status": "met", "met_by": "a.py", GAPS_CLOSED_FIELD: [CLOSED]}]},
+        "ledger": {"items": [{"id": "R1", "status": "met", GAPS_CLOSED_FIELD: [CLOSED]}]},
         "review": {"wave": []},
     }
     params = terminal_commit_refusals._halted_commit_params(digest)

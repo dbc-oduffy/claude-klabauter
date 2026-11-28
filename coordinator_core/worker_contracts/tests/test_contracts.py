@@ -104,6 +104,42 @@ def test_worker_launch_keeps_sandbox_defaults_and_roster_cleanup(tmp_path, monke
         worker.launch(tmp_path, "task", assignment, popen=spawn)
 
 
+def test_worker_proceeds_and_records_when_start_is_undelivered(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/codex/assigned")
+    spool_dir = tmp_path / "spool-home" / "box"
+    seen = {}
+    monkeypatch.setattr(worker, "resolve_codex", lambda: ["codex-native"])
+    monkeypatch.setattr(worker, "preflight_auth", lambda **kwargs: None)
+    monkeypatch.setattr(worker, "_child_env", lambda _: {"SAFE": "yes"})
+    monkeypatch.setattr(worker.slot_grant, "check_slot_grant", lambda *a, **kw: (True, {}))
+    monkeypatch.setattr(worker.peer_roster, "build_roster", lambda *a, **kw: [object()])
+    monkeypatch.setattr(worker.capacity, "admit_before_spawn", lambda *a, **kw: SimpleNamespace(admitted=True, peak_gib=1))
+    monkeypatch.setattr(worker.capacity, "release_spawn", lambda *a: None)
+    monkeypatch.setattr(worker.roster, "write_record", lambda *a, **kw: None)
+    monkeypatch.setattr(worker.roster, "remove_record", lambda pid: None)
+    monkeypatch.setattr(worker.admission_spool, "spool_path", lambda directory=None: spool_dir / "admission-spool.jsonl")
+    spool_dir.mkdir(parents=True)
+    monkeypatch.setattr(worker.admission_post, "post", lambda *a, **kw: {
+        "delivered": False, "posted": False, "degraded": True, "spooled": True, "reason": "no_box_holder", "path": "p"})
+
+    class Process:
+        pid = 9
+        returncode = 0
+        def communicate(self, prompt=None):
+            seen["ran"] = True
+        def kill(self):
+            seen["killed"] = True
+
+    assignment = {"source": "pm", "branch": "codex/assigned", "quiet_box": True,
+                  "session_id": "owner", "run": "codex-worker", "declared_peak_mb": 1024,
+                  "quiet_max_sessions": 2, "evidence": "PM explicit assignment"}
+    assert worker.launch(tmp_path, "task", assignment, popen=lambda argv, **kw: Process()) == 0
+    assert seen == {"ran": True}
+    rec = json.loads((spool_dir / "admission-undelivered.json").read_text(encoding="utf-8"))
+    assert rec["phase"] == "START" and rec["degraded"] is True and rec["spooled"] is True
+
+
 def test_worker_admission_denials_prevent_any_child(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/codex/assigned")

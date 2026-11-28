@@ -188,7 +188,7 @@ _ADOPTING_TWIN_JS = (
     + READ_STAGE_SIDECAR_JS
     + "const _read = await _readStageSidecar(__HANDLE__, __ROOT__);\n"
     "if (_read.fail) return { halted_by: { halted: 'stage-reply-handle', reason: 'stage reply sidecar does not match its handle: ' + _read.fail } };\n"
-    "if (!_read.manifest) return { stage_pending: { handle: __HANDLE__, read_deferred: true } };\n"
+    "if (!_read.manifest) return { stage_pending: { handle: __HANDLE__ } };\n"
     "return { stage: 'first', rows: _read.manifest.rows.map((r) => r.id) };\n"
 )
 FIRST_STAGE = {"stage": "first", "rows": ["C0", "C1"]}

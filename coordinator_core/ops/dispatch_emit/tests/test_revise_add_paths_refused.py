@@ -1,6 +1,5 @@
 """workflow.revise refuses, at revise time, an add_paths entry outside the run's write set, naming both
-routes; a note only citing a file passes (an edit-verb note naming an outside file is refused per note, not
-raised), as do withhold_paths and credit_chunks."""
+routes; a note naming a file passes whatever its verb (stored, widens nothing), as do withhold_paths and credit_chunks."""
 
 from __future__ import annotations
 
@@ -62,12 +61,12 @@ def test_note_naming_an_outside_file_to_run_is_accepted_on_a_staged_run(repo) ->
     assert len(rl.read_notes(rl.run_dir(repo, RUN))) == 1
 
 
-def test_edit_verb_note_naming_an_outside_file_is_not_stored_and_does_not_raise(repo) -> None:
+def test_edit_verb_note_naming_an_outside_file_is_stored_and_does_not_raise(repo) -> None:
     _stage(repo)
     outcome: dict = {}
     rl.revise(repo, RUN, note=f"also fix `{OUTSIDE}`", outcome=outcome)
-    assert rl.read_notes(rl.run_dir(repo, RUN)) == []
-    assert outcome["note_refused"]["paths"] == [OUTSIDE]
+    assert len(rl.read_notes(rl.run_dir(repo, RUN))) == 1
+    assert "note_refused" not in outcome and "footprint_widened" not in outcome
 
 
 def test_note_citing_an_inside_file_is_accepted(repo) -> None:

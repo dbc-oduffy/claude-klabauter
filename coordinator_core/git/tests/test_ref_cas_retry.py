@@ -121,8 +121,80 @@ def test_gives_up_after_the_bound(tmp_path: Path) -> None:
     peers = [lambda i=i: _peer_commit(repo, f"p{i}.txt", "p\n") for i in range(10)]
     calls, attempt = _loop(repo, ["d/ours.txt"], 99, peers)
     result, refused = rcr.retry_ref_moved(repo, ["d/ours.txt"], attempt, lambda r: r)
-    assert (result, refused) == (True, None)
+    assert (result, refused) == (True, rcr.REFUSED_EXHAUSTED)
     assert len(calls) == rcr.REF_CAS_ATTEMPTS == 4
+
+
+def test_unreadable_head_names_unverifiable_not_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _repo(tmp_path)
+    monkeypatch.setattr(rcr, "head_sha", lambda root: None)
+    result, refused = rcr.retry_ref_moved(repo, ["d/ours.txt"], lambda: True, lambda r: r)
+    assert (result, refused) == (True, rcr.REFUSED_UNVERIFIABLE)
+
+
+def _cas_lost_error() -> gcommit.CommitRefused:
+    return gcommit.CommitRefused("ref compare-and-swap failed -- refs/heads/x moved since abc was captured")
+
+
+def _raising(repo, lose_times, peers):
+    calls = []
+
+    def attempt() -> str:
+        calls.append(rcr.head_sha(repo))
+        n = len(calls)
+        if n <= len(peers):
+            peers[n - 1]()
+        if n <= lose_times:
+            raise _cas_lost_error()
+        return f"landed-{n}"
+
+    return calls, attempt
+
+
+def test_raising_lands_on_the_second_call_after_a_disjoint_peer(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    calls, attempt = _raising(repo, 1, [lambda: _peer_commit(repo, "p.txt", "p\n")])
+    assert rcr.retry_ref_moved_raising(repo, ["d/ours.txt"], attempt) == "landed-2"
+    assert len(calls) == 2 and calls[0] != calls[1]
+
+
+def test_raising_exhaustion_reraises_annotated(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    peers = [lambda i=i: _peer_commit(repo, f"p{i}.txt", "p\n") for i in range(10)]
+    calls, attempt = _raising(repo, 99, peers)
+    with pytest.raises(gcommit.CommitRefused) as ei:
+        rcr.retry_ref_moved_raising(repo, ["d/ours.txt"], attempt)
+    assert ei.value.refused == rcr.REFUSED_EXHAUSTED == "ref-moved-exhausted"
+    assert len(calls) == rcr.REF_CAS_ATTEMPTS
+
+
+def test_raising_overlap_stops_at_the_first_attempt(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    calls, attempt = _raising(repo, 99, [lambda: _peer_commit(repo, "d/ours.txt", "t\n")])
+    with pytest.raises(gcommit.CommitRefused) as ei:
+        rcr.retry_ref_moved_raising(repo, ["d/ours.txt"], attempt)
+    assert ei.value.refused == rcr.REFUSED_OVERLAP
+    assert len(calls) == 1
+
+
+def test_raising_unreadable_head_names_unverifiable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _repo(tmp_path)
+    monkeypatch.setattr(rcr, "head_sha", lambda root: None)
+    _, attempt = _raising(repo, 99, [])
+    with pytest.raises(gcommit.CommitRefused) as ei:
+        rcr.retry_ref_moved_raising(repo, ["d/ours.txt"], attempt)
+    assert ei.value.refused == rcr.REFUSED_UNVERIFIABLE
+
+
+def test_raising_other_errors_propagate_unannotated(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+
+    def attempt():
+        raise gcommit.CommitRefused("index stat compare-and-swap failed -- other")
+
+    with pytest.raises(gcommit.CommitRefused) as ei:
+        rcr.retry_ref_moved_raising(repo, ["d/ours.txt"], attempt)
+    assert not hasattr(ei.value, "refused")
 
 
 def test_overlap_stops_at_the_first_attempt(tmp_path: Path) -> None:

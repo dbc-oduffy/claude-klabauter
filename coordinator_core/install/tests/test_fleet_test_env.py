@@ -89,6 +89,32 @@ def test_collected_passes_with_count(tmp_path, fake):
     assert argv[argv.index("--confcutdir") + 1] == str(root.resolve())
 
 
+def test_collect_ignores_scratch_dirs_by_relative_name(tmp_path, fake):
+    root = _repo(tmp_path, "r")
+    fake["set_walk"](("worktree", "mk", str(root)))
+    fte.fleet_test_env_items(tmp_path, "py", install=False)
+    argv = fake["calls"][0][0]
+    assert "--ignore=scratch" in argv and "--ignore=scratchpad" in argv
+
+
+@pytest.mark.parametrize("sep", ["/", "\\"])
+def test_vanished_scratch_path_is_never_ran_not_collect_fail(tmp_path, fake, sep):
+    root = _repo(tmp_path, "r")
+    fake["set_walk"](("worktree", "mk", str(root)))
+    fake["responder"] = lambda *a: _proc(2, f"FileNotFoundError: scratchpad{sep}o1\n")
+    (item,) = fte.fleet_test_env_items(tmp_path, "py", install=False)
+    assert not item.ok and item.detail.startswith("never ran") and "FileNotFoundError" not in item.detail
+    assert len(fake["calls"]) == 1
+
+
+def test_unrelated_filenotfound_stays_a_collect_fail(tmp_path, fake):
+    root = _repo(tmp_path, "r")
+    fake["set_walk"](("worktree", "mk", str(root)))
+    fake["responder"] = lambda *a: _proc(2, "FileNotFoundError: tests/data.json\n")
+    (item,) = fte.fleet_test_env_items(tmp_path, "py", install=False)
+    assert not item.ok and "FileNotFoundError" in item.detail
+
+
 def test_nonmodule_collection_error_fails_with_first_error_line(tmp_path, fake):
     root = _repo(tmp_path, "r")
     fake["set_walk"](("worktree", "mk", str(root)))
@@ -147,8 +173,9 @@ def test_absent_interpreter_fails_never_ran(tmp_path, fake):
 def test_budget_exhausted_fails_never_ran_never_silent_skip(tmp_path, fake, monkeypatch):
     a, b = _repo(tmp_path, "a"), _repo(tmp_path, "b")
     fake["set_walk"](("worktree", "a", str(a)), ("worktree", "b", str(b)))
-    clock = iter([0.0, 1.0, fte.FLEET_COLLECT_TOTAL_BUDGET_S + 1])
-    monkeypatch.setattr(fte.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        fte.time, "monotonic", lambda: fte.FLEET_COLLECT_TOTAL_BUDGET_S + 1 if fake["calls"] else 0.0
+    )
     items = _by_name(fte.fleet_test_env_items(tmp_path, "py", install=False))
     assert items["fleet-test-env:a"].ok
     assert not items["fleet-test-env:b"].ok

@@ -73,6 +73,25 @@ def test_worktree_already_landed_is_head_equal_without_write(repo: Path) -> None
     assert (repo / "a.txt").stat().st_mtime_ns == before
 
 
+def test_worktree_already_landed_reads_no_object(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (repo / "a.txt").write_bytes(THEIRS)
+    plan = {"a.txt": (_entry(repo, BASE), _entry(repo, THEIRS))}
+
+    def _no_read(*_a: object, **_k: object) -> None:
+        raise AssertionError("object read on the already-landed path")
+
+    monkeypatch.setattr("coordinator_core.git.worktree_sync.read_object", _no_read)
+    assert sync_landed_paths(repo, plan).head_equal == ("a.txt",)
+
+
+def test_worktree_off_landed_still_reads_and_refuses_collision(repo: Path) -> None:
+    mine = THEIRS.replace(b"l5\n", b"L5-mine\n")
+    (repo / "a.txt").write_bytes(mine)
+    out = sync_landed_paths(repo, {"a.txt": (_entry(repo, BASE), _entry(repo, THEIRS))})
+    assert out.head_equal == ()
+    assert out.rebased == ("a.txt",) or out.refused == ("a.txt",)
+
+
 def test_collision_is_refused_and_byte_intact(repo: Path) -> None:
     mine = BASE.replace(b"l2\n", b"L2-mine\n")
     (repo / "a.txt").write_bytes(mine)

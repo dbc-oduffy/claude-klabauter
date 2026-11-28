@@ -11,13 +11,13 @@ import contextlib
 import functools
 import os
 import re
-import secrets
 import shutil
 import stat
 import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
 
@@ -258,28 +258,25 @@ def managed_tempdir(repo_root: Path | str | None = None) -> Path:
 def scratch_root(repo_root: Path | str | None = None) -> Path:
     """The one engine scratch resolver: machine-local ``paths.scratch_root`` (not created), else the managed Temp root.
 
-    The fallback is `managed_tempdir`'s root, never a drive literal. `machine_resolver` is
-    imported per call so this module stays stdlib-only at import.
+    The fallback is `managed_tempdir`'s root, never a drive literal. Resolution is
+    `run_scratch.scratch_root`, imported per call so this module stays light at import.
     """
-    from coordinator_core import machine_resolver
+    from coordinator_core import run_scratch
 
-    configured = machine_resolver.registry_get("paths.scratch_root")
-    if configured:
-        return Path(configured)
-    return coordinator_temp_root(repo_root) if repo_root is not None else fleet_temp_root()
+    return run_scratch.scratch_root(
+        coordinator_temp_root(repo_root) if repo_root is not None else fleet_temp_root()
+    )
 
 
 def build_root() -> Path:
     """Machine-local ``paths.build_root`` (not created) for self-replacing outputs; unset falls back to `scratch_root()` with a warning."""
     import warnings
 
-    from coordinator_core import machine_resolver
+    from coordinator_core import run_scratch
 
-    configured = machine_resolver.registry_get("paths.build_root")
-    if configured:
-        return Path(configured)
-    warnings.warn("paths.build_root is unset; build outputs fall back to paths.scratch_root", stacklevel=2)
-    return scratch_root()
+    if not run_scratch.configured("paths.build_root"):
+        warnings.warn("paths.build_root is unset; build outputs fall back to paths.scratch_root", stacklevel=2)
+    return run_scratch.build_root(scratch_root())
 
 
 def build_output_dir(repo_root: Path | str, output: str) -> Path:
@@ -310,6 +307,13 @@ def _clear_readonly_and_retry(func, path, _exc) -> None:
     func(path)
 
 
+def _token_hex(nbytes: int) -> str:
+    """`secrets` (with `hmac`) is imported at first name mint, not at module import: the cold hook path imports this module for its paths only."""
+    import secrets
+
+    return secrets.token_hex(nbytes)
+
+
 def _rmtree_strict(path: Path) -> None:
     if sys.version_info >= (3, 12):
         shutil.rmtree(path, ignore_errors=False, onexc=_clear_readonly_and_retry)
@@ -317,11 +321,13 @@ def _rmtree_strict(path: Path) -> None:
         shutil.rmtree(path, ignore_errors=False, onerror=_clear_readonly_and_retry)
 
 
-def _reap_dead_owner_dirs(run_temp: Path) -> None:
+def _reap_dead_owner_dirs(
+    run_temp: Path, cap: int = _REAP_CAP, pattern: re.Pattern[str] = _MANAGED_DIR_RE
+) -> None:
     """Remove ``<pid>-<6hex>-<prefix>`` entries whose pid is dead: one listdir, no walk.
 
     Best-effort per entry: a peer reaping the same entry or a held handle never fails the
-    caller's own creation.
+    caller's own creation. ``cap`` bounds the removals per call; ``pattern`` group 1 is the owner.
     """
     from coordinator_core.group_em import session_registry
 
@@ -331,9 +337,9 @@ def _reap_dead_owner_dirs(run_temp: Path) -> None:
         return
     reaped = 0
     for name in names:
-        if reaped >= _REAP_CAP:
+        if reaped >= cap:
             return
-        m = _MANAGED_DIR_RE.fullmatch(name)
+        m = pattern.fullmatch(name)
         if m is None:
             continue
         if m.group(1) == "kept":
@@ -433,6 +439,32 @@ def _temp_is_managed_run_dir() -> bool:
     return _managed_run_dir_fleet_root() is not None
 
 
+def _stamp_owner(path: Path, repo_root: Path | str | None, owner_tag: str) -> None:
+    """Write ``<path>/.owner.json``: the creating pid, or for a ``kept`` dir the creating session
+    (pid when none resolves) with the ``kept`` age floor as ttl. Best-effort, spawn-free: a failed
+    stamp never fails the creation, and an unmarked dir is kept by every pruner."""
+    try:
+        from coordinator_core import owner_mark
+
+        repo = str(repo_root) if repo_root is not None else None
+        if owner_tag != "kept":
+            owner_mark.write_mark(path, owner_mark.OWNER_PID, os.getpid(), repo)
+            return
+        ttl = _KEPT_MAX_AGE_S / 3600
+        try:
+            from coordinator_core.session import core as session_core
+
+            sid = session_core.resolve_session_id()
+        except Exception:  # noqa: BLE001
+            sid = ""
+        if sid:
+            owner_mark.write_mark(path, owner_mark.OWNER_SESSION, sid, repo, ttl)
+        else:
+            owner_mark.write_mark(path, owner_mark.OWNER_PID, os.getpid(), repo, ttl)
+    except Exception:  # noqa: BLE001 -- the mark is advisory to pruners, never a creation failure
+        pass
+
+
 def _create(
     prefix: str, repo_root: Path | str | None, owner_tag: str
 ) -> tuple[Path, Callable[[], None]]:
@@ -445,8 +477,9 @@ def _create(
         run_temp.mkdir(parents=True, exist_ok=True)
         _reap_dead_owner_dirs(run_temp)
         _reap_legacy_root_once()
-    path = run_temp / f"{owner_tag}-{secrets.token_hex(3)}-{prefix}"
+    path = run_temp / f"{owner_tag}-{_token_hex(3)}-{prefix}"
     path.mkdir()
+    _stamp_owner(path, repo_root, owner_tag)
 
     def cleanup() -> None:
         if path.exists():
@@ -473,7 +506,14 @@ def make_managed_temp_dir(prefix: str, repo_root: Path | str | None = None) -> P
     is reaped by the next creation once its pid is dead.
     """
     path, cleanup = _create(prefix, repo_root, str(os.getpid()))
-    atexit.register(cleanup)
+
+    def cleanup_at_exit() -> None:
+        try:
+            cleanup()
+        except OSError:
+            pass
+
+    atexit.register(cleanup_at_exit)
     return path
 
 
@@ -508,16 +548,21 @@ def managed_temp_dir(
 
 
 def mkdtemp_in(prefix: str, parent: Path | str | None) -> Path:
-    """Create ``<parent>/<prefix><random>`` and return it; the caller removes it.
+    """Create ``<parent>/<prefix><pid>-<6hex>`` and return it; the caller removes it.
 
     For a caller that needs a chosen parent (a short socket-safe root, a repo scratch dir)
-    rather than the managed layout. ``None`` creates a pid-stamped dir under the managed
-    run-temp root, removed at interpreter exit (never bare system Temp).
+    rather than the managed layout. The name carries the owner pid, and each creation reaps up
+    to ``_REAP_CAP`` same-prefix siblings whose pid is dead (one listdir, no walk). ``None``
+    creates a pid-stamped dir under the managed run-temp root, removed at interpreter exit
+    (never bare system Temp).
     """
     if parent is None:
         return make_managed_temp_dir(prefix)
+    _reap_dead_owner_dirs(
+        Path(parent), pattern=re.compile(rf"^{re.escape(prefix)}(\d+)-[0-9a-f]{{6}}$")
+    )
     while True:
-        path = Path(parent) / f"{prefix}{secrets.token_hex(4)}"
+        path = Path(parent) / f"{prefix}{os.getpid()}-{_token_hex(3)}"
         try:
             path.mkdir(mode=0o700)
         except FileExistsError:
@@ -528,6 +573,10 @@ def mkdtemp_in(prefix: str, parent: Path | str | None) -> Path:
 @contextlib.contextmanager
 def temp_dir_in(prefix: str, parent: Path | str | None) -> Iterator[Path]:
     """``mkdtemp_in`` removed on exit; a teardown OSError never replaces the body's outcome."""
+    if parent is None:
+        with managed_temp_dir(prefix) as managed:
+            yield managed
+        return
     path = mkdtemp_in(prefix, parent)
     try:
         yield path
@@ -552,3 +601,124 @@ def parse_pytest_run_dir(name: str) -> int | None:
     """Owning pid of a ``<pid>-<6 hex>`` per-run basetemp dir name, else None."""
     m = _PYTEST_RUN_DIR_RE.fullmatch(name)
     return int(m.group(1)) if m else None
+
+
+REAP_DIRNAME = ".reap"
+
+
+def retain_latest(root: Path | str, *, keep: int = 2, marker: str | None = None) -> list[Path]:
+    """Rename all but the newest `keep` run dirs under `root` into `<root>/.reap/`; other repos call `from coordinator_core.temp_layout import retain_latest`."""
+    root = Path(root)
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+    ranked: list[tuple[float, str]] = []
+    for name in names:
+        if parse_pytest_run_dir(name) is None:
+            continue
+        probe = root / name / marker if marker else root / name
+        try:
+            if marker is None and not (root / name).is_dir():
+                continue
+            ranked.append((probe.stat().st_mtime, name))
+        except OSError:
+            continue
+    ranked.sort(reverse=True)
+    reap = root / REAP_DIRNAME
+    moved: list[Path] = []
+    for _, name in ranked[max(keep, 0):]:
+        src = root / name
+        if src.is_symlink():
+            continue
+        try:
+            reap.mkdir(parents=True, exist_ok=True)
+            dest = reap / name
+            if dest.exists():
+                dest = reap / f"{name}.{time.time_ns():x}"
+            os.replace(src, dest)
+        except OSError:
+            continue
+        moved.append(dest)
+    return moved
+
+
+OWNER_SIGNAL_PID = "pid"
+OWNER_SIGNAL_LEASE = "lease"
+OWNER_SIGNAL_NONE = "none"
+KEEP_LATEST = 2
+SCOPE_REPO = "repo"
+SCOPE_FLEET = "fleet"
+
+_FLEET_SESSION_FILE_PREFIXES = (
+    "workflow-stopped-",
+    "workflow-stall-told-",
+    "group-em-watch-",
+    "advisory-hook-state-",
+    ".advisory-hook-state-",
+    "first-agent-dispatch-advisory-",
+    "em-poll-count-",
+    "hand-written-plan-nudge-",
+    "compaction-occurred-",
+    "compaction-state-",
+    "commit-trailers-stage-",
+)
+_FLEET_CACHE_DIR_PREFIXES = ("claude-klabauter-publish-inject-", "mk-git-seed-", "publish-committed-")
+_BARE_MKDTEMP_PATTERN = r"tmp[a-z0-9_]{8}"
+
+
+@dataclass(frozen=True)
+class RootWriter:
+    """One writer's output shape under a repo or ``_fleet`` dir: owner signal, age bound, keep-latest."""
+
+    name: str
+    scope: str
+    container: tuple[str, ...]
+    owner: str
+    max_age_s: int
+    keep_latest: int | None = None
+    prefixes: tuple[str, ...] = ()
+    name_pattern: str | None = None
+    kept_max_age_s: int | None = None
+
+    def matches(self, entry_name: str) -> bool:
+        """True when ``entry_name`` is this writer's output; no prefix and no pattern matches every entry."""
+        if self.prefixes and entry_name.startswith(self.prefixes):
+            return True
+        if self.name_pattern is not None and re.fullmatch(self.name_pattern, entry_name):
+            return True
+        return not self.prefixes and self.name_pattern is None
+
+    def directory(self, owner_dir: Path) -> Path:
+        """The dir holding this writer's entries under a repo or fleet dir."""
+        return owner_dir.joinpath(*self.container)
+
+
+COORDINATOR_ROOT_WRITERS: tuple[RootWriter, ...] = (
+    RootWriter("pytest", SCOPE_REPO, ("pytest",), OWNER_SIGNAL_PID, 3600, kept_max_age_s=_KEPT_MAX_AGE_S),
+    RootWriter(
+        "run-temp", SCOPE_REPO, (RUN_TEMP_DIRNAME,), OWNER_SIGNAL_PID, 0, kept_max_age_s=_KEPT_MAX_AGE_S
+    ),
+    RootWriter("clean-mirror", SCOPE_REPO, ("clean-mirror",), OWNER_SIGNAL_NONE, 86400, KEEP_LATEST),
+    RootWriter(
+        "fleet-pytest", SCOPE_FLEET, ("pytest",), OWNER_SIGNAL_PID, 3600, kept_max_age_s=_KEPT_MAX_AGE_S
+    ),
+    RootWriter(
+        "fleet-run-temp", SCOPE_FLEET, (RUN_TEMP_DIRNAME,), OWNER_SIGNAL_PID, 0, kept_max_age_s=_KEPT_MAX_AGE_S
+    ),
+    RootWriter(
+        "fleet-session-files", SCOPE_FLEET, (), OWNER_SIGNAL_NONE, 7 * 86400,
+        prefixes=_FLEET_SESSION_FILE_PREFIXES,
+    ),
+    RootWriter(
+        "fleet-caches", SCOPE_FLEET, (), OWNER_SIGNAL_NONE, 86400, KEEP_LATEST,
+        prefixes=_FLEET_CACHE_DIR_PREFIXES, name_pattern=_BARE_MKDTEMP_PATTERN,
+    ),
+    RootWriter(
+        "claude-klabauter-commit-clone", SCOPE_FLEET, ("claude-klabauter-commit-clone",), OWNER_SIGNAL_LEASE, 86400, KEEP_LATEST
+    ),
+    RootWriter(
+        "claude-klabauter-publish-engine", SCOPE_FLEET, ("claude-klabauter-publish-engine",), OWNER_SIGNAL_NONE, 2 * 86400,
+        KEEP_LATEST,
+    ),
+)

@@ -165,13 +165,19 @@ def test_a_row_edited_after_the_halt_is_staged_normally(repo):
     assert not (repo / C2_REPORT).exists()
 
 
+_PRIME_STATEMENT = (
+    "`coordinator-invoke dispatch.land_run` keeps the work; "
+    "`python -m pytest coordinator_core/ops/dispatch_emit/tests/test_halt_keeps_work.py` passes"
+)
+
 _READY_PLAN = (
     "---\ntitle: keep\nauthor: fixture\nstatus: draft\ncreated: 2026-10-15\n"
     "census:\n  - question: q\n    command: grep -c a b\n    result: '1'\n"
     "capabilities: []\n"
     "anchor_premises:\n  - id: P1\n    claim: the target carries the marker\n    check:\n"
     f"      command: grep -c marker {PREMISE_FILE}\n      expect: '1'\n"
-    "prime_exit_criterion:\n  statement: done\n"
+    "prime_exit_criterion:\n"
+    f"  statement: '{_PRIME_STATEMENT}'\n"
     "  derived_from: state/sizings/2026-10-01-gate.yaml\n"
     "---\n\n# Keep\n\n## Tasks\n\n```yaml plan-tasks\n"
     "- id: A1\n  title: Ship it\n  body: Do the named work and pin it with a test.\n"
@@ -181,9 +187,9 @@ _READY_PLAN = (
 
 
 def _xl_shape(repo, monkeypatch):
-    from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import _m_repo
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, _m_repo
 
-    _m_repo(repo, monkeypatch, plan=PLAN_REL)
+    _m_repo(repo, monkeypatch, plan=PLAN_REL, exit_criterion={"statement": _PRIME_STATEMENT, "accepted": ACCEPTED})
     _write(repo, PREMISE_FILE, "old\n")
     (repo / "coordinator_core").mkdir()
     _write(repo, PLAN_REL, _READY_PLAN)
@@ -202,6 +208,8 @@ def _xl_shape(repo, monkeypatch):
 def test_a_refusal_halt_resumes_ready_once_the_premise_target_is_fixed(repo, monkeypatch):
     _xl_shape(repo, monkeypatch)
     _write(repo, PREMISE_FILE, "marker\n")
+    _git(repo, "add", PREMISE_FILE)
+    _git(repo, "commit", "-q", "-m", "fix the premise target")
 
     out = _refire(repo)
 

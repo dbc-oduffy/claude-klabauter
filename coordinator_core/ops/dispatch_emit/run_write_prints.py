@@ -160,8 +160,19 @@ def _footprint_holds(root: Path, run_id: str, rel: str) -> bool:
     return isinstance(manifest, dict) and rel in {_norm(p) for p in manifest_footprint(manifest)}
 
 
+def _session_owns(root: Path, record: dict, session_id: str) -> bool:
+    """True when `session_id` minted the live `record` or is an owner its run-stage names."""
+    # trap: a refire re-mints under the prior session; the session driving it is named only in run-stage.
+    if record.get("session_id") == session_id:
+        return True
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+    from coordinator_core.ops.dispatch_emit.resume_gate import _owners
+
+    return session_id in _owners(read_run_stage(root, record["run_id"]) or {})
+
+
 def resolve_run(root: Path, session_id: str, agent_id: str, rel: str) -> Optional[str]:
-    """The live run of `session_id` that owns a subagent write of `rel`, else None (ambiguous or none).
+    """The live run of `session_id` (minter or recorded driver) that owns a subagent write of `rel`, else None.
 
     Order: the run whose `agent_runs.json` binds `agent_id`; else the unique run whose manifest footprint
     holds `rel`; else the session's single live run. The last two bind `agent_id` to the run found.
@@ -171,7 +182,7 @@ def resolve_run(root: Path, session_id: str, agent_id: str, rel: str) -> Optiona
         from coordinator_core.ops.dispatch_emit import run_token
 
         runs = sorted(
-            {r["run_id"] for r in run_token.live_records(Path(root)) if r.get("session_id") == session_id}
+            {r["run_id"] for r in run_token.live_records(Path(root)) if _session_owns(Path(root), r, session_id)}
         )
         if not runs:
             return None

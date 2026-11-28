@@ -162,6 +162,59 @@ def test_stalled_read_serves_last_answered_count_marked_stale(
         time.sleep(0.05)
 
 
+def test_blocked_server_telemetry_read_serves_last_pair_marked_stale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    import threading
+    import time
+
+    from coordinator_core.warm import telemetry
+
+    path = telemetry.telemetry_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"warm_count": 4, "cold_count": 1}\n{"warm_count": 2}\n', encoding="utf-8")
+    first = telemetry.warm_rate(tmp_path)
+    assert (first["warm_count"], first["cold_count"], first["stale"]) == (6, 1, False)
+
+    release = threading.Event()
+    real = telemetry._sum_warm_cold
+
+    def _blocked(p):
+        release.wait(10)
+        return real(p)
+
+    monkeypatch.setattr(telemetry, "_sum_warm_cold", _blocked)
+    try:
+        t0 = time.monotonic()
+        held = telemetry.warm_rate(tmp_path)
+        assert time.monotonic() - t0 < 1.5
+        assert held["stale"] is True
+        assert (held["warm_count"], held["cold_count"]) == (6, 1)
+    finally:
+        release.set()
+        time.sleep(0.05)
+
+
+def test_blocked_server_telemetry_read_with_no_prior_answer_is_zero_and_stale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    import threading
+    import time
+
+    from coordinator_core.warm import telemetry
+
+    release = threading.Event()
+    monkeypatch.setattr(telemetry, "_sum_warm_cold", lambda p: (release.wait(10), (0, 0))[1])
+    try:
+        result = telemetry.warm_rate(tmp_path)
+    finally:
+        release.set()
+        time.sleep(0.05)
+    assert result["stale"] is True
+    assert result["total"] == 0
+    assert result["warm_rate"] is None
+
+
 def test_blocked_degrade_read_answers_empty_within_deadline_then_recovers(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:

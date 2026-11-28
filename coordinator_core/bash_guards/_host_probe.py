@@ -129,6 +129,27 @@ def _win_ctime_of(handle) -> Optional[int]:
     return (c.dwHighDateTime << 32) | c.dwLowDateTime
 
 
+def _win_cpu_of(handle) -> Optional[float]:
+    from ctypes import wintypes
+
+    k = _win()
+    c, e, kt, ut = (wintypes.FILETIME() for _ in range(4))
+    if not k.GetProcessTimes(handle, ctypes.byref(c), ctypes.byref(e), ctypes.byref(kt), ctypes.byref(ut)):
+        return None
+    ticks = ((kt.dwHighDateTime << 32) | kt.dwLowDateTime) + ((ut.dwHighDateTime << 32) | ut.dwLowDateTime)
+    return ticks / 1e7
+
+
+def _windows_cpu_time_s(pid: int) -> Optional[float]:
+    h, _err = _win_open(pid, _PROCESS_QUERY_LIMITED_INFORMATION)
+    if not h:
+        return None
+    try:
+        return _win_cpu_of(h)
+    finally:
+        _win().CloseHandle(h)
+
+
 def _windows_creation_time(pid: int) -> Optional[int]:
     h, _err = _win_open(pid, _PROCESS_QUERY_LIMITED_INFORMATION)
     if not h:
@@ -217,15 +238,38 @@ def _linux_working_set_bytes(pid: int) -> Optional[int]:
         return None
 
 
-def _linux_stat(pid: int) -> Optional[tuple]:
-    """(name, ppid, starttime) from /proc/<pid>/stat; comm may contain spaces and parens."""
+def _linux_stat_fields(pid: int) -> Optional[tuple]:
+    """(comm, fields after comm; index 0 is stat field 3) from /proc/<pid>/stat; comm may contain
+    spaces and parens."""
     try:
         with open(f"/proc/{int(pid)}/stat", "r", encoding="utf-8", errors="replace") as fh:
             raw = fh.read()
         lp, rp = raw.index("("), raw.rindex(")")
-        rest = raw[rp + 2:].split()
-        return raw[lp + 1:rp], int(rest[1]), int(rest[19])
-    except (OSError, ValueError, IndexError):
+        return raw[lp + 1:rp], raw[rp + 2:].split()
+    except (OSError, ValueError):
+        return None
+
+
+def _linux_stat(pid: int) -> Optional[tuple]:
+    """(name, ppid, starttime) from /proc/<pid>/stat."""
+    parsed = _linux_stat_fields(pid)
+    if parsed is None:
+        return None
+    try:
+        return parsed[0], int(parsed[1][1]), int(parsed[1][19])
+    except (ValueError, IndexError):
+        return None
+
+
+def _linux_cpu_time_s(pid: int) -> Optional[float]:
+    """utime+stime (stat fields 14, 15) in seconds."""
+    parsed = _linux_stat_fields(pid)
+    if parsed is None:
+        return None
+    try:
+        ticks = int(parsed[1][11]) + int(parsed[1][12])
+        return ticks / os.sysconf("SC_CLK_TCK")
+    except (ValueError, IndexError, OSError):
         return None
 
 
@@ -373,6 +417,38 @@ def _darwin_bsdinfo(pid: int) -> Optional[tuple]:
         return None
 
 
+_PROC_PIDTASKINFO = 4
+
+
+class _TaskInfo(ctypes.Structure):
+    _fields_ = [
+        ("virtual_size", ctypes.c_uint64), ("resident_size", ctypes.c_uint64),
+        ("total_user", ctypes.c_uint64), ("total_system", ctypes.c_uint64),
+        ("threads_user", ctypes.c_uint64), ("threads_system", ctypes.c_uint64),
+        ("policy", ctypes.c_int32), ("faults", ctypes.c_int32), ("pageins", ctypes.c_int32),
+        ("cow_faults", ctypes.c_int32), ("messages_sent", ctypes.c_int32),
+        ("messages_received", ctypes.c_int32), ("syscalls_mach", ctypes.c_int32),
+        ("syscalls_unix", ctypes.c_int32), ("csw", ctypes.c_int32), ("threadnum", ctypes.c_int32),
+        ("numrunning", ctypes.c_int32), ("priority", ctypes.c_int32),
+    ]
+
+
+class _TimebaseInfo(ctypes.Structure):
+    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+
+
+def _darwin_cpu_time_s(pid: int) -> Optional[float]:
+    """pti_total_user + pti_total_system via proc_pidinfo(PROC_PIDTASKINFO); the counters are mach
+    absolute-time units, scaled to ns by mach_timebase_info."""
+    lp = _libc()
+    t = _TaskInfo()
+    if lp.proc_pidinfo(int(pid), _PROC_PIDTASKINFO, 0, ctypes.byref(t), ctypes.sizeof(t)) != ctypes.sizeof(t):
+        return None
+    tb = _TimebaseInfo()
+    numer, denom = (tb.numer, tb.denom) if lp.mach_timebase_info(ctypes.byref(tb)) == 0 and tb.denom else (1, 1)
+    return (int(t.total_user) + int(t.total_system)) * numer / denom / 1e9
+
+
 def _darwin_alive(pid: int, ctime: int) -> bool:
     try:
         os.kill(int(pid), 0)
@@ -463,12 +539,28 @@ def snapshot() -> Optional[Sequence]:
     return _safe(fn)
 
 
+def cpu_time_s(pid: int) -> Optional[float]:
+    """User+kernel CPU seconds consumed by pid since it started, or None when unreadable. Never raises."""
+    plat = _platform()
+    fn = {"windows": _windows_cpu_time_s, "darwin": _darwin_cpu_time_s}.get(plat, _linux_cpu_time_s)
+    return _safe(fn, pid)
+
+
+def command_line(pid: int) -> Optional[str]:
+    """The process command line, or None when unreadable; delegates to `_session_census.command_line`."""
+    from coordinator_core.bash_guards import _session_census
+
+    return _session_census.command_line(pid)
+
+
 class HostPrimitives:
     """ProcessPrimitives bound to this host; the instance a caller passes where a stub is accepted."""
 
     alive = staticmethod(alive)
     creation_time = staticmethod(creation_time)
     snapshot = staticmethod(snapshot)
+    cpu_time_s = staticmethod(cpu_time_s)
+    command_line = staticmethod(command_line)
 
 
 def ctime_units_per_second() -> int:

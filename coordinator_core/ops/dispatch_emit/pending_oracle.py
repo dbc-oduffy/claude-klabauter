@@ -3,15 +3,18 @@
 A relayed row whose closing evidence is owned outside the run is held open, never met: an entry names an
 `owner`, a `closing_check` and a `requester_citation`. `accepted_partial` is not a state anywhere. Entry
 writes one PM-facing flag record per (run, row); the run stays halted and is refired through an ask carrying
-`resume_run_id`, never closed while a row is pending.
+`resume_run_id`, never closed while a row is pending; each refusal spools that refire (`spool_refire`; the
+`MAX_AUTO_REFIRES` cap is the callers', `halted_run_landed` and `stranded_wait`, while the periodic
+`refire_closed` tick spools the one refire past it once a closing check passes).
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.lifecycle import main_worktree_root
@@ -23,15 +26,22 @@ REQUIRED_FIELDS = ("owner", "closing_check", "requester_citation")
 #: Refusal text for the PM-rejected terminal state, in any key or value position.
 ACCEPTED_PARTIAL_REFUSAL = "accepted_partial is not a state"
 
-#: Landing-call budget: one check runs per pending row per call, so a hung oracle must not hold the op
-#: past its end-to-end invocation budget (`ipc._timeout_for`); a timeout leaves the row pending.
-CLOSING_CHECK_TIMEOUT_S = 10.0
+#: One check runs per pending row per call, so a hung oracle must not hold the op past the 500ms
+#: brightline; a timeout leaves the row pending.
+CLOSING_CHECK_TIMEOUT_S = 0.5
 
 #: Automatic refires spooled per run while a row stays pending; past it the PM flag is the only owner.
 MAX_AUTO_REFIRES = 3
 
 #: PM-facing flag records, one file per (run, row), under the main worktree.
 PM_FLAGS_DIR = "state/pm-flags"
+
+_CLOSED_SUFFIX = ".closed"
+
+#: Seconds between `on_idle_tick` closing-check passes per repo; a check spawns a process.
+TICK_INTERVAL_S = 300.0
+
+_last_tick: dict = {}
 
 _BANNED = "accepted_partial"
 
@@ -154,11 +164,101 @@ def spool_refire(
         return False
 
 
-def closing_check_passes(root: Path, check: Mapping[str, Any]) -> bool:
+def open_flags(root: Path) -> list:
+    """The unresolved PM flag records under the main worktree, oldest name first; a corrupt file is skipped.
+
+    The reader the EM session notice path calls so a pending row reaches the PM durably."""
+    flags_dir = main_worktree_root(Path(root)) / PM_FLAGS_DIR
+    out: list = []
+    try:
+        names = sorted(p for p in flags_dir.glob("*.json") if not p.name.endswith(_CLOSED_SUFFIX))
+    except OSError:
+        return out
+    for path in names:
+        if path.with_name(path.name[: -len(".json")] + _CLOSED_SUFFIX).exists():
+            continue
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(record, dict) and record.get("kind") == "pending_oracle":
+            out.append(record)
+    return out
+
+
+def notice_text(root: Path) -> Optional[str]:
+    """One line per open flag for the EM session notice, None when nothing is pending."""
+    flags = open_flags(root)
+    if not flags:
+        return None
+    lines = [
+        f"pending oracle: run {f.get('run_id')} row {f.get('row')} owned by {f.get('owner')}; "
+        f"refire resume_run_id {f.get('run_id')} once its closing check passes"
+        for f in flags
+    ]
+    return "\n".join(lines)
+
+
+def refire_closed(root: Path) -> list:
+    """One periodic tick: run each open flag's closing check once; spool the run's refire for each that passes.
+
+    Returns the `(run_id, row)` pairs refired. A passed row is marked closed beside its flag, so the next
+    tick spawns nothing for it. Enqueue only (`spool_refire`); never raises."""
+    refired: list = []
+    for flag in open_flags(root):
+        run_id, row = flag.get("run_id"), flag.get("row")
+        if not (isinstance(run_id, str) and isinstance(row, str) and safe_id(run_id) and safe_id(row)):
+            continue
+        if not closing_check_passes(root, flag.get("closing_check") or {}):
+            continue
+        try:
+            from coordinator_core.ops.dispatch_emit import ask_contract, halted_run, halted_run_landed
+
+            marker = halted_run._read(ask_contract.record_dir(root, run_id)) or {}
+            sizing = halted_run_landed._resume_sizing(root, run_id, marker)
+        except Exception:  # noqa: BLE001 -- an unreadable run keeps its flag open for the next tick
+            continue
+        if not sizing:
+            continue
+        spool_refire(root, run_id, sizing, MAX_AUTO_REFIRES + 1)
+        path = flag_path(root, run_id, row)
+        try:
+            atomic_write_bytes(path.with_name(path.name[: -len(".json")] + _CLOSED_SUFFIX), b"closed\n")
+        except OSError:
+            continue
+        refired.append((run_id, row))
+    return refired
+
+
+def on_idle_tick(repos: Iterable[object], now: Optional[float] = None) -> bool:
+    """Run `refire_closed` over each served repo at most once per `TICK_INTERVAL_S`; True when any refire was
+    spooled. A repo with no open flag costs one directory listing. Never raises."""
+    moment = time.time() if now is None else now
+    any_refired = False
+    for repo in repos:
+        root = Path(str(repo))
+        key = str(root)
+        if moment - _last_tick.get(key, float("-inf")) < TICK_INTERVAL_S:
+            continue
+        _last_tick[key] = moment
+        try:
+            if refire_closed(root):
+                any_refired = True
+        except Exception:  # noqa: BLE001 -- no pending-oracle failure may escape the idle tick
+            pass
+    return any_refired
+
+
+def closing_check_passes(root: Path, check: Mapping[str, Any], timeout: Optional[float] = None) -> bool:
     """Run the check's argv once, no shell, from `root`; True only on exit 0 with `expect` in stdout.
 
-    A timeout, a spawn error or non-matching output is False: the row stays pending, never a pass."""
+    *timeout* (seconds, capped at `CLOSING_CHECK_TIMEOUT_S`) lets a caller share one deadline across rows;
+    a spent deadline spawns nothing. A timeout, a spawn error or non-matching output is False: the row
+    stays pending, never a pass."""
     if _check_problem("check", check):
+        return False
+    limit = CLOSING_CHECK_TIMEOUT_S if timeout is None else min(timeout, CLOSING_CHECK_TIMEOUT_S)
+    if limit <= 0:
         return False
     try:
         done = subprocess.run(
@@ -166,7 +266,7 @@ def closing_check_passes(root: Path, check: Mapping[str, Any]) -> bool:
             cwd=str(root),
             capture_output=True,
             text=True,
-            timeout=CLOSING_CHECK_TIMEOUT_S,
+            timeout=limit,
             shell=False,
             **no_console_creationflags(),
         )

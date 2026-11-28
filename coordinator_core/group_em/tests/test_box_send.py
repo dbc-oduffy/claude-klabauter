@@ -89,3 +89,49 @@ def test_unwritable_inbox_reports_failure(tmp_path: Path) -> None:
     (second / "state/group-em/box").write_text("file blocks the dir")
     r = box_send.send(bid, "em-1", "x", directory=gdir)
     assert r["sent"] is False and r["reason"].startswith("write_failed")
+
+
+def test_send_to_another_root_makes_no_session_handoff(tmp_path: Path, monkeypatch) -> None:
+    primary, second, gdir, bid = _setup(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(primary))
+    r = box_send.send(bid, "em-1", "x", directory=gdir)
+    assert r["sent"] is True and "handoff" not in r
+    assert not (second / "agent-pipe").exists() and not (primary / "agent-pipe").exists()
+
+
+def test_send_to_this_box_also_appends_to_the_session_mailbox(tmp_path: Path, monkeypatch) -> None:
+    primary, second, gdir, bid = _setup(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(second))
+    r = box_send.send(bid, "em-1", "ROLL CALL ask", directory=gdir)
+    assert r["sent"] is True and r["handoff"] == "mailbox"
+    (line,) = (second / "agent-pipe" / "mailboxes" / "em-1.jsonl").read_text().splitlines()
+    msg = json.loads(line)
+    assert msg["to_session"] == "em-1" and msg["content"] == "ROLL CALL ask"
+    assert len(box_send.read_inbox("em-1", home=second)) == 1
+
+
+def test_send_to_this_box_routes_a_non_claude_binding_through_the_bridge(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.agent_pipe import bridge, roster
+
+    primary, second, gdir, bid = _setup(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(second))
+    monkeypatch.setattr(roster, "resolve", lambda name: {"kind": "codex"})
+    routed = []
+
+    def route(msg):
+        routed.append(msg)
+        return bridge.Delivery("handed-off", None, msg)
+
+    monkeypatch.setattr(bridge, "route", route)
+    r = box_send.send(bid, "cx-1", "ask", directory=gdir)
+    assert r["handoff"] == "bridge:handed-off"
+    assert [m.to_identity for m in routed] == ["cx-1"] and routed[0].content == "ask"
+    assert not (second / "agent-pipe" / "mailboxes").exists()
+
+
+def test_failed_handoff_is_reported_and_the_inbox_line_stays(tmp_path: Path, monkeypatch) -> None:
+    primary, second, gdir, bid = _setup(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(second))
+    r = box_send.send(bid, "a/b", "x", directory=gdir)
+    assert r["sent"] is True and r["handoff"].startswith("failed:")
+    assert len(box_send.read_inbox("a/b", home=second)) == 1

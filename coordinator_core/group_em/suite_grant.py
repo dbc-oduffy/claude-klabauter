@@ -39,6 +39,7 @@ import base64
 import json
 import os
 import re
+import socket
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -146,6 +147,27 @@ def names_this_box(stamped: object, home: Optional[Path] = None) -> bool:
     if stamped == local:
         return True
     return local != box_registry.LOCAL_BOX_ID and box_registry.same_box(stamped, local)
+
+
+def _is_local_target(
+    box_id: object, directory: Optional[Path], home: Optional[Path]
+) -> bool:
+    """True when a grantee head names this box: ``names_this_box``, or a host alias of it -- the head folds to this
+    machine's hostname AND a registered box row or a verified member names it. The hostname alone never decides."""
+    if names_this_box(box_id, home):
+        return True
+    if not isinstance(box_id, str) or not box_id:
+        return False
+    try:
+        label = box_registry.fold_box_id(socket.gethostname().split(".")[0])
+    except OSError:
+        return False
+    head = box_registry.fold_box_id(box_id.rpartition("@")[2])
+    if head != label:
+        return False
+    if any(box_registry.same_box(b.get("box_id"), head) for b in box_registry.read_boxes(directory)):
+        return True
+    return member_box.member_box_id(box_id, home=home) is not None
 
 
 def _box_ok(record: dict) -> bool:
@@ -537,7 +559,7 @@ def issue_suite_grant(
     if remote:
         grantee = _member_host_key(grantee, home)
     grantee_box, remote_sid = remote_identity.parse_key(grantee, box_registry.local_box_id(home))
-    if not names_this_box(grantee_box, home):
+    if not _is_local_target(grantee_box, directory, home):
         return _relay_grant(
             sid, holder, grantee_box, remote_sid, note, ttl_minutes, repo, directory, home, now
         )
@@ -610,7 +632,7 @@ def revoke_suite_grant(
     if isinstance(grantee, str) and ":" in grantee:
         grantee = _member_host_key(grantee, home)
         box_id, bare = remote_identity.parse_key(grantee, box_registry.local_box_id(home))
-        if not names_this_box(box_id, home):
+        if not _is_local_target(box_id, directory, home):
             return _revoke_remote(sid, grantee, directory, home, now)
         grantee = bare
     grantee_sid, _row = _resolve_grantee(grantee)

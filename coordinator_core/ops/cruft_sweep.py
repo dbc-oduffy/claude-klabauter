@@ -173,6 +173,7 @@ import stat
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path, PurePath
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
@@ -574,6 +575,58 @@ def _banner(msg: str, *, quiet: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
+_REPARSE_POINT_ATTR = 0x400
+
+
+def _is_link_entry(entry: "os.DirEntry") -> bool:
+    """True for a symlink or a Windows junction/reparse point, judged without following it."""
+    try:
+        if entry.is_symlink():
+            return True
+        attrs = getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return bool(attrs & _REPARSE_POINT_ATTR)
+
+
+def _remove_link(path: str) -> bool:
+    """Unlink a symlink or junction itself; the target is never entered. True when it is gone."""
+    for remove in (os.unlink, os.rmdir):
+        try:
+            remove(path)
+            return True
+        except OSError:
+            continue
+    return False
+
+
+def _unlink_links_in(root: Path) -> int:
+    """Remove every symlink and junction under `root` (or `root` itself when it is one) before a
+    recursive delete, so no delete can walk into a link's target. Never follows a link and never
+    raises. Returns the number of links removed."""
+    removed = 0
+    try:
+        top = os.lstat(root)
+    except OSError:
+        return 0
+    if stat.S_ISLNK(top.st_mode) or getattr(top, "st_file_attributes", 0) & _REPARSE_POINT_ATTR:
+        return 1 if _remove_link(str(root)) else 0
+    stack = [str(root)]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                entries = list(it)
+        except OSError:
+            continue
+        for entry in entries:
+            if _is_link_entry(entry):
+                removed += 1 if _remove_link(entry.path) else 0
+            elif entry.is_dir(follow_symlinks=False):
+                stack.append(entry.path)
+    return removed
+
+
 def _delete_path(target: Path) -> bool:
     """Best-effort `rm -rf` with a 60s timeout. Returns True iff `target` is
     confirmed gone afterward — callers MUST gate prune counting/logging on
@@ -586,6 +639,7 @@ def _delete_path(target: Path) -> bool:
     pruned. Now returncode is checked and existence is confirmed.
     --- end Tier 2 ---
     """
+    _unlink_links_in(target)
     try:
         result = subprocess.run(
             ["rm", "-rf", str(target)],
@@ -670,6 +724,8 @@ def _delete_paths_batch(
             )
             results.update({str(t): not t.exists() for t in chunk})
             continue
+        for t in chunk:
+            _unlink_links_in(t)
         try:
             subprocess.run(
                 ["rm", "-rf"] + [str(t) for t in chunk],
@@ -1933,6 +1989,30 @@ def _is_scratch_clone_root(path: Path, scratch_root: Path) -> bool:
 
 
 WARP_PROMPTS_RETENTION_DAYS = 7
+#: Per-run subdirs that are ephemera once the run is terminal; everything else in a run dir is disk-truth.
+WARP_EPHEMERA_SUBDIRS = ("prompts", "withheld-blobs")
+
+
+def _tracked_warp_subdirs(repo_root: Path) -> Optional[set]:
+    """`(run, subdir)` pairs under `state/warp` holding a tracked file, read from the index in
+    process (no git spawn). Empty outside a git work tree; None when the index is unreadable."""
+    from coordinator_core.git.git_state import IndexParseError, read_index_paths
+
+    if git_dir(str(repo_root)) is None:
+        return set()
+    warp_rel = os.path.relpath(home_dir(str(repo_root), "warp"), str(repo_root)).replace(os.sep, "/")
+    prefix = warp_rel + "/"
+    try:
+        tracked = read_index_paths(repo_root)
+    except (IndexParseError, OSError):
+        return None
+    pairs: set = set()
+    for entry in tracked:
+        if entry.startswith(prefix):
+            parts = entry[len(prefix):].split("/", 2)
+            if len(parts) == 3:
+                pairs.add((parts[0], parts[1]))
+    return pairs
 
 
 def sweep_warp_prompts(
@@ -1943,9 +2023,11 @@ def sweep_warp_prompts(
     quiet: bool,
     watchdog_ceiling_secs: Optional[float] = None,
 ) -> Tuple[int, int]:
-    """Delete `state/warp/<run>/prompts/` once the run's outcome file is older
-    than WARP_PROMPTS_RETENTION_DAYS. A run with no outcome file is open and
-    skipped. Returns (bytes, items); dry_run counts without deleting."""
+    """Delete a terminal run's `state/warp/<run>/{prompts,withheld-blobs}/` once its outcome
+    file is older than WARP_PROMPTS_RETENTION_DAYS; the manifest, ledger and every other run
+    file stay. A run with no outcome file is open and skipped, and a subdir holding any tracked
+    file is skipped (a sweep deletes only untracked or ignored paths). Returns (bytes, items);
+    dry_run counts without deleting."""
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_OUTCOME_FILE
 
     warp_root = Path(home_dir(str(repo_root), "warp"))
@@ -1967,14 +2049,22 @@ def sweep_warp_prompts(
                 quiet=quiet,
             )
             break
-        prompts = Path(run) / "prompts"
         try:
             outcome_mtime = os.stat(os.path.join(run, RUN_OUTCOME_FILE)).st_mtime
         except OSError:
             continue
-        if now - outcome_mtime <= window or not prompts.is_dir():
+        if now - outcome_mtime <= window:
             continue
-        due.append((prompts, _dir_size_bytes(prompts)))
+        for sub in WARP_EPHEMERA_SUBDIRS:
+            ephemera = Path(run) / sub
+            if ephemera.is_dir() and not ephemera.is_symlink():
+                due.append((ephemera, _dir_size_bytes(ephemera)))
+    if due:
+        tracked = _tracked_warp_subdirs(repo_root)
+        if tracked is None:
+            _banner("[cruft-sweep] warp ephemera sweep skipped: tracked-path index unreadable", quiet=quiet)
+            return 0, 0
+        due = [(p, s) for p, s in due if (p.parent.name, p.name) not in tracked]
     if dry_run:
         return sum(s for _, s in due), len(due)
     if not due:
@@ -2457,6 +2547,147 @@ def sweep_scratch(
         _append_log_row(log_path, "scratch", total_bytes, pruned_items)
 
     return total_bytes, pruned_items
+
+
+_TEMP_INDEX_DIRNAME = "gw"
+_TEMP_INDEX_SUFFIX = ".index"
+
+
+def _temp_index_mark(index: Path, mtime: float) -> Optional[dict]:
+    """Owner mark of a temp git index: its `<name>.owner.json` sidecar, else a pid at the end of
+    its stem (stamped with the file's mtime for the pid-reuse check). None keeps the index."""
+    from coordinator_core import owner_mark
+
+    try:
+        data = json.loads(index.with_name(index.name + owner_mark.MARK_FILE).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        m = _EXPORT_TREE_PID_RE.search(index.stem)
+        if m is None:
+            return None
+        created = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+        return {"owner_kind": owner_mark.OWNER_PID, "owner_id": m.group(1), "repo": None,
+                "created": created, "ttl_hours": None}
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _tracked_under(repo_root: Path, rels: Sequence[str]) -> Optional[set]:
+    """The members of `rels` (repo-relative, `/`-separated) that are or contain a tracked path,
+    read from the index in process. Empty outside a git work tree; None when the index is unreadable."""
+    from coordinator_core.git.git_state import IndexParseError, read_index_paths
+
+    if git_dir(str(repo_root)) is None:
+        return set()
+    try:
+        tracked = read_index_paths(repo_root)
+    except (IndexParseError, OSError):
+        return None
+    hit: set = set()
+    for entry in tracked:
+        for rel in rels:
+            if entry == rel or entry.startswith(rel + "/"):
+                hit.add(rel)
+    return hit
+
+
+def sweep_run_scratch(*, apply: bool) -> Tuple[int, int]:
+    """Run `run_scratch.sweep` over the scratch and build roots; (0, items removed), nothing on a dry run."""
+    if not apply:
+        return 0, 0
+    from coordinator_core import run_scratch
+
+    try:
+        return 0, len(run_scratch.sweep_boxes())
+    except Exception:  # noqa: BLE001
+        return 0, 0
+
+
+def sweep_owner_dead_scratch(
+    repo_root: Path,
+    *,
+    now: float,
+    apply: bool,
+    quiet: bool,
+    watchdog_ceiling_secs: Optional[float] = None,
+) -> Tuple[int, int]:
+    """Delete owner-marked `scratch/<dir>` repo copies and `scratch/gw/*.index` temp indexes whose
+    owner is provably gone and whose age floor (24h from the mark's `created`) has passed.
+
+    Reads only the direct children of `scratch/` and of `scratch/gw/`: no repo walk. A path whose
+    owner is live or unknown, a keep-set member, a path holding a tracked file, or one with no owner
+    mark stays at any age. Links inside a swept dir are unlinked, never followed. Returns
+    (bytes, items); `apply=False` counts without deleting."""
+    from coordinator_core import owner_mark
+
+    scratch_root = repo_root / "scratch"
+    now_dt = datetime.fromtimestamp(now, tz=timezone.utc)
+    found: List[Tuple[Path, dict, Optional[Path]]] = []  # path, mark, sidecar to remove with it
+
+    def _children(parent: Path) -> List["os.DirEntry"]:
+        try:
+            with os.scandir(parent) as it:
+                return [e for e in it if not _is_link_entry(e)]
+        except OSError:
+            return []
+
+    for entry in _children(scratch_root):
+        if not entry.is_dir(follow_symlinks=False) or entry.name in _EXPORT_TREE_KEEP_NAMES:
+            continue
+        mark = owner_mark.read_mark(entry.path)
+        if mark is not None:
+            found.append((Path(entry.path), mark, None))
+    for entry in _children(scratch_root / _TEMP_INDEX_DIRNAME):
+        if not entry.name.endswith(_TEMP_INDEX_SUFFIX) or not entry.is_file(follow_symlinks=False):
+            continue
+        try:
+            mtime = entry.stat(follow_symlinks=False).st_mtime
+        except OSError:
+            continue
+        mark = _temp_index_mark(Path(entry.path), mtime)
+        if mark is not None:
+            sidecar = Path(entry.path + owner_mark.MARK_FILE)
+            found.append((Path(entry.path), mark, sidecar if sidecar.exists() else None))
+    if not found:
+        return 0, 0
+
+    try:
+        keep = owner_mark.keep_paths()
+    except Exception as exc:  # noqa: BLE001 -- an unreadable keep-set keeps everything
+        _banner(f"[cruft-sweep] owner-dead scratch sweep skipped: keep-set unreadable ({exc})", quiet=quiet)
+        return 0, 0
+
+    due: List[Tuple[Path, Optional[Path]]] = []
+    for path, mark, sidecar in found:
+        floor = owner_mark.past_ttl({"created": mark.get("created"), "ttl_hours": _MTIME_FLOOR_SECS / 3600}, now_dt)
+        if (
+            floor is True
+            and owner_mark.owner_alive(mark) is False
+            and owner_mark.past_ttl(mark, now_dt) is not False
+            and not owner_mark.is_kept(path, keep)
+        ):
+            due.append((path, sidecar))
+    if not due:
+        return 0, 0
+    rels = {p: p.relative_to(repo_root).as_posix() for p, _ in due}
+    tracked = _tracked_under(repo_root, list(rels.values()))
+    if tracked is None:
+        _banner("[cruft-sweep] owner-dead scratch sweep skipped: tracked-path index unreadable", quiet=quiet)
+        return 0, 0
+    due = [(p, s) for p, s in due if rels[p] not in tracked]
+    wd = _Watchdog(watchdog_ceiling_secs)
+    sizes = {p: _dir_size_bytes(p) if p.is_dir() else _file_size(p) for p, _ in due}
+    if not apply or not due:
+        return sum(sizes.values()), len(due)
+    results = _delete_paths_batch([p for p, _ in due] + [s for _, s in due if s is not None], watchdog=wd)
+    total_bytes = total_items = 0
+    for path, _sidecar in due:
+        if not results.get(str(path), False):
+            _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {path}", quiet=quiet)
+            continue
+        total_bytes += sizes[path]
+        total_items += 1
+    return total_bytes, total_items
 
 
 # ---------------------------------------------------------------------------
@@ -3262,8 +3493,16 @@ def _run_all_phases(
         )
         if apply and runs_items > 0:
             _append_log_row(log_path, "warp-runs", runs_bytes, runs_items)
-        sandbox_bytes += warp_bytes + runs_bytes
-        sandbox_items += warp_items + runs_items
+        owned_bytes, owned_items = sweep_owner_dead_scratch(
+            _resolve_repo_root(repo_root_override), now=time.time(), apply=apply, quiet=quiet,
+        )
+        if apply and owned_items > 0:
+            _append_log_row(log_path, "owner-dead-scratch", owned_bytes, owned_items)
+        run_scratch_bytes, run_scratch_items = sweep_run_scratch(apply=apply)
+        if apply and run_scratch_items > 0:
+            _append_log_row(log_path, "run-scratch", run_scratch_bytes, run_scratch_items)
+        sandbox_bytes += warp_bytes + runs_bytes + owned_bytes + run_scratch_bytes
+        sandbox_items += warp_items + runs_items + owned_items + run_scratch_items
     if class_ in ("orphans", "all"):
         orphans_bytes, orphans_items = sweep_orphans(
             parent_roots, whitelist,

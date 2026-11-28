@@ -12,6 +12,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_PARKED, HALT_REFUSAL, PARK_SOURCE_REPLY_KEY, PARKED_REPLY_KEY, STOP_AFTER_PLAN, parked_next_action,
@@ -207,8 +208,9 @@ def test_an_emit_time_stop_after_ends_as_the_same_parked_halt_naming_mise_prep(t
     halt = out["result"]["halted_by"]
     assert halt["halted"] == HALT_PARKED and halt["reason"] == "parked after plan: stop_after=plan"
     assert halt["plan"] == e2e.PLAN_PATH and halt["run_id"] == "run-1"
-    assert halt["next_action"] == parked_next_action(e2e.PLAN_PATH)
-    assert "/mise-prep" in halt["next_action"] and e2e.PLAN_PATH in halt["next_action"]
+    # The emitted JS appends " Call <refire Workflow(...)>" after the shared parked text, so the pin is a prefix.
+    assert halt["next_action"].startswith(parked_next_action(e2e.PLAN_PATH))
+    assert "mise-prep" not in halt["next_action"] and "re-fire the sizing" in halt["next_action"]
 
 
 def test_an_emit_time_stop_after_with_no_landed_plan_on_a_non_xs_arm_is_a_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -229,6 +231,69 @@ def test_an_emit_time_park_is_set_before_the_halt_record_commit_that_lands_it() 
     script = _emit_time_script(in_run_commit=True)
     assert script.index("parked after plan: stop_after=plan") < script.index("await _commitHaltRecord()")
     assert "halt_commit: _haltCommit" in script
+
+
+_UNCLAIMED_LEDGER = {**handle._RESUME, "blocking": [], "unclaimed_rows": ["R2", "R3"], "unlanded": []}
+
+
+def _stop_after_script(monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
+    return compose_ask_script(
+        repo_root="REPO", prompt=None, sizing_rel=handle._SIZING, run_id="run-1", session_id=None,
+        wrap_stage=lambda _t: (handle._BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub",
+        script_path="scratch/warp/x.mjs", in_run_commit=True, stop_after=STOP_AFTER_PLAN, **REVIEW_KW,
+    )
+
+
+def _run_stop_after(script: str, ledger: dict, replan: dict | None) -> dict:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    gate = {
+        "arm": "m_plus", "halt": None, "baton": None, "resume_ledger": ledger, "tshirt": "M",
+        "route": "spec-dispatch",
+    }
+    cfg = {
+        "token": handle._TOKEN, "verify": {"items": handle._MET["items"]}, "commit": handle._LANDED,
+        "replies": {"gate": gate, "gate-stage": gate, **({"ledger-replan": replan} if replan is not None else {})},
+        **handle.readers_cfg(),
+    }
+    proc = subprocess.run(
+        [node, "-"], input=handle._NODE_PROGRAM, capture_output=True, text=True, encoding="utf-8", timeout=60,
+        env={**os.environ, "SRC_FILE": handle.payload_file(script), "CFG": json.dumps(cfg)}, **no_console_creationflags(),
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_a_stop_after_park_on_a_reused_plan_claims_every_unclaimed_register_row_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    replan = {"plan_rel": handle._PLAN, "added_rows": ["C2", "C3"]}
+    out = _run_stop_after(_stop_after_script(monkeypatch), _UNCLAIMED_LEDGER, replan)
+    calls = [c for c in out["calls"] if c["label"] == "ledger-replan"]
+    assert len(calls) == 1
+    prompt = calls[0]["prompt"]
+    assert "plan.claim_register_rows" in prompt and '"rows":["R2","R3"]' in prompt
+    assert "dispatch.ask_stage" not in prompt
+    halt = out["result"]["halted_by"]
+    assert halt["halted"] == HALT_PARKED and halt["plan"] == handle._PLAN
+    assert "ledger-replan" in _labels_before_halt_commit(out)
+
+
+def _labels_before_halt_commit(out: dict) -> list[str]:
+    labels = handle._labels(out)
+    return labels[: labels.index("halt-commit")]
+
+
+def test_a_stop_after_park_with_every_row_claimed_runs_no_replan(monkeypatch: pytest.MonkeyPatch) -> None:
+    out = _run_stop_after(_stop_after_script(monkeypatch), {**_UNCLAIMED_LEDGER, "unclaimed_rows": []}, None)
+    assert "ledger-replan" not in handle._labels(out)
+
+
+def test_a_stop_after_park_whose_replan_adds_no_row_refuses_instead_of_parking_unclaimed(monkeypatch: pytest.MonkeyPatch) -> None:
+    out = _run_stop_after(_stop_after_script(monkeypatch), _UNCLAIMED_LEDGER, {"plan_rel": handle._PLAN, "added_rows": []})
+    halt = out["result"]["halted_by"]
+    assert halt["halted"] == HALT_REFUSAL and "R2" in halt["reason"] and "R3" in halt["reason"]
+    assert halt["halted"] != HALT_PARKED
 
 
 @pytest.mark.parametrize("research", [False, True])

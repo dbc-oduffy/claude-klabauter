@@ -234,9 +234,54 @@ def test_host_primitives_satisfy_protocol() -> None:
     assert isinstance(hp.HostPrimitives(), ProcessPrimitives)
 
 
+def test_host_primitives_expose_reap_surface() -> None:
+    prim = hp.HostPrimitives()
+    assert prim.cpu_time_s is hp.cpu_time_s
+    assert prim.command_line is hp.command_line
+
+
+def test_linux_cpu_time_sums_utime_stime(monkeypatch: pytest.MonkeyPatch) -> None:
+    rest = ["S", "1", "1", "1", "0", "-1", "0", "0", "0", "0", "0", "300", "150"] + ["0"] * 10
+    monkeypatch.setattr(hp, "_linux_stat_fields", lambda pid: ("a (b) c", rest))
+    monkeypatch.setattr(hp.os, "sysconf", lambda name: 100, raising=False)
+    assert hp._linux_cpu_time_s(1) == 4.5
+
+
+def test_linux_cpu_time_unreadable_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hp, "_linux_stat_fields", lambda pid: None)
+    assert hp._linux_cpu_time_s(1) is None
+    monkeypatch.setattr(hp, "_linux_stat_fields", lambda pid: ("x", ["S"]))
+    assert hp._linux_cpu_time_s(1) is None
+
+
+def test_cpu_time_reader_exception_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(pid):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(hp, "_platform", lambda: "linux")
+    monkeypatch.setattr(hp, "_linux_cpu_time_s", boom)
+    assert hp.cpu_time_s(1) is None
+
+
 # ---- live checks against this host (Windows or Linux; macOS is READ-NOT-EXECUTED) ----
 
 live = pytest.mark.skipif(sys.platform == "darwin", reason="macOS layout unexecuted")
+
+
+@live
+def test_live_cpu_time_of_self_is_non_negative_float() -> None:
+    value = hp.cpu_time_s(os.getpid())
+    assert isinstance(value, float) and value >= 0.0
+
+
+@live
+def test_live_cpu_time_of_bogus_pid_is_none() -> None:
+    assert hp.cpu_time_s(2**22 + 12345) is None
+
+
+@live
+def test_live_command_line_of_self_is_readable() -> None:
+    assert hp.command_line(os.getpid())
 
 
 @live

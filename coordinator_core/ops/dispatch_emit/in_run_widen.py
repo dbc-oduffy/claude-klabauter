@@ -12,15 +12,9 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Optional, Sequence, Union
-
-from coordinator_core.bash_guards.guard_doctrine_surface_bash_write import _ADVISORY_EXTRA_IDENTIFIERS
-from coordinator_core.bash_guards.dispatch import _LOCAL_CONFIG_GOVERNED_SURFACE
-from coordinator_core.write_guards.guard_doctrine_surface_edits import (
-    _CONTENT_ONLY_SURFACES,
-    _PER_REPO_SURFACES,
-)
 
 TSHIRT_ORDER = ("XS", "S", "M", "L", "XL", "XXL")
 #: Growth of this many steps or more flags to the EM.
@@ -37,12 +31,25 @@ _STRIP_CHARS = "*_`'\" \t\r"
 # Doctrine surfaces come from the doctrine-surface guards' own constants; state/ and .git/ are
 # the engine's own stores.
 _ENGINE_PREFIXES = ("state/", ".git/")
-_SURFACE_PATHS = tuple(
-    "/".join(parts) for parts in (*_CONTENT_ONLY_SURFACES, *_PER_REPO_SURFACES)
-) + (_LOCAL_CONFIG_GOVERNED_SURFACE,)
-_SURFACE_NAMES = tuple(sorted({p.rsplit("/", 1)[-1].lower() for p in _SURFACE_PATHS}))
-_DOCTRINE_PREFIXES = tuple(i.lower() for i in _ADVISORY_EXTRA_IDENTIFIERS)
-_DEFAULT_DENY_PREFIXES = tuple(p.lower() for p in _ENGINE_PREFIXES) + _DOCTRINE_PREFIXES
+
+
+@lru_cache(maxsize=1)
+def _deny_tables() -> "tuple[tuple, tuple, tuple]":
+    """``(surface paths, surface names, default deny prefixes)``. Built on first use: the guard
+    modules they come from are import-heavy and ``_reply_value`` callers never need them."""
+    from coordinator_core.bash_guards.dispatch import _LOCAL_CONFIG_GOVERNED_SURFACE
+    from coordinator_core.bash_guards.guard_doctrine_surface_bash_write import _ADVISORY_EXTRA_IDENTIFIERS
+    from coordinator_core.write_guards.guard_doctrine_surface_edits import (
+        _CONTENT_ONLY_SURFACES,
+        _PER_REPO_SURFACES,
+    )
+
+    paths = tuple(
+        "/".join(parts) for parts in (*_CONTENT_ONLY_SURFACES, *_PER_REPO_SURFACES)
+    ) + (_LOCAL_CONFIG_GOVERNED_SURFACE,)
+    names = tuple(sorted({p.rsplit("/", 1)[-1].lower() for p in paths}))
+    deny = tuple(p.lower() for p in _ENGINE_PREFIXES) + tuple(i.lower() for i in _ADVISORY_EXTRA_IDENTIFIERS)
+    return paths, names, deny
 
 
 @dataclass(frozen=True)
@@ -91,7 +98,8 @@ def _denied(value: str, deny_prefixes: Iterable[str]) -> str:
     for prefix in deny_prefixes:
         if low.startswith(prefix.lower()) or ("/" + prefix.lower()) in "/" + low:
             return f"denied surface: {prefix}"
-    if low in (p.lower() for p in _SURFACE_PATHS) or low.rsplit("/", 1)[-1] in _SURFACE_NAMES:
+    surface_paths, surface_names, _deny = _deny_tables()
+    if low in (p.lower() for p in surface_paths) or low.rsplit("/", 1)[-1] in surface_names:
         return f"doctrine surface: {value}"
     return ""
 
@@ -105,7 +113,7 @@ def classify_block(
     value, why = _reply_value(reason_text or "")
     if value is None:
         return Halt(why)
-    bad = _shape_halt(value, repo_root) or _denied(value, _DEFAULT_DENY_PREFIXES)
+    bad = _shape_halt(value, repo_root) or _denied(value, _deny_tables()[2])
     if bad:
         return Halt(bad)
     if value.lower() in {str(h).replace("\\", "/").lower() for h in held_paths}:
@@ -151,7 +159,7 @@ def well_formed_widens(items: object) -> "list[dict]":
             re.match(_SHAPE_RE_SRC, path)
             and not path.endswith("/")
             and not any(seg in ("", ".", "..") for seg in path.split("/"))
-            and not _denied(path, _DEFAULT_DENY_PREFIXES)
+            and not _denied(path, _deny_tables()[2])
         ):
             out.append({"row": row, "path": path})
     return out
@@ -206,8 +214,9 @@ def classify_block_js(repo_root_rel_denylist: Optional[Sequence[str]] = None) ->
     generated from this module's constants. ``repo_root_rel_denylist`` adds repo-relative deny
     prefixes to the defaults (state/, .git/, the doctrine rules trees). Repo-root containment is
     lexical here: the JS accepts only a normalized relative path, so it needs no root."""
-    deny = list(_DEFAULT_DENY_PREFIXES) + [p.lower() for p in (repo_root_rel_denylist or ())]
-    paths = [p.lower() for p in _SURFACE_PATHS]
+    surface_paths, surface_names, default_deny = _deny_tables()
+    deny = list(default_deny) + [p.lower() for p in (repo_root_rel_denylist or ())]
+    paths = [p.lower() for p in surface_paths]
     return (
         "function classifyBlock(replyText, heldPaths) {\n"
         f"  const lineRe = new RegExp({json.dumps(_LINE_RE_SRC)}, 'gm');\n"
@@ -216,7 +225,7 @@ def classify_block_js(repo_root_rel_denylist: Optional[Sequence[str]] = None) ->
         f"  const strip = {json.dumps(_STRIP_CHARS)};\n"
         f"  const deny = {json.dumps(deny)};\n"
         f"  const surfacePaths = {json.dumps(paths)};\n"
-        f"  const surfaceNames = {json.dumps(list(_SURFACE_NAMES))};\n"
+        f"  const surfaceNames = {json.dumps(list(surface_names))};\n"
         "  const text = String(replyText || '').split('\\\\n').join('\\n');\n"
         "  const values = [];\n"
         "  for (const m of text.matchAll(lineRe)) {\n"

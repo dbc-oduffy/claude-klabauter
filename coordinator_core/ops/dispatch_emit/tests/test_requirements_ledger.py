@@ -764,3 +764,25 @@ def test_out_of_scope_of_original_ask_preserves_r3(run):
     refused = _revise(repo, verbatim="the raw ask is out", out_of_scope=["R3"])
     assert rr.PM_DISPOSITION_REASON in refused["error"]
     assert _rows(repo) == before
+
+
+def _halt(d, halted, **extra):
+    import json
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
+
+    (d / halted_run.HALTED_FILE).write_text(json.dumps({"status": STATUS_HALTED, "halted": halted, **extra}), encoding="utf-8")
+
+
+def test_revise_of_a_run_halted_run_failed_refuses_and_names_the_resubmit_route(run):
+    repo, d = run
+    _halt(d, "run_failed", sizing_rel=REL)
+    out = _revise(repo, verbatim="a later word")
+    assert "failed (halted: run_failed)" in out["error"] and f"resubmit {REL}" in out["error"]
+
+
+def test_revise_of_a_run_halted_for_another_cause_is_not_refused_as_failed(run):
+    repo, d = run
+    _halt(d, "refusal", sizing_rel=REL)
+    out = _revise(repo, verbatim="a later word")
+    assert "failed (halted" not in str(out.get("error", ""))

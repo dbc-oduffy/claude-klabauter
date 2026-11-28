@@ -363,6 +363,20 @@ def test_a_far_posix_root_registered_beside_the_local_row_is_its_own_box(home: P
     assert mini["state"] == "unreachable"
 
 
+def test_fleet_capacity_rows_carry_the_stamped_saturation_and_memory_verdicts(home: Path, tmp_path: Path) -> None:
+    peer = _peer(tmp_path, dict(_sample(), saturated=True, top_cpu=[{"pid": 5, "comm": "find", "pcpu": 97.0}]))
+    assert capacity_record.stamp_memory(True, 2, tmp_path / "peer")
+    row = next(b for b in _call("fleet_capacity", {"local_only": True})["boxes"] if b["box_id"] == peer)
+    assert row["saturated"] is True and row["mem_critical"] is True and row["paused"] == 2
+    assert row["top_cpu"] == [{"pid": 5, "comm": "find", "pct": 97.0}]
+
+
+def test_fleet_capacity_persists_the_live_snapshot(home: Path) -> None:
+    _call("fleet_capacity", {})
+    rows = fleet_live.read_live_snapshot(600.0, path=fleet_live.live_snapshot_path(home))
+    assert [r["box"] for r in rows] == [box_registry.local_box_id(home)]
+
+
 def test_fleet_capacity_lists_every_box_once_and_marks_the_unrouted_ones_unreachable(home: Path) -> None:
     local = box_registry.local_box_id(home)
     box_registry.register(home, {}, box_id="machine-a", transport={"kind": "ssh", "host": "u@machine-a.local"})
@@ -377,3 +391,29 @@ def test_fleet_capacity_lists_every_box_once_and_marks_the_unrouted_ones_unreach
     assert states == {local: "ok", "Machine-b": "unreachable", "gipsy-windows": "unreachable"}
     assert len(out["power_on"]) == 2 and all("UNREACHABLE" in line for line in out["power_on"])
     assert len(out["table"].splitlines()) == 1 + 3 + 2
+
+
+def test_admit_books_pid_owner_window_and_rate_and_job_progress_updates_the_row(home: Path) -> None:
+    out = _call(
+        "capacity_admit",
+        {"job_type": "fits", "run": "go-1", "pid": os.getpid(), "owner_sid": "sid", "window_s": 600, "expected_rate": 2, "rate_unit": "files/s"},
+    )
+    assert out["grant"] is True
+    row = capacity_admit.read_booked(home)[0]
+    assert (row["run"], row["pid"], row["owner_sid"], row["window_s"], row["expected_rate"]) == ("go-1", os.getpid(), "sid", 600, 2)
+    done = op._groupem_job_progress({"run": "go-1", "progress": 12})
+    assert done == {"updated": True, "run": "go-1"}
+    assert capacity_admit.read_booked(home)[0]["progress"] == 12
+    assert op._groupem_job_progress({"run": "ghost", "progress": 1})["reason"] == "no_grant"
+
+
+@pytest.mark.parametrize(
+    "extra", [{"pid": 0}, {"pid": "7"}, {"pid": True}, {"window_s": 0}, {"expected_rate": -1}, {"owner_sid": ""}, {"rate_unit": 3}]
+)
+def test_admit_bad_booking_field_values_return_error(home: Path, extra: dict) -> None:
+    assert "error" in op._groupem_capacity_admit({"job_type": "fits", **extra})
+
+
+@pytest.mark.parametrize("params", [{}, {"run": "r"}, {"run": "r", "progress": -1}, {"run": "r", "progress": "x"}, {"progress": 1}])
+def test_job_progress_bad_params_return_error(params: dict) -> None:
+    assert "error" in op._groupem_job_progress(params)

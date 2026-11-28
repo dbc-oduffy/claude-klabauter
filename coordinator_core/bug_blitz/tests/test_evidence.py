@@ -40,6 +40,13 @@ def test_resolve_relative_dir_and_file(tmp_path):
     assert evidence.resolve_target("f.txt", tmp_path).kind == "file"
 
 
+def test_resolve_relative_nested_file_equals_its_absolute_spelling(tmp_path):
+    (tmp_path / "state" / "red-sets").mkdir(parents=True)
+    target = tmp_path / "state" / "red-sets" / "x.txt"
+    target.write_text("x")
+    assert evidence.resolve_target("state/red-sets/x.txt", tmp_path) == evidence.resolve_target(str(target), tmp_path)
+
+
 def test_resolve_refuses_relative_escape(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

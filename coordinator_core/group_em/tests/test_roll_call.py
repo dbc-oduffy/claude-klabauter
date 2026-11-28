@@ -8,11 +8,11 @@ from coordinator_core.group_em import remote_roster, roll_call
 from coordinator_core.session import peer_roster
 
 
-def _row(sid, name="em", kind="claude", is_self=False):
+def _row(sid, name="em", kind="claude", is_self=False, role="em"):
     return peer_roster.PeerRow(
         session_id=sid, address=None, name=name, ref=None, cwd="/x", status="idle",
         running_seconds=1.0, is_self=is_self, self_determination="resolved",
-        messaging_available=True, kind=kind, pid=1,
+        messaging_available=True, kind=kind, pid=1, role=role,
     )
 
 
@@ -44,7 +44,7 @@ def test_resolve_excludes_mirrors_transport_self_and_workers(roster, tmp_path):
         _row("peer-ssh-box-456", "ssh-box"),
         _row("me-1", "me", is_self=True),
         _row("caller-1", "caller"),
-        _row("codex:run1", "codex-exec", kind="codex"),
+        _row("codex:run1", "codex-exec", kind="codex", role="worker_leg"),
         _row("nameless-1", None),
     ])
     _snapshot(tmp_path, "boxB", [_sess("bbbb-2", "beta"), _sess("peer-codex-9", "c"), _sess("peer-t-8", "t")])
@@ -53,7 +53,6 @@ def test_resolve_excludes_mirrors_transport_self_and_workers(roster, tmp_path):
     )
     assert out["local"] == [
         {"session_id": "aaaa-1", "name": "alpha", "kind": "claude"},
-        {"session_id": "codex:run1", "name": "codex-exec", "kind": "codex"},
     ]
     assert out["far"] == [{"key": "boxB:bbbb-2", "box_id": "boxB", "name": "beta"}]
     reasons = {e["key"]: e["reason"] for e in out["excluded"]}
@@ -63,8 +62,38 @@ def test_resolve_excludes_mirrors_transport_self_and_workers(roster, tmp_path):
         "me-1": "self",
         "caller-1": "self",
         "nameless-1": "no_name",
+        "codex:run1": "worker_leg",
         "boxB:peer-codex-9": "codex_mirror",
         "boxB:peer-t-8": "unimatrix_transport",
+    }
+
+
+def test_only_em_sessions_are_addressed_local_and_far(roster, tmp_path):
+    roster.extend([
+        _row("em-local", "em-local"),
+        _row("agy-leg-1", "agy-leg", kind="agy", role="worker_leg"),
+        _row("sub-1", "sub", role="subagent"),
+    ])
+    for box in ("boxB", "boxC"):
+        _snapshot(tmp_path, box, [
+            {**_sess(f"{box}-em", f"{box}-em"), "role": "em"},
+            {**_sess(f"{box}-leg", f"{box}-leg"), "role": "worker_leg"},
+            {**_sess(f"{box}-sub", f"{box}-sub"), "role": "subagent"},
+            _sess(f"{box}-old", f"{box}-old"),
+        ])
+    out = roll_call.resolve_addressees("/x", None, snapshot_dir=str(tmp_path), local_id="boxA")
+    assert [r["session_id"] for r in out["local"]] == ["em-local"]
+    assert sorted(r["key"] for r in out["far"]) == [
+        "boxB:boxB-em", "boxB:boxB-old", "boxC:boxC-em", "boxC:boxC-old",
+    ]
+    reasons = {e["key"]: e["reason"] for e in out["excluded"]}
+    assert reasons == {
+        "agy-leg-1": "worker_leg",
+        "sub-1": "subagent",
+        "boxB:boxB-leg": "worker_leg",
+        "boxB:boxB-sub": "subagent",
+        "boxC:boxC-leg": "worker_leg",
+        "boxC:boxC-sub": "subagent",
     }
 
 
@@ -73,6 +102,53 @@ def test_unreachable_box_sessions_are_addressees_flagged_unreachable(roster, tmp
     out = roll_call.resolve_addressees("/x", None, snapshot_dir=str(tmp_path), local_id="boxA")
     assert out["far"] == [{"key": "boxC:cccc-3", "box_id": "boxC", "name": "gamma", "unreachable": True}]
     assert out["excluded"] == []
+
+
+def _register(tmp_path, box_id, root):
+    from coordinator_core.group_em import box_registry
+
+    box_registry.register(root, {}, directory=tmp_path, box_id=box_id)
+
+
+def test_registered_boxes_without_a_snapshot_are_listed_silent(roster, tmp_path):
+    for box in ("boxB", "boxC"):
+        _register(tmp_path, box, tmp_path / "far" / box)
+    _snapshot(tmp_path, "boxB", [_sess("bbbb-2", "beta")])
+    out = roll_call.resolve_addressees("/x", None, snapshot_dir=str(tmp_path), local_id="boxA")
+    assert [r["key"] for r in out["far"]] == ["boxB:bbbb-2"]
+    assert out["silent_boxes"] == ["boxC"]
+
+
+def test_registered_box_with_down_snapshot_falls_back_to_its_published_roster(roster, tmp_path):
+    far_root = tmp_path / "far" / "boxD"
+    _register(tmp_path, "boxD", far_root)
+    _snapshot(tmp_path, "boxD", [], ok=False)
+    remote_roster._write_snapshot(
+        far_root / "state" / "group-em", "boxD", True, [_sess("dddd-4", "delta")], 1.0
+    )
+    out = roll_call.resolve_addressees("/x", None, snapshot_dir=str(tmp_path), local_id="boxA")
+    assert out["far"] == [{"key": "boxD:dddd-4", "box_id": "boxD", "name": "delta", "unreachable": True}]
+    assert out["silent_boxes"] == []
+
+
+def test_registry_row_naming_this_box_is_not_far(roster, tmp_path):
+    _register(tmp_path, "BoxA-lan", tmp_path / "far" / "a")
+    _snapshot(tmp_path, "BoxA-lan", [_sess("self-1", "me")])
+    out = roll_call.resolve_addressees("/x", None, snapshot_dir=str(tmp_path), local_id="boxa")
+    assert out["far"] == [] and out["silent_boxes"] == []
+
+
+def test_registry_row_rooted_at_this_settings_home_is_not_far(roster, tmp_path, monkeypatch):
+    from coordinator_core.group_em import box_registry
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(roll_call, "settings_home", lambda: home)
+    monkeypatch.setattr(box_registry, "local_box_id", lambda *a, **k: "box-own")
+    _register(home / "state" / "group-em", "machine-a", home)
+    _register(home / "state" / "group-em", "Mac-mini", tmp_path / "mac")
+    out = roll_call.resolve_addressees("/x", None)
+    assert out["far"] == []
+    assert out["silent_boxes"] == ["Mac-mini"]
 
 
 def test_dead_pid_local_row_is_not_an_addressee(tmp_path, monkeypatch):

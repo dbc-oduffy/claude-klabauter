@@ -291,6 +291,59 @@ def test_row_contradicted_on_a_path_the_run_did_not_write_still_contradicts(monk
     assert v["verdict"] == "CONTRADICTED"
 
 
+def _dirt_only_repo(tmp_path) -> str:
+    """HEAD's mod.py holds no `fresh`; the worktree adds it, uncommitted."""
+    sha = _repo_with_baseline(tmp_path)
+    (tmp_path / "mod.py").write_text("refuse here\nfresh\n")
+    return sha
+
+
+@pytest.mark.spawns_process
+def test_tree_only_engine_check_is_uncommitted_not_landed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from coordinator_core.ops import _anchor_premise as ap
+
+    _dirt_only_repo(tmp_path)
+    dirt = _base_anchor(cmd="grep -c fresh mod.py")
+    landed = _base_anchor("AP2")
+    calls = _count_spawns(monkeypatch)
+    verdicts = ap.anchor_verdicts([dirt, landed], [], [], "p", tmp_path, base_ref="HEAD")
+    assert (verdicts[0]["verdict"], verdicts[0]["source"]) == ("UNRESOLVED", "engine-check")
+    assert verdicts[0]["observed"].startswith("uncommitted, not landed")
+    assert "HEAD" in verdicts[0]["observed"]
+    assert verdicts[1]["verdict"] == "RESOLVES"
+    assert len(calls) == 1 and "cat-file" in calls[0]
+    assert ap.anchor_findings([dirt], [], [], "p", tmp_path, base_ref="HEAD") == [
+        f"anchor-premise-UNRESOLVED: AP1 -- {dirt['claim']}"
+    ]
+    (v,) = ap.anchor_verdicts([dirt], [], [], "p", tmp_path)
+    assert v["verdict"] == "RESOLVES"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("lane", ["row", "carry"])
+def test_row_or_carry_resolves_on_dirt_only_is_downgraded(tmp_path: Path, lane) -> None:
+    from coordinator_core.ops import _anchor_premise as ap
+
+    _dirt_only_repo(tmp_path)
+    dirt = _base_anchor(cmd="grep -c fresh mod.py")
+    row = {"anchor": "AP1", "verdict": "RESOLVES"}
+    rows, carry = ([row], []) if lane == "row" else ([], [{**row, "line_hash": _h("p")}])
+    (v,) = ap.anchor_verdicts([dirt], rows, carry, "p", tmp_path, base_ref="HEAD")
+    assert (v["verdict"], v["source"]) == ("UNRESOLVED", "engine-check")
+    assert v["observed"].startswith("uncommitted, not landed")
+    (v,) = ap.anchor_verdicts([_base_anchor()], rows, carry, "p", tmp_path, base_ref="HEAD")
+    assert (v["verdict"], v["source"]) == ("RESOLVES", lane)
+
+
+@pytest.mark.spawns_process
+def test_a_check_failing_in_both_base_and_tree_stays_contradicted(tmp_path: Path) -> None:
+    from coordinator_core.ops import _anchor_premise as ap
+
+    _dirt_only_repo(tmp_path)
+    (v,) = ap.anchor_verdicts([_base_anchor(cmd="grep -c nowhere mod.py")], [], [], "p", tmp_path, base_ref="HEAD")
+    assert v["verdict"] == "CONTRADICTED" and not v["observed"].startswith("uncommitted")
+
+
 @pytest.mark.spawns_process
 def test_base_ref_skips_reanchor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.ops import _anchor_premise as ap

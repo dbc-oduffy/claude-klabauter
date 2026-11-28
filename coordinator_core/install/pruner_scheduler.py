@@ -45,7 +45,13 @@ def _launch_agent_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{PLIST_LABEL}.plist"
 
 
-def _launch_agent_plist(python_exe: str, repo_root: Path) -> bytes:
+def _log_path() -> Path:
+    from coordinator_core.install.pruner_runner import pruner_log_path
+
+    return pruner_log_path()
+
+
+def _launch_agent_plist(python_exe: str, repo_root: Path, log_path: Path) -> bytes:
     import plistlib
 
     return plistlib.dumps(
@@ -53,6 +59,8 @@ def _launch_agent_plist(python_exe: str, repo_root: Path) -> bytes:
             "Label": PLIST_LABEL,
             "ProgramArguments": [str(python_exe), "-m", RUNNER_MODULE],
             "WorkingDirectory": str(repo_root),
+            "StandardOutPath": str(log_path),
+            "StandardErrorPath": str(log_path),
             "StartInterval": _INTERVAL_MINUTES * 60,
             "RunAtLoad": True,
             "ProcessType": "Background",
@@ -62,12 +70,14 @@ def _launch_agent_plist(python_exe: str, repo_root: Path) -> bytes:
     )
 
 
-def _systemd_units(python_exe: str, repo_root: Path) -> "dict[str, str]":
+def _systemd_units(python_exe: str, repo_root: Path, log_path: Path) -> "dict[str, str]":
+    log = str(log_path).replace("%", "%%")
     return {
         _SERVICE: (
             "[Unit]\nDescription=Coordinator scratch and emitted-output pruner\n\n"
             "[Service]\nType=oneshot\nNice=10\nIOSchedulingClass=idle\n"
             f"WorkingDirectory={repo_root}\n"
+            f"StandardOutput=append:{log}\nStandardError=append:{log}\n"
             f"ExecStart={shlex.quote(str(python_exe))} -m {RUNNER_MODULE}\n"
         ),
         _TIMER: (
@@ -154,16 +164,18 @@ def _register_file_based(repo_root: Path, python_exe: Optional[str]) -> bool:
         return False
     python_exe = python_exe or sys.executable
     try:
+        log_path = _log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         if sys.platform == "darwin":
             target = _launch_agent_path()
             target.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_bytes(target, _launch_agent_plist(python_exe, repo_root))
+            atomic_write_bytes(target, _launch_agent_plist(python_exe, repo_root, log_path))
             where = f"LaunchAgent {target}"
         else:
             udir = _systemd_user_dir()
             wants = udir / "timers.target.wants"
             wants.mkdir(parents=True, exist_ok=True)
-            for name, text in _systemd_units(python_exe, repo_root).items():
+            for name, text in _systemd_units(python_exe, repo_root, log_path).items():
                 atomic_write_bytes(udir / name, text.encode("utf-8"))
             link = wants / _TIMER
             if link.is_symlink() or link.exists():

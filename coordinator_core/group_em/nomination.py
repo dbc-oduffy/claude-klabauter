@@ -608,6 +608,63 @@ def who(repo_root: str, directory: Optional[Path] = None) -> Optional[dict]:
     return annotated
 
 
+FAR_WHO_TIMEOUT_S = 8.0
+_FAR_WHO_OP = "groupem.standing"
+
+
+def _far_holder(box: dict, runner, timeout: float) -> Optional[dict]:
+    """One far box's live Group EM from its ``groupem.standing`` identity, else None."""
+    from coordinator_core.group_em import box_transport
+
+    res = box_transport.invoke_remote(box, _FAR_WHO_OP, {}, runner, timeout=timeout)
+    if not res.get("ok"):
+        return None
+    identity = (res.get("reply") or {}).get("identity")
+    if not isinstance(identity, dict) or identity.get("state") != "live":
+        return None
+    holder = identity.get("holder")
+    sid = holder.get("session_id") if isinstance(holder, dict) else None
+    if not isinstance(sid, str) or not sid:
+        return None
+    return {
+        "session_id": sid,
+        "peer_name": holder.get("name"),
+        "box_id": box["box_id"],
+        "remote": True,
+        "live": True,
+        "live_reason": "far_box",
+        "entry_status": "verified",
+        "source": identity.get("source"),
+    }
+
+
+def who_fleet(
+    repo_root: str,
+    directory: Optional[Path] = None,
+    runner=None,
+    timeout: float = FAR_WHO_TIMEOUT_S,
+) -> Optional[dict]:
+    """`who`, else the lowest-box_id live Group EM a far box reports; the local record always wins."""
+    local = who(repo_root, directory)
+    if local is not None:
+        return local
+    from coordinator_core.group_em import box_transport
+
+    me = box_registry.local_box_id()
+    boxes = [
+        b for b in box_registry.read_boxes()
+        if b["box_id"] != me and box_transport.ssh_host(b) is not None
+    ]
+    if not boxes:
+        return None
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=len(boxes)) as pool:
+        found = list(pool.map(lambda b: _far_holder(b, runner, timeout), boxes))
+    hits = sorted((h for h in found if h is not None), key=lambda h: h["box_id"])
+    return hits[0] if hits else None
+
+
 class StandDownResult(NamedTuple):
     """`ok`; `exit_code` 0 stood down | 3 no record | 4 unlink failed | 5 not the holder."""
 

@@ -237,13 +237,13 @@ def check_stale_write(
     if not root:
         return None
 
+    candidates = _stale_write_shape_candidates(command, cwd or None)
+    if not candidates:
+        return None
+
     try:
         from coordinator_core.session.touch_record import is_stale, last_seen_hash
     except Exception:
-        return None
-
-    candidates = _stale_write_shape_candidates(command, cwd or None)
-    if not candidates:
         return None
 
     for resolved_target, _raw_target, _whole in candidates:

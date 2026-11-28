@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from coordinator_core.bash_guards import _gem_standing_kill, dispatch
+from coordinator_core.bash_guards import dispatch
 from coordinator_core.group_em import nomination
 
 GEM_SID = "S-gem"
@@ -98,7 +98,6 @@ def test_gem_subagent_lookup_fed_kill_is_denied(fixture_root, monkeypatch, tool)
 
 def test_control_gem_standing_false_would_deny(fixture_root, monkeypatch):
     _live(monkeypatch)
-    monkeypatch.setattr(_gem_standing_kill, "gem_standing", lambda payload: False)
     from coordinator_core.bash_guards import block_kill_by_port_or_tree as guard
 
     monkeypatch.setattr(guard, "gem_standing", lambda payload: False)

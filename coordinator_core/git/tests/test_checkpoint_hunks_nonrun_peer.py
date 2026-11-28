@@ -95,6 +95,44 @@ def test_first_checkpoint_without_any_print_withholds_the_file_and_names_it(repo
     assert run_write_prints.read(repo, RUN) is None
 
 
+def _refire_repo(repo, monkeypatch, driver: str = "S2") -> str:
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    monkeypatch.setattr(run_token, "live_records", lambda root: iter([{"run_id": RUN, "session_id": "S1"}]))
+    (repo / RECORD_DIR_ROOT / RUN / "run-stage.json").write_text(
+        json.dumps({"session_id": "S1", "driver_session_ids": [driver]}), encoding="utf-8"
+    )
+    own = list(HEAD_LINES)
+    own[1] = "line 02 run edit\n"
+    (repo / "f.txt").write_text("".join(own), encoding="utf-8", newline="")
+    return "".join(own)
+
+
+def test_refire_executor_write_is_printed_and_landed_at_the_checkpoint(repo, monkeypatch):
+    _refire_repo(repo, monkeypatch)
+
+    assert run_write_prints.record_write(repo, "S2", "agentR", "f.txt") == RUN
+    reasons: dict[str, str] = {}
+
+    assert checkpoint_hunks.checkpoint_own_blobs(repo, RUN, ["f.txt"], reasons=reasons) == ({}, []), reasons
+
+
+def test_refire_em_hand_edit_stays_withheld(repo, monkeypatch):
+    _refire_repo(repo, monkeypatch)
+
+    assert run_write_prints.record_write(repo, "S2", "", "f.txt") is None
+    blobs, withheld = checkpoint_hunks.checkpoint_own_blobs(repo, RUN, ["f.txt"])
+
+    assert (blobs, withheld) == ({}, ["f.txt"])
+
+
+def test_a_session_outside_the_run_stage_stays_withheld(repo, monkeypatch):
+    _refire_repo(repo, monkeypatch)
+
+    assert run_write_prints.record_write(repo, "S3", "agentX", "f.txt") is None
+    assert checkpoint_hunks.checkpoint_own_blobs(repo, RUN, ["f.txt"]) == ({}, ["f.txt"])
+
+
 def test_a_print_of_another_path_does_not_cover_this_one(repo):
     (repo / "f.txt").write_text("".join(HEAD_LINES[:-1]), encoding="utf-8", newline="")
     run_write_prints.record(repo, RUN, ["other.txt"])

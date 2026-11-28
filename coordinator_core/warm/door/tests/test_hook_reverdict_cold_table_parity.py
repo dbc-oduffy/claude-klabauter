@@ -36,9 +36,10 @@ def test_every_entry_is_a_registered_op():
 
 
 def test_side_effect_ops_are_absent():
-    table = _table()
-    for op in table:
-        assert "commit" not in op and "submit" not in op, op
+    side_effect_words = {"commit", "submit", "land", "write", "push", "publish"}
+    for op in _table():
+        words = set(re.split(r"[._]", op))
+        assert not (words & side_effect_words), op
 
 
 def test_parser_rejects_missing_table():

@@ -49,7 +49,7 @@ def _setup(root, withheld_by_predecessor):
 
 
 def _call(root, manifest, run_dir):
-    verdict = {"items": [{"id": "R1", "status": "met"}]}
+    verdict = {"items": [{"id": "R1", "status": "met", "evidence": "verified"}]}
     ledger = SimpleNamespace(items=["R1"], all_of_pm_ask=False)
     return terminal_commit._pre_existing_dirt_refusal(root, manifest, verdict, ledger, PLAN, run_dir)
 

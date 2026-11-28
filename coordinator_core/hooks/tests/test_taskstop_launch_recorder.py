@@ -223,7 +223,7 @@ def test_timed_out_run_in_background_is_recorded_as_before_and_never_reaped(seam
     p["tool_input"]["command"] = "grep -rn x ."
     rec._handler({"payload": p})
     assert store.read_record("bgto1").mark == _MARK + _MS * 10_000
-    assert len(snaps) <= 1 and kill.calls == []
+    assert len(snaps) == 1 and kill.calls == []
 
 
 @pytest.mark.parametrize(

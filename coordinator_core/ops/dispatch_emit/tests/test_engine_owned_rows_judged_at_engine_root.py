@@ -158,8 +158,8 @@ def _ledger() -> Ledger:
 def test_verdict_naming_the_engine_root_passes(world) -> None:
     _, root = world
     verdict = {"items": [
-        {"id": "T8", "status": "met", "met_by": "a.py", "root_read": root},
-        {"id": "T1", "status": "met", "met_by": "a.py"},
+        {"id": "T8", "status": "met", "evidence": "verified", "root_read": root},
+        {"id": "T1", "status": "met", "evidence": "verified"},
     ]}
     assert judge(_ledger(), verdict, routed={"T8": root}) == {"pass": True, "failures": [], "open": []}
 
@@ -167,8 +167,8 @@ def test_verdict_naming_the_engine_root_passes(world) -> None:
 def test_verdict_naming_the_cwd_root_for_an_engine_row_fails_as_misrouted(world) -> None:
     cwd, root = world
     verdict = {"items": [
-        {"id": "T8", "status": "met", "met_by": "a.py", "root_read": cwd.as_posix()},
-        {"id": "T1", "status": "met", "met_by": "a.py"},
+        {"id": "T8", "status": "met", "evidence": "verified", "root_read": cwd.as_posix()},
+        {"id": "T1", "status": "met", "evidence": "verified"},
     ]}
     result = judge(_ledger(), verdict, routed={"T8": root})
     assert result["pass"] is False
@@ -177,7 +177,7 @@ def test_verdict_naming_the_cwd_root_for_an_engine_row_fails_as_misrouted(world)
 
 
 def test_a_ledger_with_no_engine_rows_judges_identically_with_and_without_routed() -> None:
-    verdict = {"items": [{"id": "T8", "status": "not_met"}, {"id": "T1", "status": "met", "met_by": "a.py"}]}
+    verdict = {"items": [{"id": "T8", "status": "not_met"}, {"id": "T1", "status": "met", "evidence": "verified"}]}
     assert judge(_ledger(), verdict, routed={}) == judge(_ledger(), verdict)
     assert judge(_ledger(), verdict, routed=None) == judge(_ledger(), verdict)
 

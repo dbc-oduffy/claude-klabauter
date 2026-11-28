@@ -468,9 +468,12 @@ class TestEngineDriftHandlerWiring:
         mock_probe.assert_called_once_with()
 
     def test_wiring_passes_source_head_and_floor_constant_to_ancestry(self):
-        from coordinator_core.engine_version import SourceHead
+        from coordinator_core.engine_version import EngineIdentity, SourceHead
 
         with patch(
+            "coordinator_core.ops.engine_drift.engine_identity",
+            return_value=EngineIdentity(RUNNING, "source-tree", RUNNING),
+        ), patch(
             "coordinator_core.ops.engine_drift.resolve_engine_source_head",
             return_value=SourceHead(RUNNING, "source-tree", RUNNING),
         ) as mock_resolve, patch(
@@ -484,11 +487,15 @@ class TestEngineDriftHandlerWiring:
         assert result["running_sha"] == RUNNING
         assert result["floor_sha"] == FLOOR
         assert result["basis"] == "source-tree"
+        assert result["source_head"] == RUNNING
 
     def test_wiring_delegates_unresolved_sha_to_classify_drift(self):
-        from coordinator_core.engine_version import SourceHead
+        from coordinator_core.engine_version import EngineIdentity, SourceHead
 
         with patch(
+            "coordinator_core.ops.engine_drift.engine_identity",
+            return_value=EngineIdentity(None, "source-tree", None),
+        ), patch(
             "coordinator_core.ops.engine_drift.resolve_engine_source_head",
             return_value=SourceHead(None, "source-tree", None),
         ), patch("coordinator_core.ops.engine_drift._git_is_behind") as mock_is_behind:
@@ -497,3 +504,29 @@ class TestEngineDriftHandlerWiring:
         assert result["state"] == "indeterminate"
         assert result["running_sha"] is None
         mock_is_behind.assert_not_called()
+
+
+class TestStampedEngineIdentity:
+    """A published `_engine_stamp` is the running identity; the lagging source head rides beside it."""
+
+    def test_stamped_tree_reports_stamp_sha_with_source_head_beside_it(self, tmp_path, monkeypatch):
+        repo = tmp_path / "eng"
+        shas = _commit_repo(repo, n=2)
+        stamp = "5" * 40
+        (repo / "coordinator_core").mkdir()
+        (repo / "coordinator_core" / "_engine_stamp").write_text(f"sha:{stamp}\n")
+        monkeypatch.setattr("coordinator_core.ops.engine_drift.MIN_KNOWN_GOOD_SHA", shas[0])
+        with patch("coordinator_core.ops.engine_drift._git_is_behind", return_value=False):
+            result = probe_engine_drift(repo)
+        assert result["running_sha"] == stamp
+        assert result["basis"] == "published-stamp"
+        assert result["source_head"] == shas[1]
+        assert result["running_sha"] != result["source_head"]
+
+    def test_unstamped_tree_reports_source_head_as_before(self, tmp_path, monkeypatch):
+        repo = tmp_path / "eng"
+        shas = _commit_repo(repo, n=2)
+        monkeypatch.setattr("coordinator_core.ops.engine_drift.MIN_KNOWN_GOOD_SHA", shas[0])
+        result = probe_engine_drift(repo)
+        assert result["running_sha"] == shas[1] == result["source_head"]
+        assert result["basis"] == "source-tree"

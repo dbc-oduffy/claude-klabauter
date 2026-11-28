@@ -228,3 +228,79 @@ def test_module_fingerprint_reads_this_files_own_bytes():
     fp = forwarder.module_fingerprint()
     assert fp is not None
     assert fp == forwarder.module_fingerprint(Path(forwarder.__file__))
+
+
+# --- hedge to cold when the backend is wedged -------------------------------------------------
+
+
+def test_a_wedged_backend_is_hedged_to_a_cold_deny_inside_the_deadline(tmp_path, monkeypatch):
+    import socket
+    import threading
+    import time
+    from http.client import HTTPConnection
+
+    from coordinator_core import machine_profile
+
+    monkeypatch.setattr(machine_profile, "resolved_level", lambda _n, subagent=False: "floor")
+    monkeypatch.delenv("COORDINATOR_OVERRIDE_NO_VERIFY", raising=False)
+    monkeypatch.setattr(forwarder, "degrade_log_path", lambda: tmp_path / "degrade.jsonl")
+
+    stub = socket.socket()
+    stub.bind(("127.0.0.1", 0))
+    stub.listen(8)
+    held = []
+
+    def _accept_and_never_answer():
+        while True:
+            try:
+                held.append(stub.accept()[0])
+            except OSError:
+                return
+
+    threading.Thread(target=_accept_and_never_answer, daemon=True).start()
+    stub_port = stub.getsockname()[1]
+
+    monkeypatch.setattr(
+        forwarder, "_resolve_backend", lambda _k: (("127.0.0.1", stub_port, "/hook", None), None, None)
+    )
+    monkeypatch.setattr(forwarder, "_HEDGE_DEADLINE_SECS", 0.5)
+
+    server = forwarder._ExclusiveServer(("127.0.0.1", 0), forwarder._ForwarderHandler)
+    server.dial_counter = forwarder.DialCounter(tmp_path / "dial.json")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        event = {
+            "hook_event_name": "PreToolUse",
+            "session_id": "s-hedge",
+            "cwd": "C:/Windows/Temp",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git commit --no-verify -m x -- foo.py"},
+            "env": {},
+        }
+        conn = HTTPConnection("127.0.0.1", server.server_address[1], timeout=20)
+        started = time.monotonic()
+        conn.request(
+            "POST",
+            "/hook",
+            body=json.dumps(event),
+            headers={"Content-Type": "application/json", forwarder.ROUTING_HEADER_NAME: "x"},
+        )
+        resp = conn.getresponse()
+        data = json.loads(resp.read())
+        elapsed = time.monotonic() - started
+        conn.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        stub.close()
+        for sock in held:
+            sock.close()
+
+    assert resp.status == 200
+    assert data["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert elapsed < 10
+    rows = [json.loads(x) for x in (tmp_path / "degrade.jsonl").read_text().splitlines()]
+    assert any(
+        r.get("rung") == forwarder.RUNG_COLD and r.get("cause") == forwarder.CAUSE_BACKEND_WEDGED
+        for r in rows
+    )

@@ -5,7 +5,9 @@ made on that box but not yet visible in the sample. Headroom per axis is measure
 held peaks; a refusal names each short axis with its need and free amount, never a slot count.
 ``admit`` wraps ``decide`` with the grant ledger (``capacity-grants.jsonl``) and the refusal
 ledger (``capacity-waits.jsonl``) under one lock, so concurrent grants sum their peaks. Axes:
-``vram_mib``, ``ram_mb``, ``cores``. Never raises.
+``vram_mib``, ``ram_mb``, ``cores``. A grant may be booked to a process (``pid`` plus owner, window,
+expected rate); a booked row outlives its start and ``ttl_s`` until its pid is gone, and
+``read_booked`` returns it unfiltered. Never raises.
 """
 
 from __future__ import annotations
@@ -46,6 +48,26 @@ def grants_path(home: Optional[Path] = None) -> Path:
 
 def waits_path(home: Optional[Path] = None) -> Path:
     return _box_dir(home) / "capacity-waits.jsonl"
+
+
+def _is_booked(row: dict) -> bool:
+    pid = row.get("pid")
+    return isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
+
+
+def _booked_alive(row: dict) -> bool:
+    from coordinator_core.group_em.session_registry import pid_alive
+
+    if not (_is_booked(row) and pid_alive(row["pid"])):
+        return False
+    recorded = _num(row.get("pid_started_at"))
+    if recorded is None:
+        return True
+    from coordinator_core.ask_spool.record import pid_create_time
+    from coordinator_core.group_em.job_ledger import START_TOLERANCE_S
+
+    seen = pid_create_time(row["pid"])
+    return seen is None or abs(recorded - seen) <= START_TOLERANCE_S
 
 
 def _num(value: object) -> Optional[float]:
@@ -91,6 +113,35 @@ def read_held(sample: Optional[dict] = None, home: Optional[Path] = None, now: O
     """Unexpired grants under ``home`` whose run is not yet in ``sample["jobs"]``; never raises."""
     now = time.time() if now is None else now
     return live_held(_rows(grants_path(home)), sample if isinstance(sample, dict) else {}, now)
+
+
+def read_booked(home: Optional[Path] = None) -> list[dict]:
+    """Every pid-booked grant row under ``home``, started or past ``ttl_s`` or not; never raises."""
+    return [r for r in _rows(grants_path(home)) if _is_booked(r)]
+
+
+def record_progress(
+    run: str, progress: float, home: Optional[Path] = None, now: Optional[float] = None
+) -> dict:
+    """Set ``progress`` (stamped ``progress_at``) on ``run``'s grant row under the ledger lock.
+
+    ``{updated, run}``; ``updated`` False carries ``reason`` ``no_grant`` or ``ledger_unavailable``.
+    Never raises.
+    """
+    now = time.time() if now is None else now
+    gpath = grants_path(home)
+    try:
+        with holder_lock(gpath, timeout=_LOCK_TIMEOUT_S):
+            rows = _rows(gpath)
+            hit = [r for r in rows if r.get("run") == run]
+            if not hit:
+                return {"updated": False, "run": run, "reason": "no_grant"}
+            for r in hit:
+                r["progress"], r["progress_at"] = progress, now
+            _write_rows(gpath, rows)
+        return {"updated": True, "run": run}
+    except Exception:  # contract: never raise
+        return {"updated": False, "run": run, "reason": "ledger_unavailable"}
 
 
 def _live_waits(rows: list[dict], now: float) -> list[dict]:
@@ -220,13 +271,23 @@ def admit(
     requester_sid: Optional[str] = None,
     priority: Optional[str] = None,
     now: Optional[float] = None,
+    *,
+    pid: Optional[int] = None,
+    pid_started_at: Optional[float] = None,
+    owner_sid: Optional[str] = None,
+    window_s: Optional[float] = None,
+    expected_rate: Optional[float] = None,
+    rate_unit: Optional[str] = None,
 ) -> dict:
     """Decide under the ledger lock, then record: a grant row on success, a wait row on refusal.
 
     Grants and waits live under ``home``'s ``state/group-em/box``. A repeat ``run`` is one row:
     a re-grant replaces its grant, a repeat refusal keeps the first ``since`` and restamps
     ``seen_at``; a wait unseen for ``WAIT_TTL_S`` is dropped. A grant clears the
-    run's wait. A lock or I/O failure returns the decision unrecorded with ``recorded: False``.
+    run's wait. The keyword-only booking fields land on the grant row when given (``window_s``
+    reads ``ttl_s`` when absent); a row carrying ``pid`` is kept by later admits until that pid is
+    gone, though ``live_held`` no longer counts it. A lock or I/O failure returns the decision
+    unrecorded with ``recorded: False``.
     """
     now = time.time() if now is None else now
     gpath, wpath = grants_path(home), waits_path(home)
@@ -236,6 +297,8 @@ def admit(
             rows = [r for r in _rows(gpath) if r.get("run") != run]
             sample = box_sample if isinstance(box_sample, dict) else {}
             live = live_held(rows, sample, now)
+            in_live = {id(r) for r in live}
+            booked = [r for r in rows if id(r) not in in_live and _booked_alive(r)]
             reply = decide(sample, job_peak, live, declared, now)
             all_waits = _rows(wpath)
             waits = [w for w in _live_waits(all_waits, now) if w.get("run") != run]
@@ -252,7 +315,16 @@ def admit(
                         **{a: axes.get(a) for a in _AXES},
                     }
                 )
-                _write_rows(gpath, live)
+                booking = {
+                    "pid": pid,
+                    "pid_started_at": pid_started_at,
+                    "owner_sid": owner_sid,
+                    "window_s": window_s if window_s is not None or pid is None else GRANT_TTL_S,
+                    "expected_rate": expected_rate,
+                    "rate_unit": rate_unit,
+                }
+                live[-1].update({k: v for k, v in booking.items() if v is not None})
+                _write_rows(gpath, live + booked)
                 if len(waits) != len(all_waits):
                     _write_rows(wpath, waits)
             else:
@@ -269,7 +341,7 @@ def admit(
                     }
                 )
                 _write_rows(wpath, waits)
-                _write_rows(gpath, live)
+                _write_rows(gpath, live + booked)
         reply["recorded"] = True
     except Exception:  # contract: decide, never raise
         reply = decide(box_sample, job_peak, [], declared, now)

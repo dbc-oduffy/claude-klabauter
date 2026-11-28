@@ -12,9 +12,11 @@ import pytest
 
 from coordinator_core.ask_spool import drain, record
 from coordinator_core.ask_spool.tests.test_drain import Engine, _notices, _spool
+from coordinator_core.ops import warp_run_deliverable as wrd
 from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     RECORD_DIR_ROOT,
+    stamp_plan_phase_at,
     stamp_run_phase_at,
     write_run_stage,
     write_run_stage_at,
@@ -242,6 +244,132 @@ def test_the_child_sweep_over_2000_record_dirs_is_cheap_and_spawns_nothing(tmp_p
     assert elapsed < 0.2, f"{elapsed * 1000:.0f}ms"
     assert all(_marker(tmp_path, f"ask-20261118T010000-{n:06x}") for n in range(5))
     print(f"launcher-child sweep process time {elapsed * 1000:.0f}ms")
+
+
+DIED = "ask-20261122T123535-7164a9"
+STAGED_LATE = wrd.STAGED_STALE_SECONDS + 60
+
+
+def _died(root, run_id=DIED, *, session="sess-died", stage="minted", plan_started=True):
+    """A run whose plan stage began (`plan_started_at`, no `phase`) and then stopped, at `stage`."""
+    rec = root / RECORD_DIR_ROOT / run_id
+    rec.mkdir(parents=True, exist_ok=True)
+    write_run_stage_at(rec, "minted", session_id=session)
+    if plan_started:
+        assert stamp_plan_phase_at(rec)
+    if stage == "staged":
+        write_run_stage_at(rec, "staged")
+    return rec
+
+
+def _died_halts(root, session="sess-died"):
+    return [n for n in _notices(root, session) if n.get("status") == "halted"]
+
+
+def _active_child_of(root, parent, now):
+    recent = now - 30
+    child_dir = root / RECORD_DIR_ROOT / "warp-child-20261122T140000-abcdef"
+    child_dir.mkdir(parents=True)
+    (child_dir / "run.json").write_text(json.dumps({"chain_parent": parent}), encoding="utf-8")
+    stamp = datetime.fromtimestamp(recent, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    write_run_stage_at(child_dir, "staged", now=stamp)
+    for path in (*child_dir.iterdir(), child_dir):
+        os.utime(path, (recent, recent))
+
+
+def test_a_minted_run_with_plan_started_and_no_phase_is_halted_died_mid_stage_and_noticed(tmp_path):
+    _died(tmp_path)
+    drain.run(str(tmp_path), now=time.time() + LATE)
+    marker = _marker(tmp_path, DIED)
+    assert marker["status"] == "halted" and marker["halted"] == drain.RUN_DIED_MID_STAGE == "died_mid_stage"
+    assert "cause unknown" in marker["reason"] and "run-stage at minted" in marker["reason"]
+    (halt,) = _died_halts(tmp_path)
+    assert halt["run_id"] == DIED and halt["halted"] == "died_mid_stage" and halt["reason"] == marker["reason"]
+
+
+def test_a_staged_run_with_plan_started_and_no_phase_is_halted_past_the_staged_bound(tmp_path):
+    _died(tmp_path, stage="staged")
+    drain.run(str(tmp_path), now=time.time() + STAGED_LATE)
+    marker = _marker(tmp_path, DIED)
+    assert marker["halted"] == "died_mid_stage" and "run-stage at staged" in marker["reason"]
+    (halt,) = _died_halts(tmp_path)
+    assert halt["reason"] == marker["reason"]
+
+
+def test_a_staged_run_inside_the_staged_bound_but_past_the_minted_deadline_is_untouched(tmp_path):
+    _died(tmp_path, stage="staged")
+    assert LATE < wrd.STAGED_STALE_SECONDS
+    drain.run(str(tmp_path), now=time.time() + LATE)
+    assert _marker(tmp_path, DIED) is None
+    assert _died_halts(tmp_path) == []
+
+
+@pytest.mark.parametrize("stage", ["minted", "staged"])
+def test_a_fresh_run_that_started_its_plan_is_untouched(tmp_path, stage):
+    _died(tmp_path, stage=stage)
+    drain.run(str(tmp_path), now=time.time() + 10)
+    assert _marker(tmp_path, DIED) is None
+    assert _died_halts(tmp_path) == []
+
+
+def test_a_staged_run_without_plan_started_is_untouched_however_late(tmp_path):
+    _died(tmp_path, stage="staged", plan_started=False)
+    drain.run(str(tmp_path), now=time.time() + STAGED_LATE)
+    assert _marker(tmp_path, DIED) is None
+
+
+def test_a_run_with_a_live_run_token_is_untouched(tmp_path):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    (tmp_path / ".git").mkdir()
+    _died(tmp_path)
+    run_token.mint(tmp_path, DIED, f"scratch/warp/{DIED}.workflow.mjs", session_id="sess-died", marker=True)
+    assert run_token.is_live(tmp_path, DIED)
+    drain.run(str(tmp_path), now=time.time() + LATE)
+    assert _marker(tmp_path, DIED) is None
+    assert _died_halts(tmp_path) == []
+
+
+def test_a_halted_died_run_is_not_rewritten_and_a_landed_one_is_untouched(tmp_path):
+    halted = _died(tmp_path, "ask-20261122T123535-aaaaaa", session="sess-h")
+    halted_run.write_halt_marker(halted, halted="other", sizing_rel=None, reason="prior")
+    landed = _died(tmp_path, "ask-20261122T123535-bbbbbb", session="sess-l")
+    halted_run.write_halt_marker(landed, halted="other", sizing_rel=None, reason="prior")
+    assert halted_run.mark_landed(landed, "0" * 40)
+    drain.run(str(tmp_path), now=time.time() + LATE)
+    assert _marker(tmp_path, "ask-20261122T123535-aaaaaa")["halted"] == "other"
+    assert _marker(tmp_path, "ask-20261122T123535-bbbbbb")["status"] == "landed"
+    assert _died_halts(tmp_path, "sess-h") == [] and _died_halts(tmp_path, "sess-l") == []
+
+
+def test_a_died_run_with_an_active_chained_child_is_untouched(tmp_path):
+    _died(tmp_path)
+    now = time.time() + LATE
+    _active_child_of(tmp_path, DIED, now)
+    drain.run(str(tmp_path), now=now)
+    assert _marker(tmp_path, DIED) is None
+    assert _died_halts(tmp_path) == []
+
+
+def test_a_second_drain_does_not_rewrite_the_died_mid_stage_marker(tmp_path):
+    _died(tmp_path)
+    drain.run(str(tmp_path), now=time.time() + LATE)
+    first = _marker(tmp_path, DIED)
+    drain.run(str(tmp_path), now=time.time() + LATE + 60)
+    assert _marker(tmp_path, DIED) == first
+    assert len(_died_halts(tmp_path)) == 1
+
+
+def test_the_minted_without_dispatch_reasons_are_unchanged_beside_a_died_run(tmp_path):
+    _, run_id = _minted_entry(tmp_path)
+    _child(tmp_path)
+    _died(tmp_path)
+    drain.run(str(tmp_path), now=time.time() + LATE)
+    assert _marker(tmp_path, run_id)["halted"] == "minted_without_dispatch"
+    assert "never dispatched: minted" in _marker(tmp_path, run_id)["reason"]
+    assert _marker(tmp_path, CHILD)["halted"] == "minted_without_dispatch"
+    assert "stalled at minted/executing" in _marker(tmp_path, CHILD)["reason"]
+    assert _marker(tmp_path, DIED)["halted"] == "died_mid_stage"
 
 
 def test_an_already_halted_run_is_not_rewritten(tmp_path):

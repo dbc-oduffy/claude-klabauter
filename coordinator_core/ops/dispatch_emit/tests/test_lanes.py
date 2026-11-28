@@ -154,6 +154,42 @@ def test_over_budget_single_row_raises():
         _part(rows, row_bytes={"A": 2000}, params=LaneParams(byte_cap=1000))
 
 
+def _three_plans_two_rows_each():
+    return [_row(f"{p}{n}", [f"src/{p}{n}.py"], plan=f"docs/plans/{p}.md") for p in "ABC" for n in (1, 2)]
+
+
+def test_per_plan_cost_cuts_parts_at_plan_boundaries():
+    rows = _three_plans_two_rows_each()
+    one_lane = LaneParams(lanes=1, hot_files=0, byte_cap=2000, headroom=1.0)
+    free = _part(rows, params=one_lane)
+    assert [p["rows"] for lane in free["lanes"] for p in lane["parts"]] == [["A1", "A2", "B1", "B2", "C1", "C2"]]
+
+    costed = _part(
+        rows,
+        params=one_lane,
+        plan_bytes={"docs/plans/A.md": 1000, "docs/plans/B.md": 1000, "docs/plans/C.md": 1000},
+    )
+    (lane,) = costed["lanes"]
+    assert [p["rows"] for p in lane["parts"]] == [["A1", "A2"], ["B1", "B2"], ["C1", "C2"]]
+
+
+def test_a_plan_costlier_than_any_part_still_lands_alone_instead_of_refusing():
+    rows = _three_plans_two_rows_each()
+    lm = _part(
+        rows,
+        params=LaneParams(lanes=1, hot_files=0, byte_cap=2000, headroom=1.0),
+        plan_bytes={"docs/plans/A.md": 9000, "docs/plans/B.md": 9000, "docs/plans/C.md": 9000},
+    )
+    (lane,) = lm["lanes"]
+    assert [p["rows"] for p in lane["parts"]] == [["A1", "A2"], ["B1", "B2"], ["C1", "C2"]]
+
+
+def test_split_at_plan_boundary_halves_a_multi_plan_part_and_refuses_one_plan():
+    plan_of = {"A1": "a", "A2": "a", "B1": "b", "C1": "c"}
+    assert lanes.split_at_plan_boundary(["A1", "A2", "B1", "C1"], plan_of) == [["A1", "A2"], ["B1", "C1"]]
+    assert lanes.split_at_plan_boundary(["A1", "A2"], plan_of) is None
+
+
 def test_topological_order_follows_depends_on_then_id():
     rows = [
         _row("Z", ["s.py"]),

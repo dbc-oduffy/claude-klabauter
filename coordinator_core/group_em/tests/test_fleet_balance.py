@@ -62,6 +62,19 @@ def test_gpu_rule_boundary_overrides_busy_cpu() -> None:
     assert not fb.is_idle(_row("a", cpu_pct=95.0, gpu_util=10.0), NOW)
 
 
+def test_p_core_rule_ignores_free_e_cores() -> None:
+    hetero = {"cores_by_class": {"p": 8, "e": 16}}
+    busy_p = _row("a", cpu_pct=10.0, free_cores_by_class={"p": 3, "e": 16}, **hetero)
+    assert not fb.is_idle(busy_p, NOW)
+    half_p = _row("a", cpu_pct=90.0, free_cores_by_class={"p": 4, "e": 0}, **hetero)
+    assert fb.is_idle(half_p, NOW)
+    no_total = _row("a", cpu_pct=10.0, free_cores_by_class={"p": 8, "e": 16})
+    assert not fb.is_idle(no_total, NOW)
+    assert fb.is_idle({**busy_p, "gpus": [{"util_pct": 1.0}]}, NOW)
+    unmeasured = _row("a", cpu_pct=10.0, **hetero)
+    assert not fb.is_idle(unmeasured, NOW)
+
+
 def test_load_80_is_work_and_79_is_not() -> None:
     assert fb.has_work(_row("b", cpu_pct=80.0), None, None, NOW)
     assert not fb.has_work(_row("b", cpu_pct=79.9), None, None, NOW)

@@ -31,7 +31,7 @@ DLV = "dlv-alpha-aaaaaa"
 NODE = "tests/test_a.py::test_x"
 F = "pkg/shared.py"
 T = "tests/test_new.py"
-VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 
 
 def _git(root: Path, *args: str) -> str:
@@ -87,7 +87,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     session_core.init(SELF, cwd=str(root))
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)

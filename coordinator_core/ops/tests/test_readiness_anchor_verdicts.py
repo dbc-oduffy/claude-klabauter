@@ -81,6 +81,20 @@ def test_mismatch_pulls_as_contradicted(tmp_path, monkeypatch):
     _validate(reply)
 
 
+def test_elided_pattern_mismatch_never_blocks_as_contradicted(tmp_path, monkeypatch):
+    common = _plan(tmp_path)
+    monkeypatch.setattr(_anchor_check, "evaluate", _evaluate("MISMATCH", observed="0"))
+    plan = tmp_path / REL
+    text = plan.read_text(encoding="utf-8").replace(f"grep -c marker {REL}", f"grep -c mar...er {REL}")
+    plan.write_text(text, encoding="utf-8")
+    reply = op._handler({"plan": REL}, common)
+    entry = _entry(reply)
+    assert entry["verdict"] is None and entry["source"] == "none"
+    assert entry["observed"].startswith("malformed check: pattern ")
+    assert not any("anchor-premise-CONTRADICTED" in b for b in reply["blocking"])
+    _validate(reply)
+
+
 def test_pipe_check_with_clean_checker_is_ready_and_noted_unevaluable(tmp_path):
     common = _plan(tmp_path)
     plan = tmp_path / REL

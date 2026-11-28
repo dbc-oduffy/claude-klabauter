@@ -37,6 +37,58 @@ def _checker_prompt_span(script, label):
     return script[script.rindex("agent(", 0, end):end]
 
 
+def _health_repo(tmp_path, monkeypatch, lanes, mapped=True):
+    """A non-UE repo whose example-retrieval-repo home (under COORDINATOR_SETTINGS_HOME) carries `lanes`."""
+    import json
+
+    repo = tmp_path / "work" / "demo"
+    repo.mkdir(parents=True)
+    (repo / "coordinator.local.md").write_text("---\nproject_type: web\n---\n", encoding="utf-8")
+    home = tmp_path / "settings" / "project-rag"
+    home.mkdir(parents=True)
+    served = [{"slug": "demo", "root": str(repo)}] if mapped else []
+    (home / "served-repos.json").write_text(json.dumps({"repos": served}), encoding="utf-8")
+    state = {"repos": {"demo": {"corpus_health": lanes}}} if lanes is not None else {"repos": {}}
+    (home / "corpus-state.json").write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    return str(repo)
+
+
+_OK_LANE = {"state": "ok", "reason": "ready", "checked_at": "2026-11-19T23:52:03Z"}
+_PUSH = "_ragDegraded.push({ source: 'project_health'"
+
+
+def test_a_broken_health_fixture_composes_a_project_health_entry_at_default_args(tmp_path, monkeypatch):
+    lanes = {
+        "semantic_served_set": {"state": "degraded", "reason": "no project collection", "checked_at": "2026-11-19T23:52:03Z"},
+    }
+    script = _compose(repo_root=_health_repo(tmp_path, monkeypatch, lanes), **_named_fragment())
+    assert _PUSH in script and "verdict: 'degraded'" in script and "no project collection" in script
+    assert script.index("let _ragDegraded = [];") < script.index(_PUSH) < script.index("rag_degraded: _ragDegraded")
+
+
+def test_an_all_ok_health_fixture_composes_no_entry(tmp_path, monkeypatch):
+    repo = _health_repo(tmp_path, monkeypatch, {"semantic_served_set": _OK_LANE})
+    assert _PUSH not in _compose(repo_root=repo, **_named_fragment())
+
+
+def test_an_unknown_repo_fixture_composes_a_health_unknown_repo_entry(tmp_path, monkeypatch):
+    repo = _health_repo(tmp_path, monkeypatch, {"semantic_served_set": _OK_LANE}, mapped=False)
+    script = _compose(repo_root=repo, **_named_fragment())
+    assert _PUSH in script and "verdict: 'health_unknown_repo'" in script
+
+
+def test_a_reader_failure_composes_a_health_unreadable_entry_and_the_run_still_composes(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import rag_health
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("reader exploded")
+
+    monkeypatch.setattr(rag_health, "repo_verdict", _boom)
+    script = _compose(repo_root=_health_repo(tmp_path, monkeypatch, {}), **_named_fragment())
+    assert _PUSH in script and "verdict: 'health_unreadable'" in script and "reader exploded" in script
+
+
 def test_plan_docs_check_runs_the_gate_itself_ahead_of_plan_review(monkeypatch, tmp_path):
     script = _m_plus(monkeypatch, _ue_declared_repo(tmp_path))
     assert "label: 'plan-docs-check-gate'" not in script

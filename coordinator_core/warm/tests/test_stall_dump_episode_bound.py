@@ -60,7 +60,7 @@ def test_stub_records_count_toward_the_restart_threshold(tmp_path: Path, monkeyp
     monkeypatch.setattr(hang_restart, "exit_server", exits.append)
     seen = []
     for i in range(hang_restart.HANG_DUMP_THRESHOLD):
-        server._write_stall_record(stall_dir, None, key=f"k{i}", leg="{}")
+        server._write_stall_record(stall_dir, None, key=f"k{i}", leg="{}", sample_box=False)
         seen.append(len(exits))
     assert len(_full(stall_dir)) == 1
     assert seen == [0] * (hang_restart.HANG_DUMP_THRESHOLD - 1) + [1]

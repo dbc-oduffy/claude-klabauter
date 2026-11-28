@@ -2728,6 +2728,31 @@ def _wg_authoring_leak_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[s
     }
 
 
+def _wg_executor_added_comment_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    agent, session = "a1b2c3d4e5f60718", "corpus-em-session"
+    hub = scratch_dir / ".coordinator-local" / "coordinator-sessions"
+    (hub / ".agents" / agent).mkdir(parents=True)
+    (hub / ".agents" / agent / "em-session-id.txt").write_text(session + "\n", encoding="utf-8")
+    (hub / session).mkdir(parents=True)
+    (hub / session / "dispatched-agents.txt").write_text(
+        f"{agent}\tx\tcoordinator:executor\n", encoding="utf-8"
+    )
+    mp.setattr(
+        "coordinator_core.write_guards._repo_root.resolve_repo_root",
+        lambda cwd=None: str(scratch_dir),
+    )
+    return {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": str(scratch_dir / "tools" / "mod_x.py"),
+            "content": "x = 1  # keep this because the test was flaky\n",
+        },
+        "agent_id": agent,
+        "session_id": session,
+        "cwd": str(scratch_dir),
+    }
+
+
 def _wg_consumed_handoff_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     target = scratch_dir / "state" / "handoffs" / "foo.md"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -3661,6 +3686,8 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_published_engine_mirror_write", "control", False, _wg_benign),
     WriteGuardRow("nudge_authoring_leak", "fire", True, _wg_authoring_leak_fire),
     WriteGuardRow("nudge_authoring_leak", "control", False, _wg_benign),
+    WriteGuardRow("nudge_executor_added_comment", "fire", True, _wg_executor_added_comment_fire),
+    WriteGuardRow("nudge_executor_added_comment", "control", False, _wg_benign),
     WriteGuardRow("block_consumed_handoff_edit", "fire", True, _wg_consumed_handoff_fire),
     WriteGuardRow("block_consumed_handoff_edit", "control", False, _wg_benign),
     WriteGuardRow(

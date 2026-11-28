@@ -45,10 +45,14 @@ NO_WORKFLOW_HOSTS = frozenset({"codex", "agy", "grok"})
 #: `engine_ask_submit` read (or scaffold) `CANONICAL_PARAMS_PATH` itself.
 INVOKE_SUBMIT_COMMAND = "coordinator-invoke engine_ask.submit"
 
-#: Appended to `fire_step` for `NO_WORKFLOW_HOSTS`: where the params live, and that the first call stages them.
+#: Appended to `fire_step` for `NO_WORKFLOW_HOSTS`. It must not tell the caller to inspect or prepare
+#: anything before the first call: the agy grant covers only that exact command, so any shell probe
+#: ahead of it is auto-denied. The call itself stages the params file; the only follow-up is a file write
+#: and the same command again.
 INVOKE_PARAMS_NOTE = (
-    " Its params are `.coordinator-local/em-submit.json` (`ask` = the PM's words verbatim, `ask_source` = `pm`);"
-    " a first call with no file writes the scaffold."
+    " Run it as your first act, with no inspection or setup before it."
+    " If it refuses `No ask staged`, set `ask` (the PM's words verbatim) in `.coordinator-local/em-submit.json`"
+    " with your file-edit tool, then run the same command one more time."
 )
 
 

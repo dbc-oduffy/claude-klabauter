@@ -27,13 +27,16 @@ LOCAL_ONLY_PREFIXES: tuple[str, ...] = (
     "file_cache_trim",
 )
 
-# Phase 2 mutating ops cleared to run remotely: mint/land only. The far engine runs them in its own
-# tree, locks and git, so the run lands on the SERVING box's daily branch (multibox Placement rule).
+# Phase 2 mutating ops cleared to run remotely: mint/land plus the per-box file-cache trim. The far
+# engine runs them in its own tree, locks and git, so a run lands on the SERVING box's daily branch
+# (multibox Placement rule).
 # Never add a caller-local-state op: LOCAL_ONLY wins over this list.
 PHASE2_MUTATING_ALLOWLIST: frozenset[str] = frozenset(
     {
         "hooks.submit_engine_ask",
         "dispatch.emit",
+        # Fleet file-cache trim: acts on the SERVING box's own cache; a far run is never repeated locally.
+        "groupem.file_cache_trim",
     }
 )
 

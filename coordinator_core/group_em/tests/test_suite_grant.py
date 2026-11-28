@@ -459,6 +459,93 @@ def test_relayed_grant_expiry_liveness_and_envelope_scope_are_enforced(boxes) ->
     assert not _check_b(boxes)[0]
 
 
+def _host_alias_row(boxes, alias: str = "machine-a") -> None:
+    """This box's hostname registered as a far-style ssh row, as a membership-derived registration leaves it."""
+    from coordinator_core.group_em import box_registry
+
+    box_registry.register(
+        boxes["home_a"], {}, directory=boxes["a"], box_id=alias,
+        transport={"kind": "ssh", "host": f"user@{alias}.local", "relay_key": "k"},
+    )
+
+
+def _no_relay(boxes) -> list:
+    from coordinator_core.group_em import node_transport
+
+    dialled: list = []
+
+    class T:
+        def deliver_grant(self, box, envelope):
+            dialled.append(("grant", box["box_id"]))
+            return {"ok": False, "reason": "ssh_exit_255"}
+
+        def deliver_revoke(self, box, envelope):
+            dialled.append(("revoke", box["box_id"]))
+            return {"ok": False, "reason": "ssh_exit_255"}
+
+    boxes["mp"].setattr(node_transport, "select", lambda box, directory=None, runner=None: T())
+    return dialled
+
+
+@pytest.mark.parametrize("typed", ["machine-a", "Machine-a", "MACHINE-A", "machine-a-lan", "user@machine-a"])
+def test_a_host_alias_of_this_box_writes_locally_with_zero_relay_calls(boxes, typed) -> None:
+    boxes["mp"].setattr(suite_grant.socket, "gethostname", lambda: "Machine-a")
+    _host_alias_row(boxes)
+    dialled = _no_relay(boxes)
+    result = suite_grant.issue_suite_grant(f"{typed}:{PEER}", "ruled", directory=boxes["a"], now=NOW)
+    assert result.ok, result.reason
+    assert dialled == []
+    assert (boxes["a"] / "suite-grants" / HOLDER / f"{PEER}.json").is_file()
+    assert result.record["grantee_session_id"] == PEER and "grantee_box_id" not in result.record
+
+
+def test_a_foreign_box_head_still_reaches_the_relay(boxes) -> None:
+    boxes["mp"].setattr(suite_grant.socket, "gethostname", lambda: "Machine-a")
+    _host_alias_row(boxes)
+    dialled = _no_relay(boxes)
+    result = _relay(boxes)
+    assert not result.ok and result.reason.startswith(suite_grant.RELAY_FAILED)
+    assert dialled == [("grant", boxes["idb"])]
+    assert list((boxes["a"] / "suite-grants").rglob("*.json")) == []
+
+
+def test_a_head_equal_to_the_hostname_but_named_by_no_row_or_member_is_not_this_box(boxes) -> None:
+    boxes["mp"].setattr(suite_grant.socket, "gethostname", lambda: "Machine-a")
+    boxes["mp"].setattr(suite_grant.member_box, "member_box_id", lambda *a, **k: None)
+    dialled = _no_relay(boxes)
+    result = suite_grant.issue_suite_grant(f"machine-a:{PEER}", "ruled", directory=boxes["a"], now=NOW)
+    assert not result.ok and dialled == []
+    assert list((boxes["a"] / "suite-grants").rglob("*.json")) == []
+
+
+def test_a_registered_row_for_another_host_is_not_this_box(boxes) -> None:
+    boxes["mp"].setattr(suite_grant.socket, "gethostname", lambda: "Machine-a")
+    _host_alias_row(boxes, "mac-mini")
+    dialled = _no_relay(boxes)
+    result = suite_grant.issue_suite_grant(f"mac-mini:{PEER}", "ruled", directory=boxes["a"], now=NOW)
+    assert not result.ok and dialled == [("grant", "mac-mini")]
+
+
+def test_revoke_of_a_host_alias_of_this_box_stays_local(boxes) -> None:
+    boxes["mp"].setattr(suite_grant.socket, "gethostname", lambda: "Machine-a")
+    _host_alias_row(boxes)
+    dialled = _no_relay(boxes)
+    assert suite_grant.issue_suite_grant(PEER, "ruled", directory=boxes["a"], now=NOW).ok
+    target = boxes["a"] / "suite-grants" / HOLDER / f"{PEER}.json"
+    assert target.is_file()
+    result = suite_grant.revoke_suite_grant(f"machine-a:{PEER}", directory=boxes["a"], now=NOW)
+    assert result.ok and result.reason == "revoked", result.reason
+    assert dialled == [] and not target.exists()
+
+
+def test_revoke_of_a_foreign_box_still_relays(boxes) -> None:
+    boxes["mp"].setattr(suite_grant.socket, "gethostname", lambda: "Machine-a")
+    _host_alias_row(boxes)
+    dialled = _no_relay(boxes)
+    result = suite_grant.revoke_suite_grant(f"{boxes['idb']}:{PEER}", directory=boxes["a"], now=NOW)
+    assert not result.ok and dialled == [("revoke", boxes["idb"])]
+
+
 def test_bare_sid_still_takes_the_same_box_path(boxes) -> None:
     boxes["mp"].setattr(
         session_registry, "read_rows", lambda directory=None: [_row(PEER, "peer-name", boxes["repo"])]

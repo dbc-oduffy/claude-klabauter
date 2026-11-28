@@ -262,15 +262,15 @@ def test_co_tenant_wait_halts_co_tenant_wait_naming_owner_and_module():
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
 @pytest.mark.spawns_process
-def test_co_tenant_on_halted_run_halts_that_kind_naming_the_owner_refire():
+def test_retired_halted_owner_cause_no_longer_halts_as_a_co_tenant_kind():
     halted = _run_at_base(
         "{ status: 'error', sidecar_path: 'a.md', tests_run: 0, "
         "zero_run_cause: 'co_tenant_dependency_on_halted_run', "
         + _CO_TENANT % ", owner_refire: 'REFIRE-RUN-7'" + " }",
         "null",
     )
-    assert halted["halted"] == "co_tenant_dependency_on_halted_run"
-    assert "REFIRE-RUN-7" in halted["next_action"] and "run-7" in halted["detail"]
+    assert halted["halted"] == "test_infra_failure"
+    assert "REFIRE-RUN-7" not in halted["next_action"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")

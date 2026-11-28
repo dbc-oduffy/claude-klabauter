@@ -53,7 +53,7 @@ let _lateIds = [], _verifyLateIds = [], _lateLeg = null, _lateUnplanned = [];
 let _ragDegraded = []; const _pmVerbatimIds = []; const _checkpointFixIds = []; const _JUDGE_SCHEMA = {};
 const _lateRead = async () => [];
 let _reverifyJoined = false; const _joinReverify = async () => null; const _reviewReused = false;
-const _reviewBlockedHalt = () => {};
+const _reviewBlockedHalt = () => {}; const _reviewInfraHalts = () => {};
 let _alreadyDelivered = null, _allLandedResume = false, _consumedReturns = {}, _footprintReviewed = false, _foreignReds = [];
 const _verdictText = () => '';
 const _judgeRules = %(judge_rules)s;
@@ -64,6 +64,9 @@ let %(owner_rows)s = [];
 %(agent_defs)s
 %(helper)s
 %(cap)s
+const _reqText = {}; let _emptyStageResume = false;
+%(unmet_rows)s
+%(commit_ledger)s
 """
 
 
@@ -107,6 +110,8 @@ def _run(
         "helper": ask_compose._usage_limit_helper_js(),
         "cap": ask_compose.CAP_HELPER_JS,
         "judge_rules": ask_compose._emit._JUDGE_VERDICT_RULES_JS,
+        "unmet_rows": ask_compose.UNMET_ROWS_DETAIL_JS,
+        "commit_ledger": ask_compose.COMMIT_LEDGER_DETAIL_JS,
     }
     body = _segment(in_run_commit, judged).replace(
         "  return { arm:",

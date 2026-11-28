@@ -46,17 +46,19 @@ def _world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _plan(root: Path, credited):
     paths = list(DIRTY)
-    return plan_tree_eviction(root, "state/warp/r1", paths, set(paths), paths, {}, [], run_id="r1", credited=credited)
+    return plan_tree_eviction(root, "state/warp/r1", paths, set(paths), paths, {}, [], credited=credited)
 
 
-def test_uncredited_peer_path_is_never_parked_or_reset(tmp_path, monkeypatch) -> None:
+def test_uncredited_peer_path_is_never_recorded_and_the_tree_keeps_both(tmp_path, monkeypatch) -> None:
     root = _world(tmp_path, monkeypatch)
     ev = _plan(root, credited={"own.py"})
     assert ev is not None
     ev.apply()
-    assert (root / "own.py").read_text() == HEAD["own.py"]
+    assert (root / "own.py").read_text() == DIRTY["own.py"]
     assert (root / "peer.py").read_text() == DIRTY["peer.py"]
     assert ev.evicted == ["own.py"]
+    index = json.loads((root / "state" / "warp" / "r1" / "evicted.json").read_text(encoding="utf-8"))
+    assert set(index) == {"own.py"}
 
 
 def test_nothing_credited_parks_nothing(tmp_path, monkeypatch) -> None:

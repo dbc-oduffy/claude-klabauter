@@ -284,6 +284,107 @@ def test_engine_build_carries_an_unresolvable_head_as_none(monkeypatch):
     engine_version._BUILD_MEMO = None
 
 
+def _stamp(root: Path, content: str) -> None:
+    (root / "coordinator_core").mkdir(exist_ok=True)
+    (root / "coordinator_core" / "_engine_stamp").write_text(content, encoding="utf-8")
+
+
+def test_engine_identity_stamped_tree_returns_stamp_sha_and_carries_head(tmp_path):
+    from coordinator_core.engine_version import engine_identity
+
+    head = _repo_with_commit(tmp_path / "s", "plain")
+    _stamp(tmp_path / "s", f"sha:{_SRC}+dirty-abc\n")
+    got = engine_identity(tmp_path / "s")
+    assert (got.sha, got.basis, got.source_head) == (_SRC, "published-stamp", head)
+
+
+_NEWER = "b" * 40
+
+
+def test_engine_identity_source_head_record_outranks_the_older_stamp(tmp_path):
+    from coordinator_core.engine_version import engine_identity
+
+    head = _repo_with_commit(tmp_path / "r", "plain")
+    _stamp(tmp_path / "r", f"sha:{_SRC}\n")
+    (tmp_path / "r" / "coordinator_core" / "_engine_source_head").write_text(
+        f"sha:{_NEWER}\n", encoding="utf-8"
+    )
+    got = engine_identity(tmp_path / "r")
+    assert (got.sha, got.basis, got.source_head) == (_NEWER, "published-source-head", head)
+
+
+def test_engine_identity_older_mirror_without_record_falls_back_to_stamp(tmp_path):
+    from coordinator_core.engine_version import engine_identity
+
+    _repo_with_commit(tmp_path / "o", "plain")
+    _stamp(tmp_path / "o", f"sha:{_SRC}\n")
+    got = engine_identity(tmp_path / "o")
+    assert (got.sha, got.basis) == (_SRC, "published-stamp")
+
+
+def test_engine_identity_malformed_source_head_record_falls_back_to_stamp(tmp_path):
+    from coordinator_core.engine_version import engine_identity
+
+    _repo_with_commit(tmp_path / "m", "plain")
+    _stamp(tmp_path / "m", f"sha:{_SRC}\n")
+    (tmp_path / "m" / "coordinator_core" / "_engine_source_head").write_text("garbage", encoding="utf-8")
+    assert engine_identity(tmp_path / "m").sha == _SRC
+
+
+def test_halt_marker_engine_sha_is_the_recorded_source_head(monkeypatch, tmp_path):
+    from coordinator_core.engine_version import engine_identity
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
+
+    _repo_with_commit(tmp_path / "h", "plain")
+    _stamp(tmp_path / "h", f"sha:{_SRC}\n")
+    (tmp_path / "h" / "coordinator_core" / "_engine_source_head").write_text(
+        f"sha:{_NEWER}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(halt_resume_record, "_ENGINE_IDENTITY", [engine_identity(tmp_path / "h")._asdict()])
+    assert halt_resume_record.engine_sha() == _NEWER
+
+
+def test_engine_identity_unstamped_tree_returns_head(tmp_path):
+    from coordinator_core.engine_version import engine_identity
+
+    head = _repo_with_commit(tmp_path / "u", "plain")
+    got = engine_identity(tmp_path / "u")
+    assert (got.sha, got.basis, got.source_head) == (head, "source-tree", head)
+
+
+def test_engine_identity_empty_stamp_falls_back_never_raises(tmp_path):
+    from coordinator_core.engine_version import engine_identity
+
+    head = _repo_with_commit(tmp_path / "z", "plain")
+    for content in ("", "sha:", "garbage"):
+        _stamp(tmp_path / "z", content)
+        got = engine_identity(tmp_path / "z")
+        assert (got.sha, got.basis) == (head, "source-tree")
+
+
+def test_engine_identity_never_spawns_a_process(monkeypatch, tmp_path):
+    from coordinator_core.engine_version import engine_identity
+
+    head = _repo_with_commit(tmp_path / "n", "plain")
+    _stamp(tmp_path / "n", f"sha:{_SRC}")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("engine_identity must not create a process")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    assert engine_identity(tmp_path / "n").sha == _SRC
+    (tmp_path / "n" / "coordinator_core" / "_engine_stamp").unlink()
+    assert engine_identity(tmp_path / "n").sha == head
+
+
+def test_engine_identity_outside_a_repo_never_raises(monkeypatch, tmp_path):
+    from coordinator_core.engine_version import engine_identity
+
+    monkeypatch.setattr("coordinator_core.git.repo_root._walk_for_repo", lambda start: None)
+    assert engine_identity(tmp_path).sha is None
+
+
 def test_engine_head_sha_is_none_outside_a_repo(monkeypatch, tmp_path):
     from coordinator_core import engine_version
 

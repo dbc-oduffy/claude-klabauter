@@ -49,6 +49,9 @@ class TestFleetCapacityOps:
             ("groupem.capacity_admit", OpClass.MUTATING),
             ("groupem.capacity_place", OpClass.COMPUTE_ONLY),
             ("groupem.idle_capacity_watch", OpClass.COMPUTE_ONLY),
+            ("groupem.job_ledger", OpClass.COMPUTE_ONLY),
+            ("groupem.job_ledger_local", OpClass.COMPUTE_ONLY),
+            ("groupem.job_progress", OpClass.MUTATING),
         ],
     )
     def test_classification(self, op: str, expected: OpClass) -> None:

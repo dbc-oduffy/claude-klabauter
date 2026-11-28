@@ -15,7 +15,7 @@ from pathlib import Path
 
 RUN = "ask-20261014T000000-abc123"
 REL = "state/sizings/2026-10-14-drift.yaml"
-VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ def _record(root) -> None:
     path = measured_rev_record_path(root, RUN)
     path.write_text(json.dumps({
         "sha": "s", "base_sha": "b", "paths": ["a.txt"], "removed": [],
-        "blobs": {"a.txt": commit._checkin_blob_sha_read(root, "a.txt")},
+        "blobs": {"a.txt": commit.checkin_blob_sha(root, "a.txt")},
     }), encoding="utf-8")
 
 

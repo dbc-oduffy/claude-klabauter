@@ -396,6 +396,46 @@ def test_a_halt_commit_with_a_wrong_token_after_retirement_is_refused(repo) -> N
     assert not path.exists()
 
 
+_LATER_SCRIPT = "scratch/warp/b.workflow.mjs"
+
+
+def _record_launcher(repo, script: str) -> None:
+    rd = repo / "state" / "warp" / _RUN
+    rd.mkdir(parents=True, exist_ok=True)
+    with open(rd / "refire-launches.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"script_path": script, "launched_at": 1.0, "kind": "refire"}) + "\n")
+
+
+def test_a_token_retired_by_a_later_launcher_is_refused_naming_that_launchers_script(repo) -> None:
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": "0" * 32, "halted_by": {"reason": "x"}}
+    chan.params_path(repo, _RUN).parent.mkdir(parents=True)
+    _record_launcher(repo, _LATER_SCRIPT)
+    verdict = _check(_land_run_argv(repo), _transcript(repo, params))
+    assert verdict is not None
+    assert _LATER_SCRIPT in _reason(verdict)
+    assert guard._LEG_PARAMS_SUPERSEDED in _refused_note(repo).read_text(encoding="utf-8")
+
+
+def test_a_token_refusal_keeps_the_unchanged_text_when_no_later_launcher_exists(repo) -> None:
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": "0" * 32, "halted_by": {"reason": "x"}}
+    chan.params_path(repo, _RUN).parent.mkdir(parents=True)
+    verdict = _check(_land_run_argv(repo), _transcript(repo, params))
+    assert _reason(verdict) == guard._GIT_COMMIT_AGENT_LEG_MESSAGES[guard._LEG_PARAMS_TOKEN]
+    _record_launcher(repo, _SCRIPT)
+    verdict = _check(_land_run_argv(repo), _transcript(repo, params))
+    assert _reason(verdict) == guard._GIT_COMMIT_AGENT_LEG_MESSAGES[guard._LEG_PARAMS_TOKEN]
+
+
+def test_a_retired_token_from_an_existing_file_names_the_later_launcher(repo) -> None:
+    run_token.mint(repo, _RUN, _SCRIPT)
+    path = chan.params_path(repo, _RUN)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"script_path": _SCRIPT, "run_id": _RUN, "run_token": "0" * 32}), encoding="utf-8")
+    _record_launcher(repo, _LATER_SCRIPT)
+    verdict = _check(_land_run_argv(repo), _no_block_transcript(repo))
+    assert _LATER_SCRIPT in _reason(verdict)
+
+
 def test_an_admit_clears_the_note_a_prior_refusal_left(repo) -> None:
     path = chan.params_path(repo, _RUN)
     path.parent.mkdir(parents=True)

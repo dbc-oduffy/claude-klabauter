@@ -107,6 +107,45 @@ def test_another_sessions_run_is_never_chosen(tmp_path: Path, monkeypatch: pytes
     assert run_write_prints.resolve_run(tmp_path, "S1", "agentA", "x.txt") is None
 
 
+def _stage(root, run_id, **fields) -> None:
+    d = record_dir(root, run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "run-stage.json").write_text(json.dumps({"session_id": "S1", **fields}), encoding="utf-8")
+
+
+@pytest.mark.parametrize("field", ["driver_session_ids", "adopted_from"])
+def test_refire_driver_session_resolves_a_run_minted_under_the_prior_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    _live(monkeypatch, A, session="S1")
+    _stage(tmp_path, A, **{field: ["S2"]})
+    (tmp_path / "x.txt").write_bytes(b"x\n")
+
+    assert run_write_prints.record_write(tmp_path, "S2", "agentR", "x.txt") == A
+    assert set(run_write_prints.read(tmp_path, A)) == {"x.txt"}
+
+
+def test_refire_stale_binding_to_a_prior_agent_does_not_block_the_new_executor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _live(monkeypatch, A, session="S1")
+    _stage(tmp_path, A, driver_session_ids=["S2"])
+    run_write_prints._bind(tmp_path, A, "agentPrior")
+    (tmp_path / "x.txt").write_bytes(b"x\n")
+
+    assert run_write_prints.record_write(tmp_path, "S2", "agentR", "x.txt") == A
+    assert set(_agents(tmp_path, A)) == {"agentPrior", "agentR"}
+
+
+def test_session_named_by_no_run_stage_still_resolves_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _live(monkeypatch, A, session="S1")
+    _stage(tmp_path, A, driver_session_ids=["S2"])
+    (tmp_path / "x.txt").write_bytes(b"x\n")
+
+    assert run_write_prints.record_write(tmp_path, "S3", "agentR", "x.txt") is None
+    assert run_write_prints.read(tmp_path, A) is None
+
+
 def test_unreadable_binding_or_manifest_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _live(monkeypatch, A, B)
     for run in (A, B):

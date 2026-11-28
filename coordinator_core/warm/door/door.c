@@ -980,6 +980,40 @@ static void door_log_fail_open(const char *cause) {
     CloseHandle(h);
 }
 
+static char g_clone_hash[17];
+static int door_svc_dir_w(wchar_t *out, size_t cap, const char *clone_hash);
+static int door_ensure_dir_recursive_w(wchar_t *path);
+
+/* Appends one `hook_timeout` row to <svc dir>\degrade.jsonl per cold-leg kill, in the shape of
+ * telemetry.py :: record_degrade; read back by telemetry.py :: door_cold_leg_kill_rows.
+ * Twin of door_posix.c's; every failure is silent -- the row never changes the verdict or a spawn. */
+static void door_log_cold_leg_kill(int irreversible_shaped) {
+    if (!g_clone_hash[0]) return;
+    wchar_t path[MAX_PATH * 2 + 40];
+    if (!door_svc_dir_w(path, MAX_PATH * 2, g_clone_hash)) return;
+    if (!door_ensure_dir_recursive_w(path)) return;
+    size_t dir_len = wcslen(path);
+    if (dir_len + 16 >= MAX_PATH * 2 + 40) return;
+    wcscpy(path + dir_len, L"\\degrade.jsonl");
+    HANDLE h = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    char line[192];
+    int n = snprintf(line, sizeof line,
+                     "{\"ts\": \"%04u-%02u-%02uT%02u:%02u:%02uZ\", \"kind\": \"hook_timeout\", "
+                     "\"cause\": \"door.cold_leg_kill: irreversible_shaped=%s\"}\n",
+                     (unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay,
+                     (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond,
+                     irreversible_shaped ? "true" : "false");
+    if (n > 0 && (size_t)n < sizeof line) {
+        DWORD wrote = 0;
+        WriteFile(h, line, (DWORD)n, &wrote, NULL);
+    }
+    CloseHandle(h);
+}
+
 /* Windows twin of `door_core.c :: door_spool_hook_payload` (whose _WIN32 leg is a stub): same
  * record bytes, id and path, layout pinned by docs/reference/ask-spool.md. Owner-only access is
  * the per-user default ACL under the repo, not a mode bit. 1 created, 2 already spooled, 0 failed;
@@ -1128,6 +1162,20 @@ static int emit_hook_pass_loudly(const char *reason) {
     write_all(GetStdHandle(STD_OUTPUT_HANDLE), out.data, out.len);
     free(out.data);
     return 0;
+}
+
+static int emit_hook_deny(const char *reason);
+
+/* An irreversible-shaped payload no verdict covered: denied, naming detail and command.
+ * Callers log the engine-friction row. */
+static int emit_hook_irreversible_unchecked(const char *detail) {
+    char command[240], reason[640];
+    door_payload_irreversible_command(g_hook_payload, g_hook_payload_len, command, sizeof command);
+    snprintf(reason, sizeof reason,
+             "coordinator-door: irreversible-shaped command DENIED, no engine verdict (%s): %s; retry once the engine answers",
+             (detail && *detail) ? detail : "no detail",
+             command[0] ? command : "(command not captured)");
+    return emit_hook_deny(reason);
 }
 
 
@@ -1363,12 +1411,22 @@ static int emit_hook_post_delivery(const char *full_detail);
  * call: the child then runs in the guard chain's verdict-only mode
  * (COORDINATOR_GUARD_VERDICT_ONLY=1, so a re-run appends no bookkeeping) and
  * every no-verdict exit reports the post-delivery cause instead. */
+static void door_restart_engine_async(const wchar_t *engine_root_w);
+
 static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w,
                              DWORD budget_ms, const char *post_detail) {
+    if (!post_detail && g_hook_payload) {
+        char native_reason[640];
+        if (door_native_guard_verdict(g_hook_payload, g_hook_payload_len, native_reason,
+                                      sizeof native_reason)) {
+            return emit_hook_deny(native_reason);
+        }
+    }
     if (emit_precheck_if_matched()) return 0;
 
     (void)argc;
     int advisory = g_door_advisory;
+    if (budget_ms > (DWORD)door_hook_read_deadline_ms()) budget_ms = (DWORD)door_hook_read_deadline_ms();
 
     wchar_t script_path_w[MAX_PATH * 2];
     wchar_t *cmdline_w = build_fallback_cmdline(argc, wargv, engine_root_w, script_path_w);
@@ -1431,11 +1489,13 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
         CloseHandle(out_r);
-        if (g_hook_payload && door_payload_is_irreversible(g_hook_payload, g_hook_payload_len)) {
-            char reason[640];
-            door_log_fail_open("cold guard gave no verdict within the hook deadline; irreversible denied");
-            door_irreversible_deny_reason(reason, sizeof reason, "cold guard gave no verdict within the hook deadline");
-            return emit_hook_deny(reason);
+        int irreversible = g_hook_payload &&
+                           door_payload_is_irreversible(g_hook_payload, g_hook_payload_len);
+        door_log_cold_leg_kill(irreversible);
+        door_restart_engine_async(engine_root_w);
+        if (irreversible) {
+            door_log_fail_open("cold guard gave no verdict within the hook deadline");
+            return emit_hook_irreversible_unchecked("cold guard gave no verdict within the hook deadline");
         }
         if (post_detail) return emit_hook_post_delivery(post_detail);
         if (advisory) { door_log_fail_open("cold guard gave no verdict within the hook deadline"); return 0; }
@@ -1855,7 +1915,7 @@ static int emit_hook_post_delivery(const char *full_detail) {
 }
 
 /* Every post-delivery failure of the warm read. Hook mode: an irreversible
- * payload is denied; else the pre-check's rewrite when it matched; else the
+ * payload is denied and one engine-friction row lands; else the pre-check's rewrite when it matched; else the
  * one-line allow advisory. Any other caller keeps the indeterminate refusal
  * (it may have mutated). */
 static int emit_post_delivery_failure(const char *detail, int argc, wchar_t **wargv,
@@ -1863,9 +1923,8 @@ static int emit_post_delivery_failure(const char *detail, int argc, wchar_t **wa
     door_log_fail_open(detail);
     if (g_door_hook_mode && g_hook_payload &&
         door_payload_is_irreversible(g_hook_payload, g_hook_payload_len)) {
-        char reason[640];
-        door_irreversible_deny_reason(reason, sizeof reason, detail);
-        return emit_hook_deny(reason);
+        door_log_cold_leg_kill(1);
+        return emit_hook_irreversible_unchecked(detail);
     }
     if (g_precheck_armed && emit_precheck_if_matched()) return 0;
     if (g_door_hook_mode && door_hook_op_reverdicts_cold(g_hook_op)) {
@@ -1962,8 +2021,35 @@ static int door_svc_dir_w(wchar_t *out, size_t cap, const char *clone_hash) {
     wchar_t base[MAX_PATH];
     DWORD n = GetEnvironmentVariableW(L"COORDINATOR_WARM_RUNTIME_BASE", base, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) {
-        n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
-        if (n == 0 || n >= MAX_PATH) return 0;
+        /* Rung 2: settings-home machine-local/.coordinator-warm-runtime-base
+         * (breadcrumb.RUNTIME_BASE_KEY_FILE); absolute drive or UNC path only. */
+        int keyed = 0;
+        wchar_t home_w[MAX_PATH * 2];
+        wchar_t key_path[MAX_PATH * 2];
+        if (settings_home_w(home_w, MAX_PATH * 2) &&
+            swprintf(key_path, MAX_PATH * 2, L"%s\\machine-local\\.coordinator-warm-runtime-base", home_w) >= 0) {
+            size_t len = 0;
+            int why = RUNG_UNREADABLE;
+            char *u8 = read_trimmed_file_utf8(key_path, &len, &why);
+            if (u8) {
+                wchar_t *w = utf8_to_wide(u8);
+                free(u8);
+                if (w) {
+                    size_t wl = wcslen(w);
+                    int absolute = wl >= 3 && ((w[1] == L':' && (w[2] == L'\\' || w[2] == L'/')) ||
+                                               (w[0] == L'\\' && w[1] == L'\\'));
+                    if (absolute && wl < MAX_PATH) {
+                        for (size_t i = 0; i <= wl; i++) base[i] = (w[i] == L'/') ? L'\\' : w[i];
+                        keyed = 1;
+                    }
+                    free(w);
+                }
+            }
+        }
+        if (!keyed) {
+            n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
+            if (n == 0 || n >= MAX_PATH) return 0;
+        }
     }
 
     wchar_t clone_hash_w[17];
@@ -2001,19 +2087,37 @@ static int door_drain_publish_hold(const char *clone_hash) {
     }
 }
 
+static int door_claim_spawn_stamp(const char *clone_hash, int spawn_if_unstampable);
+static void door_spawn_detached_python(const wchar_t *engine_root_w, const wchar_t *script,
+                                       const wchar_t *extra_arg);
+
 static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *clone_hash) {
+    if (!door_claim_spawn_stamp(clone_hash, 1)) return;
+    wchar_t server_script[MAX_PATH * 2];
+    if (swprintf(server_script, MAX_PATH * 2,
+                 L"%s\\coordinator_core\\warm\\server.py", engine_root_w) < 0) {
+        return;
+    }
+    door_spawn_detached_python(engine_root_w, server_script, NULL);
+}
+
+/* 1 iff this call claimed the boot stamp: no publish hold and no stamp younger than the debounce.
+ * One stamp serves the server spawn and the restart spawn, so one of them is in flight per root.
+ * A stamp that cannot be written (svc dir or lock file unavailable) returns spawn_if_unstampable: the
+ * server spawn goes ahead unstamped, since a dead engine left dead is worse than a debounce miss. */
+static int door_claim_spawn_stamp(const char *clone_hash, int spawn_if_unstampable) {
     wchar_t svc_dir[MAX_PATH * 2];
-    if (!door_svc_dir_w(svc_dir, MAX_PATH * 2, clone_hash)) return;
-    if (door_publish_marker_held_w(svc_dir)) return;
-    if (!door_ensure_dir_recursive_w(svc_dir)) return;
+    if (!door_svc_dir_w(svc_dir, MAX_PATH * 2, clone_hash)) return 0;
+    if (door_publish_marker_held_w(svc_dir)) return 0;
+    if (!door_ensure_dir_recursive_w(svc_dir)) return spawn_if_unstampable;
 
     wchar_t lock_path[MAX_PATH * 2 + 32];
-    if (swprintf(lock_path, MAX_PATH * 2 + 32, L"%s\\warm.json.boot.lock", svc_dir) < 0) return;
+    if (swprintf(lock_path, MAX_PATH * 2 + 32, L"%s\\warm.json.boot.lock", svc_dir) < 0) return 0;
 
     HANDLE h = CreateFileW(lock_path, GENERIC_READ | GENERIC_WRITE,
                             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                             OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return;
+    if (h == INVALID_HANDLE_VALUE) return spawn_if_unstampable;
 
     /* Stamp lives at byte offset 1, matching `breadcrumb.py ::
      * _CLAIM_STAMP_OFFSET` -- byte 0 is reserved there for a lock byte this
@@ -2031,9 +2135,9 @@ static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *cl
     if (got > 0) stamp = strtod(stamp_buf, NULL);
     double age = now - stamp;
     if (stamp > 0.0 && age > -DOOR_SPAWN_DEBOUNCE_SECS && age < DOOR_SPAWN_DEBOUNCE_SECS) {
-        
+
         CloseHandle(h);
-        return;
+        return 0;
     }
 
     char new_stamp[32];
@@ -2044,18 +2148,19 @@ static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *cl
         WriteFile(h, new_stamp, (DWORD)stamp_len, &wrote, NULL);
     }
     CloseHandle(h);
+    return 1;
+}
 
-    wchar_t server_script[MAX_PATH * 2];
-    if (swprintf(server_script, MAX_PATH * 2,
-                 L"%s\\coordinator_core\\warm\\server.py", engine_root_w) < 0) {
-        return;
-    }
-
+/* Spawns `<python> <script> [extra_arg]` fully detached with PYTHONPATH=<engine_root> prepended.
+ * Never waits; any failure is swallowed. */
+static void door_spawn_detached_python(const wchar_t *engine_root_w, const wchar_t *script,
+                                       const wchar_t *extra_arg) {
     wchar_t cmdline[MAX_PATH * 4];
     const wchar_t *server_python_arg_w = python_launcher_arg_w();
-    if (swprintf(cmdline, MAX_PATH * 4, L"\"%s\" %s%s\"%s\"", python_exe_w(),
+    if (swprintf(cmdline, MAX_PATH * 4, L"\"%s\" %s%s\"%s\"%s%s", python_exe_w(),
                  server_python_arg_w ? server_python_arg_w : L"",
-                 server_python_arg_w ? L" " : L"", server_script) < 0) {
+                 server_python_arg_w ? L" " : L"", script,
+                 extra_arg ? L" " : L"", extra_arg ? extra_arg : L"") < 0) {
         return;
     }
 
@@ -2110,9 +2215,23 @@ static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *cl
         NULL, cmdline, NULL, NULL, FALSE, flags, new_env, engine_root_w, &si, &pi);
     free(new_env);
     if (!spawned) return;
-    
+
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
+}
+
+/* Make-before-break restart (`warm-engine-stop.py --restart`) of a dead or wedged engine, in the
+ * background. An engine root without the script spawns nothing. */
+static void door_restart_engine_async(const wchar_t *engine_root_w) {
+    if (!engine_root_w || !g_clone_hash[0]) return;
+    wchar_t script[MAX_PATH * 2];
+    if (swprintf(script, MAX_PATH * 2, L"%s\\coordinator\\bin\\warm-engine-stop.py",
+                 engine_root_w) < 0) {
+        return;
+    }
+    if (GetFileAttributesW(script) == INVALID_FILE_ATTRIBUTES) return;
+    if (!door_claim_spawn_stamp(g_clone_hash, 0)) return;
+    door_spawn_detached_python(engine_root_w, script, L"--restart");
 }
 
 
@@ -2461,6 +2580,7 @@ int main(void) {
 
     char clone_hash[17];
     sha1_hex16((const unsigned char *)engine_root_u8, engine_root_u8_len, clone_hash);
+    memcpy(g_clone_hash, clone_hash, sizeof g_clone_hash);
     free(engine_root_u8);
     engine_root_u8 = NULL;
 
@@ -2511,6 +2631,9 @@ int main(void) {
                 (void)SetEnvironmentVariableW(DOOR_COLD_BOOT_WAIT_ENV_W,
                                               DOOR_COLD_BOOT_WAIT_SECS_W);
             }
+        } else if (g_door_hook_mode && pipe_err != ERROR_PIPE_BUSY) {
+            /* Engine present but not answering; a busy pipe never restarts. */
+            door_restart_engine_async(engine_root_w);
         }
         return fall_through_and_free(argc, wargv, engine_root_w);
     }

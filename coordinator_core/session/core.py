@@ -607,36 +607,8 @@ def now_epoch() -> int:
 # ---------------------------------------------------------------------------
 
 
-def pid_alive(pid) -> bool:
-    """Port of ``_cs_pid_alive <pid>``.
-
-    NOT a session-liveness signal in-harness — every Bash/hook tool call
-    has a fresh, short-lived ``$$``. Retained only for the legacy pid-only
-    claim-dir fallback and diagnostics; never gate session liveness on
-    this. Distinct from ``stable_pid_alive`` — see that function's
-    docstring.
-
-    Parity note: the bash original is ``kill -0 "$pid" 2>/dev/null``,
-    which reports DEAD (nonzero exit) on EPERM (process exists but is
-    owned by another uid) as well as ESRCH — ``kill -0`` treats
-    "can't signal it" the same as "can't find it"; POSIX keeps that parity.
-
-    Probing is delegated to ``ask_spool.record.win_pid_state`` /
-    ``posix_pid_state``; on Windows doubt (access denied) reads as alive.
-    """
-    try:
-        pid_int = int(pid)
-    except (TypeError, ValueError):
-        return False  # non-numeric/absent pid -> not alive
-    if pid_int <= 0:
-        return False
-    from coordinator_core.ask_spool import record as _probe
-
-    if _IS_WINDOWS:
-        state = _probe.win_pid_state(pid_int)
-        return True if state is None else state  # doubt: alive, no wrongful takeover
-    # bash `kill -0` reports dead on EPERM and any other kill(2) failure.
-    return _probe.posix_pid_state(pid_int) is True
+# invariant: one liveness probe. POSIX EPERM now reads alive here (the retired bash `kill -0` parity read it dead); not a session-liveness signal.
+from coordinator_core.group_em.session_registry import pid_alive  # noqa: E402,F401
 
 
 class _WinLivenessAmbiguous(Exception):

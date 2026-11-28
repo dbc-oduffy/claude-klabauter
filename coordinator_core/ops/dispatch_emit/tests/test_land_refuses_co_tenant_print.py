@@ -80,12 +80,25 @@ def test_a_halted_owner_is_never_parked_behind(repo, owner, monkeypatch) -> None
     assert owner["parked"] == []
 
 
-def test_a_typed_co_tenant_print_holds_without_a_live_owner(repo, owner, monkeypatch) -> None:
+def test_a_typed_co_tenant_print_holds_while_its_named_owner_is_live(repo, owner, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import run_token
+
     monkeypatch.setattr(peer_hunk_gate, "_carries_other_hunks", lambda *a: True)
+    monkeypatch.setattr(run_token, "is_live", lambda root, rid, **k: rid == OWNER)
     owner["owner"] = {"run_id": None, "state": None}
     _write_print(repo, {"kind": "co_tenant", "owner": OWNER})
     held = _hold(repo)
     assert OWNER in held[PATH] and held[PATH].startswith(peer_hunk_gate.CO_TENANT_HUNKS_UNATTRIBUTED)
+
+
+def test_a_typed_co_tenant_print_naming_a_non_live_owner_holds_nothing(repo, owner, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    monkeypatch.setattr(peer_hunk_gate, "_carries_other_hunks", lambda *a: True)
+    monkeypatch.setattr(run_token, "is_live", lambda root, rid, **k: False)
+    owner["owner"] = {"run_id": None, "state": None}
+    _write_print(repo, {"kind": "co_tenant", "owner": OWNER})
+    assert _hold(repo) == {}
 
 
 def test_no_owner_and_a_string_print_hold_nothing(repo, owner, monkeypatch) -> None:

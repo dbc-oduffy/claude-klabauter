@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import sys
 
 import pytest
 
@@ -47,6 +48,47 @@ def _fire(repo, monkeypatch, params):
     with _count_spawns_attributed(monkeypatch) as spawns:
         asyncio.run(pad._handler(params, repo_root=repo / ".git"))
     return spawns
+
+
+_IO_EVENTS = ("open", "os.listdir", "os.scandir")
+_io_active = False
+_io_count = 0
+
+
+def _io_hook(event: str, args: tuple) -> None:
+    global _io_count
+    if _io_active and event in _IO_EVENTS:
+        _io_count += 1
+
+
+sys.addaudithook(_io_hook)
+
+# Steady-call file opens per payload shape: the context-window sidecar, plus for an Edit the
+# session meta and the edited file. Any further per-call read is a regression.
+@pytest.mark.parametrize(
+    ("params", "bound"),
+    [
+        ({"session_id": "sid-io", "tool_name": "Bash", "tool_input": {"command": "echo hi"}}, 1),
+        ({"session_id": "sid-io", "tool_name": "Edit", "file_path": "plain.py"}, 3),
+        ({"session_id": "sid-io", "tool_name": "Read", "file_path": "plain.py"}, 1),
+    ],
+    ids=["bash", "edit", "read"],
+)
+def test_a_steady_call_opens_at_most_the_bounded_file_count(
+    repo, monkeypatch: pytest.MonkeyPatch, params, bound
+) -> None:
+    global _io_active, _io_count
+    monkeypatch.setenv("CLAUDE_HOME", str(repo.parent / "claude-home"))
+    (repo / "plain.py").write_text("x = 1\n", encoding="utf-8")
+    params = {**params, **({"file_path": str(repo / "plain.py")} if "file_path" in params else {})}
+    asyncio.run(pad._handler(params, repo_root=repo / ".git"))
+    _io_count = 0
+    _io_active = True
+    try:
+        asyncio.run(pad._handler(params, repo_root=repo / ".git"))
+    finally:
+        _io_active = False
+    assert _io_count <= bound, _io_count
 
 
 def test_ascii_write_touch_spawns_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:

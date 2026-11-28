@@ -46,9 +46,10 @@ def _node(program: str):
     return json.loads(proc.stdout)
 
 
-def _derive(items: list[dict], owed=_OWED) -> list[dict]:
+def _derive(items: list[dict], owed=_OWED, gated=(), slot_withheld=()) -> list[dict]:
     program = (
-        f"const _manifest = {{ owed: {json.dumps(owed)} }}; const _ledger = {{ items: {json.dumps(items)} }};\n"
+        f"const _manifest = {{ owed: {json.dumps(owed)}, gated: {json.dumps(list(gated))}, "
+        f"slot_withheld: {json.dumps(list(slot_withheld))} }}; const _ledger = {{ items: {json.dumps(items)} }};\n"
         + OWED_BY_DERIVE_JS
         + "\nprocess.stdout.write(JSON.stringify(_ledger.items));"
     )
@@ -108,6 +109,49 @@ def test_an_existing_owed_by_or_withheld_by_is_kept():
     ]
     out = _derive(items)
     assert out[0]["owed_by"] == ["C0"] and "owed_by" not in out[1]
+
+
+@pytest.mark.skipif(_NODE is None, reason="node is not installed")
+def test_a_leg_naming_an_externally_blocked_em_run_row_gets_owed_by():
+    gated = [{"id": "C4", "reason": "external_gate"}]
+    item = {"id": "R1", "status": "not_met", "remaining": ["C4: em_run row externally blocked on the import verb", "commit"]}
+    assert _derive([item], owed=[], gated=gated)[0]["owed_by"] == ["C4"]
+
+
+@pytest.mark.skipif(_NODE is None, reason="node is not installed")
+def test_a_leg_naming_a_slot_owed_row_gets_owed_by():
+    slot = [{"id": "C5", "title": "measure", "register_rows": ["R1"]}]
+    item = {"id": "R1", "status": "not_met", "remaining": ["C5: needs_slot measurement waits on a box slot"]}
+    assert _derive([item], owed=[], slot_withheld=slot)[0]["owed_by"] == ["C5"]
+
+
+@pytest.mark.skipif(_NODE is None, reason="node is not installed")
+def test_a_gated_id_without_a_blocked_or_owed_marker_or_beside_other_gaps_is_not_owed():
+    gated = [{"id": "C4", "reason": "external_gate"}]
+    bare = {"id": "R1", "status": "not_met", "remaining": ["C4: handler missing"]}
+    mixed = {"id": "R2", "status": "not_met", "remaining": ["C4: externally blocked", "add the missing test file"]}
+    out = _derive([bare, mixed], owed=[], gated=gated)
+    assert "owed_by" not in out[0] and "owed_by" not in out[1]
+
+
+@pytest.mark.skipif(_NODE is None, reason="node is not installed")
+def test_a_row_owed_to_a_gated_or_slot_row_does_not_block(monkeypatch):
+    script = _script(monkeypatch)
+    start = script.index("const _postCommitActs")
+    anchor = script.index("const _ledgerBlocking")
+    end = re.compile(r"\n\s*\}\);").search(script, anchor).end()
+    items = [
+        {"id": "R1", "status": "not_met", "remaining": ["C4: x"], "owed_by": ["C4"]},
+        {"id": "R2", "status": "not_met", "remaining": ["C5: x"], "owed_by": ["C5"]},
+        {"id": "R3", "status": "not_met", "remaining": ["C9: x"], "owed_by": ["C9"]},
+    ]
+    program = (
+        "const _manifest = { gated: [{ id: 'C4' }], owed: [], slot_withheld: [{ id: 'C5' }] }; const _gate = {};\n"
+        "const _recoveryWithheld = [];\n"
+        + script[start:end]
+        + f"\nprocess.stdout.write(JSON.stringify(_ledgerBlocking({json.dumps({'items': items})}).map((i) => i.id)));"
+    )
+    assert _node(program) == ["R3"]
 
 
 def test_the_derivation_runs_inside_the_ledger_normaliser(monkeypatch):

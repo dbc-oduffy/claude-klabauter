@@ -165,6 +165,14 @@ class _Context:
     _open_files: Optional[set[str]] = field(default=None, repr=False)
     _plan_cites: Optional[dict[str, str]] = field(default=None, repr=False)
     _keep: Any = field(default=False, repr=False)
+    _roots: Optional[dict[str, Path]] = field(default=None, repr=False)
+
+    def root_refusal(self, repo_root: Path, entry: str) -> Optional[str]:
+        """The refusal reason when ``entry`` is a candidate root that must not be listed, else None."""
+        if self._roots is None:
+            self._roots = {_norm(r): a for r, _p, a in _candidate_roots(repo_root)}
+        anchor = self._roots.get(_norm(entry))
+        return None if anchor is None else _root_refusal(Path(entry), anchor)
 
     def keep_manifest(self, repo_root: Path) -> Optional[dict[str, tuple[date, str]]]:
         if self._keep is False:
@@ -392,6 +400,10 @@ def classify_entry(
     if deadline is not None and time.monotonic() >= deadline:
         return rec("skipped-budget", reason="budget-exhausted")
 
+    refused = ctx.root_refusal(repo_root, entry)
+    if refused is not None:
+        return rec("skipped-link", reason=refused)
+
     if _is_link(entry):
         return rec("skipped-link", reason="link-not-followed")
 
@@ -475,12 +487,32 @@ def _is_real_dir(e: os.DirEntry) -> bool:
         return False
 
 
-def _candidate_roots(repo_root: Path) -> tuple[tuple[Path, Optional[str]], ...]:
+def _candidate_roots(repo_root: Path) -> tuple[tuple[Path, Optional[str], Path], ...]:
+    """``(root, per-run subdirectory name, anchor)``: the root's realpath must stay under the anchor's."""
+    temp_root = coordinator_temp_root(repo_root)
     return (
-        (repo_root / "scratch", _WARP_DIRNAME),
-        (repo_root / "state" / "scratch", None),
-        (coordinator_temp_root(repo_root), _PYTEST_DIRNAME),
+        (repo_root / "scratch", _WARP_DIRNAME, repo_root),
+        (repo_root / "state" / "scratch", None, repo_root),
+        (temp_root, _PYTEST_DIRNAME, temp_root.parent),
     )
+
+
+def _real(path: str | os.PathLike[str]) -> str:
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _root_refusal(root: Path, anchor: Path) -> Optional[str]:
+    """Why ``root`` must not be listed: it is a symlink or junction, or its realpath leaves ``anchor``'s
+    (a linked ``state`` makes ``state/scratch`` escape without being a link itself). None when listable or absent."""
+    if not os.path.lexists(root):
+        return None
+    target = os.path.realpath(root)
+    if _is_link(root):
+        return f"link-root-not-followed:target={target}"
+    base = _real(anchor)
+    if _real(root) != base and not _real(root).startswith(base + os.sep):
+        return f"root-outside-anchor:target={target}"
+    return None
 
 
 def _order_key(roots: list[str], path: str, is_dir: bool) -> tuple[int, int, str]:
@@ -498,9 +530,12 @@ def candidate_scan(repo_root: str | os.PathLike[str]) -> list[tuple[str, bool]]:
     ``pytest/`` under the Temp root and ``warp/`` under scratch are not entries: their
     per-run children are. The op's own cursor file (``CURSOR_NAME`` and its temp files) is never one."""
     repo_root = Path(repo_root)
-    roots = [_norm(root) for root, _per_run in _candidate_roots(repo_root)]
+    roots = [_norm(root) for root, _per_run, _anchor in _candidate_roots(repo_root)]
     found: list[tuple[str, bool]] = []
-    for root, per_run in _candidate_roots(repo_root):
+    for root, per_run, anchor in _candidate_roots(repo_root):
+        if _root_refusal(root, anchor) is not None:
+            found.append((str(root), False))
+            continue
         for p, is_dir in _entries(root):
             base = os.path.basename(p)
             if base.startswith(CURSOR_NAME):
@@ -535,7 +570,7 @@ def ordered_candidate_scan(
             cursor_is_dir = stat.S_ISDIR(os.lstat(cursor).st_mode)
         except OSError:
             cursor_is_dir = True
-    roots = [_norm(root) for root, _per_run in _candidate_roots(repo_root)]
+    roots = [_norm(root) for root, _per_run, _anchor in _candidate_roots(repo_root)]
     key = _order_key(roots, cursor, cursor_is_dir)
     start = next((i for i, (p, d) in enumerate(scan) if _order_key(roots, p, d) > key), 0)
     return scan[start:] + scan[:start]

@@ -1098,6 +1098,19 @@ def _emit_inventory_parts(
     run_id = read_frontmatter_field(str(inventory), "run_id") or inventory.stem
     requested_out = params.get("output_path")
     out_dir = Path(requested_out).parent if requested_out else inventory.parent
+    from coordinator_core.ops.dispatch_emit.inventory_mint import (
+        InventoryMintError,
+        InventoryPartError,
+        placeable_items,
+    )
+
+    try:
+        item_order = placeable_items(params["inventory_path"], bool(params.get("skip_landed")))
+    except (InventoryMintError, OSError):
+        item_order = []
+    if item_order:
+        count = min(count, len(item_order))
+    index = 0
     while True:
         results: list = []
         try:
@@ -1111,7 +1124,13 @@ def _emit_inventory_parts(
                 part_result["part"] = f"{index}/{count}"
                 results.append(part_result)
             break
-        except ScriptOverCapError:
+        except ScriptOverCapError as part_over:
+            if item_order and count >= len(item_order):
+                raise InventoryPartError(
+                    f"plan item {item_order[index - 1]} alone composes to "
+                    f"{part_over.script_size} bytes, over the {_emit._WORKFLOW_SCRIPT_BYTE_CAP}-byte "
+                    "Workflow script cap; no finer cut exists"
+                ) from part_over
             count += 1
         except InventoryTooLargeError:
             if over is not None or count >= 2 * whole_set_count:
@@ -1146,7 +1165,7 @@ def _emit_inventory_parts(
             + ", ".join(r["path"] for r in results),
             file=sys.stderr,
         )
-    if all(r["ok"] for r in results):
+    if all(r.get("ok") for r in results):
         live = [Path(r["path"]) for r in results]
         live += [spine_path_for(inventory, part_run_id(run_id, i)) for i in range(1, count + 1)]
         _clear_earlier_outputs(str(inventory), live)
@@ -1155,7 +1174,7 @@ def _emit_inventory_parts(
     for part_result in results:
         _print_workflow_invocation(part_result, is_queue_route=False, repo_root=repo_root)
     if fire:
-        if not all(r["ok"] for r in results):
+        if not all(r.get("ok") for r in results):
             return EXIT_DATA_ERROR
         from coordinator_core.ops.dispatch_emit.op import guard_against_fired_drift
         from coordinator_core.ops.workflow_fire.fire import fire_workflow
@@ -1167,7 +1186,7 @@ def _emit_inventory_parts(
         )
         print(json.dumps({"fire": fire_record, "fired_part": first["part"]}, indent=2, sort_keys=True))
         return EXIT_OK
-    return EXIT_OK if all(r["ok"] for r in results) else EXIT_DATA_ERROR
+    return EXIT_OK if all(r.get("ok") for r in results) else EXIT_DATA_ERROR
 
 
 def _sibling_out_path(out_path: str, index: int) -> str:
@@ -1264,7 +1283,7 @@ def _emit_sibling_workflows(
     )
     for res in results.values():
         _print_workflow_invocation(res, is_queue_route=False, repo_root=repo_root)
-    return EXIT_OK if all(r["ok"] for r in results.values()) else EXIT_DATA_ERROR
+    return EXIT_OK if all(r.get("ok") for r in results.values()) else EXIT_DATA_ERROR
 
 
 def _lane_inventories(record: Path) -> "list[Path]":
@@ -2434,6 +2453,14 @@ def _main(argv: "list[str]") -> int:
         print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
         return EXIT_DATA_ERROR
 
+    if "ok" not in result:
+        if result.get("error"):
+            print(f"emit-dispatch-workflow: ERROR — {result['error']}", file=sys.stderr)
+        else:
+            reply_json = json.dumps(result, sort_keys=True, default=str)
+            print(f"emit-dispatch-workflow: ERROR — reply carries no `ok`: {reply_json}", file=sys.stderr)
+        return EXIT_DATA_ERROR
+
     if args.inventory and not args.lanes and args.review_only is None and result.get("ok") and result.get("path"):
         minted = last_minted_spine()
         _clear_earlier_outputs(args.inventory, [Path(result["path"])] + ([minted] if minted else []))
@@ -2524,7 +2551,7 @@ def _main(argv: "list[str]") -> int:
             file=sys.stderr,
         )
 
-    if not result["ok"]:
+    if not result.get("ok"):
         print(json.dumps(pending_doc, indent=2, sort_keys=True))
         return EXIT_DATA_ERROR
 

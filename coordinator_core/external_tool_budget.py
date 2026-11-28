@@ -236,17 +236,21 @@ _SITES = (
         site="coordinator_core/ops/percolate_identity_check.py :: run_identity_check",
         tool="<dest>/.github/scripts/check-persona-names.py",
         trigger=Trigger.PUBLISH_ROUND,
-        bound_secs=EXTERNAL_TOOL_BUDGET_SECS,
+        bound_secs=40.0,
         why=(
             "the same consumer-owned shape as the row above, and the one G9 site with a measured "
             "hot-path cost: coordinator/bin/publish.py's own dispatch_percolate_pre_ci records "
             "27.7-33.0s on every one of 8 rows, ~225s of one publish round, all of it inside a "
-            "command an operator waits on. § G9's Sites list names it; the trigger denies it"
+            "command an operator waits on. § G9's Sites list names it; the trigger denies it. "
+            "The bound is PROCESS seconds over the checker's child tree, never wall clock (a wall "
+            "deadline measured peer load and discarded a landed round): 40s is the measured "
+            "whole-tree sweep (18.9s cpu, 13935 files) at 2x headroom, so the opt-in full sweep "
+            "fits it while the changed-paths scan costs a fraction"
         ),
         consumer_owned=True,
         remedy=(
             "move the pre-CI identity leg off the synchronous publish path — the end-of-run scan "
-            "already covers the same tree; the bound is at the ceiling meanwhile"
+            "already covers the same tree; the bound is process seconds meanwhile"
         ),
     ),
 )

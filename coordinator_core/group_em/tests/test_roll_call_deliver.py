@@ -102,6 +102,26 @@ def test_deliver_local_claude_appends_to_mailbox_and_others_route(tmp_path):
     assert waited == ["codex-em", "grok-em"]
 
 
+def test_grok_row_name_from_the_registry_resolves_through_the_real_roster(tmp_path, monkeypatch):
+    from coordinator_core.session import external_registry
+
+    name = "repo-grok-box-1"
+    row = {"provider": "grok", "session_id": "11111111-1111-4111-8111-111111111111", "name": name}
+    monkeypatch.setattr(external_registry, "lookup", lambda key: None)
+    monkeypatch.setattr(external_registry, "snapshot", lambda: {row["session_id"]: row})
+    _, record = _local_open(tmp_path, [{"session_id": row["session_id"], "name": name, "kind": "grok"}])
+    routed = []
+
+    def route(msg):
+        routed.append(msg.to_identity)
+        return types.SimpleNamespace(status="delivered", reason=None, wait=lambda t=None: None)
+
+    out = roll_call_deliver.deliver_local(record, route=route)
+
+    assert out[row["session_id"]] == {"ok": True, "reason": None}
+    assert routed == [name]
+
+
 def test_deliver_local_failures_are_outcomes_not_raises():
     def append(msg):
         raise OSError("disk")

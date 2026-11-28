@@ -64,6 +64,19 @@ def test_bash_home_creation_is_denied(home, tmp_path, cmd):
     assert _denied(_enveloped(guard.check)(_payload(cmd, cwd=tmp_path)))
 
 
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_claude_json_sibling_deny_names_claude_code(home, tmp_path, tool):
+    out = _enveloped(guard.check)(_payload("echo x > ~/.claude.json.tmp.1.ab", tool=tool, cwd=tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "Claude Code" in ctx
+    assert ".claude.json.tmp.1.ab" in ctx
+
+
+def test_unattributed_home_file_deny_does_not_name_a_writer(home, tmp_path):
+    out = _enveloped(guard.check)(_payload("echo x > ~/fo.txt", cwd=tmp_path))
+    assert "Claude Code" not in out["hookSpecificOutput"]["additionalContext"]
+
+
 def test_bash_absolute_home_literal_is_denied(home, tmp_path):
     cmd = f"echo x > {(home / 'fo.txt').as_posix()}"
     assert _denied(_enveloped(guard.check)(_payload(cmd, cwd=tmp_path)))

@@ -250,7 +250,12 @@ def _peer_held(worktree_root: Path, session_id: Optional[str], paths: list, run_
             answer = claim_index.classify_paths(session_id, paths, cwd=str(worktree_root))
         except Exception:  # noqa: BLE001 -- an unreadable claim index holds nothing, as the old landing did
             return set()
-        held = {p for p, o in answer.by_path.items() if o.verdict == claim_index.OWNERSHIP_PEER}
+        from coordinator_core.ops.dispatch_emit.land_run import _foreign_peers
+
+        held = {
+            p for p, o in answer.by_path.items()
+            if o.verdict == claim_index.OWNERSHIP_PEER and _foreign_peers(o.peers, session_id)
+        }
     from coordinator_core.ops import warp_run_deliverable
 
     try:

@@ -103,6 +103,7 @@ def test_the_same_run_is_green_when_the_peer_module_is_part_of_it(repo) -> None:
 def test_a_verify_timeout_exits_inconclusive_and_the_detail_names_the_timeout(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _measure(repo)
     monkeypatch.setattr(cov, "TEST_TIMEOUT_S", 0.001)
+    monkeypatch.setenv(cov.EXPORT_TIMEOUT_ENV, "0.001")
 
     code = cov.main(["--run-id", RUN, "--repo-root", str(repo)])
 

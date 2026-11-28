@@ -116,7 +116,36 @@ static int run_precheck_mode(int payload_mode, const char *cwd) {
     return r < 0 ? 2 : 0;
 }
 
+/* `--native-guard`: reads a whole PreToolUse payload from stdin, prints `0`/`1` and the reason. */
+static int run_native_guard_mode(void) {
+    buf_t in;
+    if (!buf_init(&in, 1024)) return 2;
+    char chunk[1024], reason[512];
+    size_t got;
+    while ((got = fread(chunk, 1, sizeof(chunk), stdin)) > 0) {
+        if (!buf_append(&in, chunk, got)) return 2;
+    }
+    int r = door_native_guard_verdict(in.data, in.len, reason, sizeof reason);
+    printf("%d\n%s\n", r, reason);
+    free(in.data);
+    return 0;
+}
+
+/* One native-guard case: `cmd` is JSON-escaped by the caller; `tool` Bash or PowerShell. */
+static void check_native(const char *tool, const char *cmd, int want) {
+    char payload[1024], reason[512], label[160];
+    snprintf(payload, sizeof payload,
+             "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"%s\",\"tool_input\":{\"command\":\"%s\"}}",
+             tool, cmd);
+    snprintf(label, sizeof label, "native/%s/%.100s", tool, cmd);
+    int got = door_native_guard_verdict(payload, strlen(payload), reason, sizeof reason);
+    check_int(label, got, want);
+    if (want) check_int("native/reason_names_guard", strstr(reason, "BLOCKED by ") != NULL, 1);
+    else check_int("native/allow_reason_empty", reason[0] == '\0', 1);
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--native-guard") == 0) return run_native_guard_mode();
     if (argc >= 3 && strcmp(argv[1], "--precheck") == 0) return run_precheck_mode(0, argv[2]);
     if (argc >= 2 && strcmp(argv[1], "--precheck-payload") == 0) return run_precheck_mode(1, NULL);
 
@@ -444,6 +473,68 @@ int main(int argc, char **argv) {
             if (cases[i].want) check_str(cases[i].name, k.data, cases[i].want);
             free(k.data);
         }
+    }
+
+    {
+        const char *deny_bash[] = {
+            "git push origin $C:refs/heads/x", "git push origin :refs/heads/x", "git push --delete origin x",
+            "git push origin -d x", "git push -df origin x", "git push origin \\\"${C}\\\":main",
+            "git push origin +$C:refs/heads/x", "git push origin $(git rev-parse FETCH_HEAD):refs/heads/x",
+            "cd /tmp && git push origin $C:refs/heads/x",
+            "git worktree add ../x", "git worktree add ../x -b y", "git worktree move a b",
+            "git worktree repair", "git worktree lock x", "git worktree unlock x", "git worktree frob x",
+            "cd r && git worktree add ../x", "FOO=bar git worktree add x", "git -C r worktree add x",
+            "nice git worktree add x", "timeout 30 git worktree add x", "sh -c 'git worktree add x'",
+            "bash -ic 'git worktree add x'", "git.exe worktree add x", "echo hi; git worktree add x",
+            "python -m pytest -p myplugin tests/", "python3 -m pytest -pmyplugin tests/",
+            "pytest -p=myplugin tests/", "py.test -q -p some.adhoc.mod tests/",
+            "cd x && python.exe -u -m pytest -p adhoc tests/", "env FOO=1 pytest -p adhoc tests/",
+            "python -X dev -W ignore -m pytest -p adhoc tests/",
+        };
+        for (size_t i = 0; i < sizeof deny_bash / sizeof deny_bash[0]; i++) check_native("Bash", deny_bash[i], 1);
+        const char *deny_ps[] = { "git worktree add ../x", "git.exe worktree add ../x", "& git worktree add ../x",
+                                  "git push --delete origin x", "python -m pytest -p adhoc tests/",
+                                  "cd r; git worktree add ../x" };
+        for (size_t i = 0; i < sizeof deny_ps / sizeof deny_ps[0]; i++) check_native("PowerShell", deny_ps[i], 1);
+        const char *allow[] = {
+            "git push origin feature-x", "git push origin feature-unheld", "git push", "git push origin main",
+            "git push --dry-run origin :x", "git push -n origin $C:x", "git push origin HEAD:refs/heads/x",
+            "git push origin 0123456789abcdef0123456789abcdef01234567:refs/heads/x", "git status",
+            "git commit -m 'git push later'", "git worktree list", "git worktree remove x", "git worktree prune",
+            "git worktree", "git restore --worktree f", "git restore -W f", "echo git worktree add x",
+            "grep -n 'git worktree add' notes.md",
+            "pytest -p no:cacheprovider tests/", "python -m pytest -p no:cacheprovider -q tests/",
+            "pytest -p xdist -n 2 tests/", "pytest -p coordinator_core.testing.nested_session_guard tests/",
+            "python -m coordinator_core.testing.scoped_pytest --allow tests -- -p myplugin tests/",
+            "pytest tests/ -q", "echo pytest -p myplugin", "grep -p myplugin pytest.ini", "pytest -- -p myplugin",
+            "p4 submit", "ls",
+        };
+        for (size_t i = 0; i < sizeof allow / sizeof allow[0]; i++) {
+            check_native("Bash", allow[i], 0);
+            check_native("PowerShell", allow[i], 0);
+        }
+        check_native("Bash", "cat <<EOF > r.md\\nnotes; git worktree add x\\nEOF\\n", 0);
+        check_native("Bash", "cat <<EOF > r.md\\nx\\nEOF\\ngit worktree add y", 1);
+        check_native("PowerShell", "cat <<EOF > r.md\\nnotes; git worktree add x\\nEOF\\n", 1);
+        const char *np = "{\"tool_name\":\"Read\",\"tool_input\":{\"command\":\"git worktree add x\"}}";
+        check_int("native/non_command_tool_allows", door_native_guard_verdict(np, strlen(np), NULL, 0), 0);
+        const char *post = "{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git worktree add x\"}}";
+        check_int("native/non_pretooluse_allows", door_native_guard_verdict(post, strlen(post), NULL, 0), 0);
+        check_int("native/garbage_allows", door_native_guard_verdict("not json", 8, NULL, 0), 0);
+        const char *ov = "{\"tool_name\":\"Bash\",\"env\":{\"COORDINATOR_OVERRIDE_PUSH_DELETE\":\"1\"},\"tool_input\":{\"command\":\"git push --delete origin x\"}}";
+        check_int("native/push_override_in_payload_env_allows", door_native_guard_verdict(ov, strlen(ov), NULL, 0), 0);
+        const char *ov0 = "{\"tool_name\":\"Bash\",\"env\":{\"COORDINATOR_OVERRIDE_PUSH_DELETE\":\"0\"},\"tool_input\":{\"command\":\"git push --delete origin x\"}}";
+        check_int("native/push_override_zero_still_denies", door_native_guard_verdict(ov0, strlen(ov0), NULL, 0), 1);
+        const char *ovw = "{\"tool_name\":\"Bash\",\"env\":{\"COORDINATOR_OVERRIDE_PUSH_DELETE\":\"1\"},\"tool_input\":{\"command\":\"git worktree add x\"}}";
+        check_int("native/worktree_has_no_override", door_native_guard_verdict(ovw, strlen(ovw), NULL, 0), 1);
+        const char *shape = "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"PowerShell\",\"tool_input\":{\"command\":\"git push origin x\"}}";
+        check_int("irreversible/powershell_push_is_irreversible", door_payload_is_irreversible(shape, strlen(shape)), 1);
+        const char *readt = "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"tool_input\":{\"command\":\"git push origin x\"}}";
+        check_int("irreversible/read_tool_is_not", door_payload_is_irreversible(readt, strlen(readt)), 0);
+        char icmd[32];
+        check_int("irreversible/command_captured", door_payload_irreversible_command(shape, strlen(shape), icmd, sizeof icmd), 1);
+        check_int("irreversible/command_text", strcmp(icmd, "git push origin x") == 0, 1);
+        check_int("irreversible/command_empty_on_miss", door_payload_irreversible_command(readt, strlen(readt), icmd, sizeof icmd) == 0 && icmd[0] == '\0', 1);
     }
 
 #ifndef _WIN32

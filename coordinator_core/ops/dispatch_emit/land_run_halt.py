@@ -554,12 +554,12 @@ def land(worktree_root: Path, repo_root: Path, params: dict) -> dict:
     script_path = params.get("script_path")
     if token is not None and not (
         run_token.admits(worktree_root, run_id, token, script_path)
-        or run_token.halt_admits(worktree_root, run_id, token, script_path)
+        or run_token.halt_own_token(worktree_root, run_id, token, script_path)
         or run_token.spent_receipt(worktree_root, run_id, token, script_path) is not None
     ):
         refusal = _error(
-            "params.run_token does not match a live, claimed, retired or spent token minted for "
-            "params.run_id and this script",
+            "params.run_token does not match a live, claimed, retired, spent, halted-landing or escrowed "
+            "token (of any age) minted for params.run_id and this script",
             refused="run-token",
         )
         if siblings is not None:
@@ -588,6 +588,7 @@ def _reconcile_landing(
         run_token.note_halt_landing(
             worktree_root, run_id, token, script_path,
             {"sha": reply["sha"], "paths": list(reply.get("paths") or []), "halted": kind},
+            raise_on_stall=True,
         )
         return reply
     if reply.get("committed") is False and reply.get("nothing_to_commit") and not reply.get("error"):

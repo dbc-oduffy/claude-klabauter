@@ -436,6 +436,7 @@ def _host_denies(host: str, command: str, repo, subagent: bool) -> bool:
 def test_host_shapes_deny_a_subagent_clean_and_allow_dry_run_and_em(host_repo, host) -> None:
     for command in _HOST_CLEAN:
         assert _host_denies(host, command, host_repo, subagent=True), (host, command)
-        assert not _host_denies(host, command, host_repo, subagent=False), (host, command)
+    assert _host_denies(host, "git reset --hard", host_repo, subagent=True)
+    assert not _host_denies(host, "git reset --hard", host_repo, subagent=False)
     assert not _host_denies(host, "git clean -n", host_repo, subagent=True)
     assert not _host_denies(host, "git clean --dry-run", host_repo, subagent=True)

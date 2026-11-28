@@ -44,11 +44,11 @@ def _prints(root):
 def _owner(monkeypatch, run_id):
     seen: dict = {}
 
-    def owner_of(root, path, *, exclude_run_id, include_waiting=False):
+    def peer_hunk_runs(root, path, *, exclude_run_id):
         seen["exclude"] = exclude_run_id
-        return {"run_id": run_id, "state": "live" if run_id else None}
+        return (run_id,) if run_id else ()
 
-    monkeypatch.setattr(co_tenant_owner, "owner_of", owner_of)
+    monkeypatch.setattr(co_tenant_owner, "peer_hunk_runs", peer_hunk_runs)
     return seen
 
 
@@ -110,7 +110,7 @@ def test_owner_lookup_failure_falls_back_to_the_tree(repo, monkeypatch):
     def boom(*a, **k):
         raise OSError("index unreadable")
 
-    monkeypatch.setattr(co_tenant_owner, "owner_of", boom)
+    monkeypatch.setattr(co_tenant_owner, "peer_hunk_runs", boom)
 
     _record_withheld_prints(repo, REL, {"shared.py": "run-dirt-uncommitted"}, [])
 

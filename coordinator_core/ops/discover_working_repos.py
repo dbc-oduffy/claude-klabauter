@@ -44,7 +44,7 @@ Output contract (two deliberate departures from the oracle, 2026-08-14):
      restore native-separator emission for oracle parity.
 
   2. Publish mirrors are never emitted. A mirror registered under the
-     machine-local `publish.mirrors.*.path` namespace is a publish target, not
+     machine-local `publish.mirrors.*` path namespace is a publish target, not
      a working tree — doctrine forbids working in one or addressing a memo to
      one, so enumerating it as a discovered working repo invites both.
 

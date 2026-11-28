@@ -14,7 +14,7 @@ from coordinator_core.codex_runner.execute import _child_env
 from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child, writeback_codex_auth
 from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 from coordinator_core.bash_guards import _heavy_command_class as capacity
-from coordinator_core.group_em import admission_post, slot_grant
+from coordinator_core.group_em import admission_post, admission_spool, slot_grant
 from coordinator_core.session import peer_roster
 from coordinator_core._settings_home import settings_home_child_env
 from coordinator_core.worker_contracts.assignment import validate_assignment
@@ -123,7 +123,7 @@ def supervise(repo: Path, prompt: str, assignment: dict, argv: list[str], *,
         posted = admission_post.post("START", sid, pids=[proc.pid], run=run,
                                       declared_peak_mb=admitted.peak_gib * 1024)
         if not posted.get("delivered"):
-            raise ValueError("worker START admission could not reach Group EM")
+            admission_post.record_undelivered(admission_spool.spool_path().parent, {"phase": "START", **posted})
         proc.communicate(prompt)
         return proc.returncode
     except BaseException:

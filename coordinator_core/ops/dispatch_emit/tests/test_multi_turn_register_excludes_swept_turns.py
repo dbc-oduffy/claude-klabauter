@@ -121,7 +121,10 @@ def test_an_amended_swept_sizing_stays_clean_after_rebind_and_ships(repo) -> Non
             "sizing": REL, "amend": True,
             "register": {
                 "drop": swept,
-                "unrelated_turns": [{"turn": 0, "reason": "other ask"}, {"turn": 1, "reason": "other ask"}],
+                "unrelated_turns": [
+                    {"turn": n, "reason": f'"{text[:30]}" belongs to the exporter ask; rule-out:T2'}
+                    for n, text in ((0, EARLY_A), (1, EARLY_B))
+                ],
             },
         },
         repo_root=repo,
@@ -129,6 +132,12 @@ def test_an_amended_swept_sizing_stays_clean_after_rebind_and_ships(repo) -> Non
     assert reply["exit_code"] == 0, reply
     rl.bind(repo, RUN, REL)
     assert _texts(repo) == [OWN_ASK, FOLLOW_UP]
+
+    refused = srr._handler(
+        {"sizing": REL, "amend": True, "register": {"unrelated_turns": [{"turn": 3, "reason": "other ask"}]}},
+        repo_root=repo,
+    )
+    assert refused["exit_code"] == 1 and "turn 3" in str(refused), refused
 
     path = repo / REL
     reg = rr.read_register(path.read_text(encoding="utf-8"))

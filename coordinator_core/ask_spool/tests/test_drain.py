@@ -7,6 +7,7 @@ import os
 import stat
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -467,7 +468,7 @@ def test_a_refire_spooled_after_the_last_pending_listing_coalesces_in_that_drain
         listings.append(len(refire))
         return real_list(root)
 
-    def tail_spools_refire():
+    def tail_spools_refire(root=None):
         refire.append(_spool_sizing(tmp_path, "tuRefire"))
 
     monkeypatch.setattr(record, "list_pending", counting_list)
@@ -487,7 +488,7 @@ def test_a_refire_spooled_after_the_last_listing_of_another_key_stays_pending(tm
     other = "state/sizings/2026-11/unheld.yaml"
     (tmp_path / other).write_text(json.dumps({"schema": "sizing-object"}), encoding="utf-8")
     _spool_sizing(tmp_path, "tu0")
-    monkeypatch.setattr(drain, "_drain_remote_failover", lambda: _spool_sizing(tmp_path, "tuOther", sizing=other))
+    monkeypatch.setattr(drain, "_drain_remote_failover", lambda root=None: _spool_sizing(tmp_path, "tuOther", sizing=other))
     counts = drain.run(str(tmp_path), evaluate=Engine(tmp_path))
     assert counts["minted"] == 1 and counts["coalesced"] == 0
     assert len(record.list_pending(str(tmp_path))) == 1
@@ -501,7 +502,7 @@ def test_a_late_refire_of_a_sizing_whose_live_run_this_drain_never_minted_is_wit
     run_id = "ask-20261104T150000-eeeeee"
     refire: list = []
 
-    def tail_launches_the_run_and_spools_the_refire():
+    def tail_launches_the_run_and_spools_the_refire(root=None):
         _live_refire(tmp_path, run_id)
         refire.append(_spool_sizing(tmp_path, "tuRefire", sizing=str(tmp_path / SIZING)))
 
@@ -519,7 +520,7 @@ def test_a_late_refire_of_a_sizing_with_no_live_run_stays_pending(tmp_path, monk
     other = "state/sizings/2026-11/other.yaml"
     (tmp_path / other).write_text(json.dumps({"schema": "sizing-object"}), encoding="utf-8")
     _spool_sizing(tmp_path, "tu0", sizing=other)
-    monkeypatch.setattr(drain, "_drain_remote_failover", lambda: _spool_sizing(tmp_path, "tuRefire", sizing=str(tmp_path / SIZING)))
+    monkeypatch.setattr(drain, "_drain_remote_failover", lambda root=None: _spool_sizing(tmp_path, "tuRefire", sizing=str(tmp_path / SIZING)))
     counts = drain.run(str(tmp_path), evaluate=Engine(tmp_path))
     assert counts["minted"] == 1 and counts["coalesced"] == 0
     assert len(record.list_pending(str(tmp_path))) == 1
@@ -911,6 +912,15 @@ def test_a_failover_drain_error_never_fails_the_spool_drain(tmp_path, monkeypatc
 
     monkeypatch.setattr(background, "drain_pending", boom)
     assert drain.run(str(tmp_path)) == _counts()
+
+
+def test_the_spool_drain_runs_the_remote_run_blocker_check_with_its_repo_root(tmp_path, monkeypatch):
+    from coordinator_core.remote_engine import background
+
+    seen: list = []
+    monkeypatch.setattr(background, "check_remote_runs", lambda root, **k: seen.append(Path(root)) or 0)
+    drain.run(str(tmp_path))
+    assert seen == [tmp_path]
 
 
 def _spool_args(root, args, sid="sess1", tuid="tu1"):

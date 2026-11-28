@@ -177,6 +177,55 @@ def test_idle_tick_runs_cadence_only_when_should_demote_is_false(monkeypatch: py
     assert sweep_calls == []
 
 
+def _set_head(root: Path, sha: str) -> None:
+    (root / ".git" / "HEAD").write_text("ref: refs/heads/work/x\n", encoding="utf-8")
+    ref = root / ".git" / "refs" / "heads" / "work" / "x"
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_text(sha + "\n", encoding="utf-8")
+
+
+def test_cold_process_commit_is_swept_by_the_due_arm_through_the_idle_tick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo(tmp_path)
+    _set_head(repo, "a" * 40)
+    now = [0.0]
+    sweeps = []
+
+    def _fake_sweep(repos, **kwargs) -> None:
+        sweeps.append((list(repos), kwargs.get("due_only", False)))
+
+    def _tick() -> None:
+        push_cadence.on_idle_tick(
+            served_repos=lambda: [repo],
+            clock=lambda: now[0],
+            interval_secs=600.0,
+            sweep_fn=_fake_sweep,
+        )
+
+    _tick()
+    assert sweeps == []
+
+    now[0] = 20.0
+    _tick()
+    assert sweeps == []
+
+    _set_head(repo, "b" * 40)
+    now[0] = 40.0
+    _tick()
+    assert sweeps == [([repo], True)]
+
+
+def test_head_scan_is_throttled_and_never_marks_an_unmoved_head(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _set_head(repo, "a" * 40)
+    assert push_cadence.mark_moved_heads([repo], clock=lambda: 0.0) == []
+    _set_head(repo, "b" * 40)
+    assert push_cadence.mark_moved_heads([repo], clock=lambda: 1.0) == []
+    assert push_cadence.mark_moved_heads([repo], clock=lambda: 20.0) == [repo]
+    assert push_cadence.mark_moved_heads([repo], clock=lambda: 40.0) == []
+
+
 def _all_ahead(monkeypatch) -> None:
     monkeypatch.setattr(push_cadence, "is_ahead", lambda root: True)
 

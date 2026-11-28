@@ -75,10 +75,12 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C8
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import sys
 import time
+from collections.abc import Generator
 
 from coordinator_core.bash_guards import leg_attribution
 from coordinator_core.bash_guards.leg_attribution import leg
@@ -148,6 +150,21 @@ def _is_deny(out: object) -> bool:
     return isinstance(specific, dict) and specific.get("permissionDecision") == "deny"
 
 
+@contextlib.contextmanager
+def _listing_scope() -> Generator[None, None, None]:
+    """`warp_live.listing_scope()` when `warp_live` is already imported (a resident engine), else a no-op.
+
+    TRAP: importing `warp_live` here for the scope alone costs a cold hook its whole `ask_contract` /
+    `halted_run` closure on every Bash call. A callee that needs a launch listing imports `warp_live` itself
+    and opens its own scope, so the only loss on a cold process is sharing one listing across two such callees."""
+    warp_live = sys.modules.get("coordinator_core.warp_live")
+    if warp_live is None:
+        yield
+        return
+    with warp_live.listing_scope():
+        yield
+
+
 def _prefire_deny(params: dict) -> dict | None:
     """Pre-fire survey deny envelope, else None; any failure is None (fail open).
 
@@ -209,9 +226,9 @@ def _run_chain(params: dict) -> dict:
     try:
         with leg("prelude"):
             from coordinator_core.bash_guards.dispatch import evaluate_payload_json
-            from coordinator_core.ops.warm_guard_evaluate import (
-                _engine_resolution_class,
-                _policy_file_for,
+            from coordinator_core.hooks._guard_policy_inputs import (
+                engine_resolution_class as _engine_resolution_class,
+                policy_file_for as _policy_file_for,
             )
     except Exception as exc:
         return _cannot_evaluate(params, exc, "import")
@@ -233,19 +250,30 @@ def _run_chain(params: dict) -> dict:
     with leg("render"):
         if _is_deny(out):
             return out
-        from coordinator_core import warp_live
+        return _after_chain(params, out)
 
-        with warp_live.listing_scope():
-            check_deadline("prefire_survey")
-            guard_deny = _prefire_deny(params)
-            if guard_deny:
-                return guard_deny
-            if isinstance(out, dict):
-                return out
-            try:
-                from coordinator_core.hooks import nudge_em_turn_budget
 
-                text = nudge_em_turn_budget.advisory_text(params)
-                return context_only("PreToolUse", text) if text else no_advisory()
-            except Exception:
-                return no_advisory()
+def _after_chain(params: dict, out: object) -> dict:
+    """The legs that run after an allowing chain: pre-fire survey deny, the chain's own advisory, else the
+    turn-budget nudge."""
+    with _listing_scope():
+        check_deadline("prefire_survey")
+        guard_deny = _prefire_deny(params)
+        if guard_deny:
+            return guard_deny
+        if isinstance(out, dict):
+            return out
+        try:
+            from coordinator_core.hooks import nudge_em_turn_budget
+
+            text = nudge_em_turn_budget.advisory_text(params)
+            return context_only("PreToolUse", text) if text else no_advisory()
+        except Exception:
+            return no_advisory()
+
+
+def lean_verdict(payload: dict) -> dict:
+    """Verdict for a call `hook-run.py :: _inert_command` certified: the chain's allow, then the post-chain legs.
+
+    Cold-process entry only: it skips the guard chain, so a caller must have proven that no guard can act."""
+    return _after_chain(payload, None)

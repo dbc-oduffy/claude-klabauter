@@ -11,7 +11,6 @@ best-effort: state is an unlocked read-modify-write, so concurrent hooks may bot
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -122,6 +121,53 @@ def _window_flag(transcript, start: int, end: int, flag: bool, cap: int) -> bool
     return flag
 
 
+_SKILL_FLOW_SKILLS = ("new-project", "repo-setup")
+_SKILL_FLOW_OPS = ("new-project-scaffold", "new_project_scaffold", "repo.setup", "repo_setup")
+_SKILL_FLOW_NEEDLES = tuple(s.encode() for s in _SKILL_FLOW_SKILLS + _SKILL_FLOW_OPS)
+
+
+def _skill_flow_block(block) -> bool:
+    """A tool_use block that opens the new-project / repo-setup skill or runs its scaffold op."""
+    if not isinstance(block, dict) or block.get("type") != "tool_use":
+        return False
+    inp = block.get("input")
+    if not isinstance(inp, dict):
+        return False
+    if block.get("name") == "Skill":
+        skill = str(inp.get("skill") or "").rsplit(":", 1)[-1].lstrip("/")
+        return skill in _SKILL_FLOW_SKILLS
+    cmd = inp.get("command")
+    return isinstance(cmd, str) and any(op in cmd for op in _SKILL_FLOW_OPS)
+
+
+def _window_skill_flow(transcript, start: int, end: int, flag: bool, cap: int) -> bool:
+    """The "session is inside a new-project / repo-setup skill flow" flag after bytes [start, end):
+    set when an assistant record in the delta invokes the skill or its scaffold op. Sticky for the
+    session, since the flow's inline steps span many turns."""
+    if flag or end <= start or end - start > cap:
+        return flag
+    try:
+        with open(transcript, "rb") as fh:
+            fh.seek(start)
+            data = fh.read(end - start)
+    except OSError:
+        return flag
+    for line in data.split(b"\n"):
+        if b'"tool_use"' not in line or not any(n in line for n in _SKILL_FLOW_NEEDLES):
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        msg = rec.get("message") if isinstance(rec, dict) else None
+        if not isinstance(msg, dict) or msg.get("role") != "assistant" or rec.get("isSidechain") is True:
+            continue
+        content = msg.get("content")
+        if isinstance(content, list) and any(_skill_flow_block(b) for b in content):
+            return True
+    return flag
+
+
 def _in_general_work_root(payload: dict) -> bool:
     """cwd at or under `coordinator.general_work_root`; any failure or unset root is False (nag stands)."""
     try:
@@ -141,7 +187,7 @@ def _is_live_gem(sid: str, root: str) -> bool:
 
 
 def _advisory(params: dict) -> str:
-    from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
+    from coordinator_core.hooks._repo_root_walk import repo_root as _repo_root
     from coordinator_core.session import em_turn_count as etc
     from coordinator_core.session import engine_route_state as ers
 
@@ -170,6 +216,10 @@ def _advisory(params: dict) -> str:
         transcript, int(before.get("offset") or 0), int(state.get("offset") or 0),
         bool(before.get("reason_named")), etc.READ_CAP,
     )
+    state["skill_flow"] = _window_skill_flow(
+        transcript, int(before.get("offset") or 0), int(state.get("offset") or 0),
+        bool(before.get("skill_flow")), etc.READ_CAP,
+    )
     turns = state["turns"]
     if _is_submit_payload(payload):
         if state.get("fire_turn") is None:
@@ -185,6 +235,7 @@ def _advisory(params: dict) -> str:
                 turns > etc.PRE_FIRE_TURNS_MAX
                 and not state.get("pre_fire_signalled")
                 and not state["reason_named"]
+                and not state["skill_flow"]
                 and not _in_general_work_root(payload)
             ):
                 state["pre_fire_signalled"] = True
@@ -218,6 +269,8 @@ def advisory_text(params: dict) -> str:
 
 @register_op("hooks.nudge_em_turn_budget")
 async def _handler(params: dict, repo_root=None) -> dict:
+    import asyncio  # in-function: the cold Bash chain imports this module for `advisory_text` and has no loop
+
     payload = payload_of(params)
     text = await asyncio.to_thread(advisory_text, params)
     if not text:

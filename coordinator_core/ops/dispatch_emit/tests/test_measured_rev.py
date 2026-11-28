@@ -67,8 +67,8 @@ def test_tree_overlay_refs_untouched_zero_spawns(repo, monkeypatch):
     assert out["paths"] == ["edit.txt", "fresh/n.txt"]
     expected = dict(before_tree)
     expected.pop("gone.txt")
-    expected["edit.txt"] = commit.checkin_blob_sha(repo, "edit.txt")
-    expected["fresh/n.txt"] = commit.checkin_blob_sha(repo, "fresh/n.txt")
+    expected["edit.txt"] = commit._checkin_blob_sha_read(repo, "edit.txt")
+    expected["fresh/n.txt"] = commit._checkin_blob_sha_read(repo, "fresh/n.txt")
     assert _tree(repo, out["sha"]) == expected
     assert _git(repo, "rev-parse", out["sha"] + "^") == head_before
 
@@ -83,7 +83,7 @@ def test_crlf_checkin_parity(repo):
     _git(repo, "config", "core.autocrlf", "true")
     (repo / "crlf.txt").write_bytes(b"a\r\nb\r\n")
     out = mr.measured_rev("run-2", ["crlf.txt"], repo_root=repo)
-    assert out["blobs"]["crlf.txt"] == commit.checkin_blob_sha(repo, "crlf.txt")
+    assert out["blobs"]["crlf.txt"] == commit._checkin_blob_sha_read(repo, "crlf.txt")
     assert _tree(repo, out["sha"])["crlf.txt"] == out["blobs"]["crlf.txt"]
     assert _git(repo, "cat-file", "blob", out["blobs"]["crlf.txt"]) == "a\nb"
 

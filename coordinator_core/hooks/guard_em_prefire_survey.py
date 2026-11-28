@@ -9,7 +9,6 @@ input or a disarm returns None, never a deny. Main thread only; a subagent is ne
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 from typing import Optional
@@ -245,6 +244,8 @@ def evaluate(params: dict) -> Optional[dict]:
 
 @register_op("hooks.guard_em_prefire_survey")
 async def _handler(params: dict, repo_root=None) -> dict:
+    import asyncio  # in-function: the cold Bash chain imports this module for `evaluate` and has no loop
+
     payload = payload_of(params)
     try:
         envelope = await asyncio.to_thread(_evaluate_payload, payload)

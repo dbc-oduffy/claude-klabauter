@@ -20,34 +20,25 @@ _REFUSED = [
 _MALFORMED = [{"id": "P9", "check": {"command": "grep -c hello a.txt", "expect": "1"}}]
 
 
-def _verdict(tmp_path, entries, checker_ran):
+def _verdict(tmp_path, entries):
     (tmp_path / "a.txt").write_text("hello\nworld\n", encoding="utf-8")
     anchors, defects = ap.parse_anchors({"anchor_premises": entries}, tmp_path)
     verdicts = ap.anchor_verdicts(anchors, [], [], "", tmp_path)
     findings = list(defects) + ap.anchor_findings(anchors, [], [], "", tmp_path, verdicts)
     return prv.readiness_verdict(
         {"verdict": "PREPPED", "classes": {}}, None, [], tmp_path, [], None, None, None, None, "",
-        findings, verdicts, checker_ran,
+        findings, verdicts,
     )
 
 
-@pytest.mark.parametrize("checker_ran", [True, False])
 @pytest.mark.parametrize("entries", [_UNEVALUABLE, _REFUSED], ids=["unevaluable", "screen-refused"])
-def test_unsatisfiable_premise_is_a_note_not_a_pull(tmp_path: Path, entries, checker_ran) -> None:
-    out = _verdict(tmp_path, entries, checker_ran)
+def test_unsatisfiable_premise_is_a_note_not_a_pull(tmp_path: Path, entries) -> None:
+    out = _verdict(tmp_path, entries)
     assert out["blocking"] == [], out
-    if checker_ran:
-        assert out["verdict"] == "ready", out
-        assert out["mechanical_repairs"] == []
-        for entry in entries:
-            assert entry["id"] in out["reason"], out
-    else:
-        # Each box runs only one of these two branches, chosen by whether the checker exists.
-        # Engine-only lane (no premise-checker): an unevaluable anchor is one mechanical
-        # rewrite repair naming its id, never a halt or a substantive pull.
-        assert out["verdict"] == "pulled" and out["pull_class"] == "mechanical", out
-        assert {r["target"] for r in out["mechanical_repairs"]} == {e["id"] for e in entries}, out
-        assert {r["kind"] for r in out["mechanical_repairs"]} == {"anchor-check-not-evaluable"}, out
+    assert out["verdict"] == "ready", out
+    assert out["mechanical_repairs"] == []
+    for entry in entries:
+        assert entry["id"] in out["reason"], out
 
 
 # The r41/r40 plan files are not on disk; each fixture reproduces that run's refused premise shape.
@@ -64,20 +55,15 @@ _NAMED_PLANS = {
 }
 
 
-@pytest.mark.parametrize("checker_ran", [True, False])
 @pytest.mark.parametrize("plan", ["L-r41", "XL-r41", "XXL-r40"])
-def test_named_run_plan_not_refused_by_anchor_gate(tmp_path: Path, plan, checker_ran) -> None:
-    out = _verdict(tmp_path, _NAMED_PLANS[plan], checker_ran)
+def test_named_run_plan_not_refused_by_anchor_gate(tmp_path: Path, plan) -> None:
+    out = _verdict(tmp_path, _NAMED_PLANS[plan])
     assert not any("anchor-premise" in b for b in out["blocking"]), out
-    if checker_ran:
-        assert out["verdict"] == "ready", out
-    else:
-        assert out["verdict"] == "pulled" and out["pull_class"] == "mechanical", out
-        assert {r["target"] for r in out["mechanical_repairs"]} == {e["id"] for e in _NAMED_PLANS[plan]}, out
+    assert out["verdict"] == "ready", out
+    assert out["mechanical_repairs"] == []
 
 
-@pytest.mark.parametrize("checker_ran", [True, False])
-def test_malformed_premise_still_blocks(tmp_path: Path, checker_ran) -> None:
-    out = _verdict(tmp_path, _MALFORMED, checker_ran)
+def test_malformed_premise_still_blocks(tmp_path: Path) -> None:
+    out = _verdict(tmp_path, _MALFORMED)
     assert out["verdict"] == "judgment", out
     assert any("P9" in b for b in out["blocking"]), out

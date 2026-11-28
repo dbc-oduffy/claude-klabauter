@@ -156,3 +156,34 @@ def test_rationale_only_preference_needs_no_reason(repo):  # noqa: F811
     reply = _call(repo)
     assert not _override_refused(reply)
     assert _em(repo) == {"em_rationale": "just context"}
+
+
+_RESEARCH_WRITES = ["docs/a.md", "docs/b.md"]
+
+
+def _research_sizing(repo, **research):
+    _put(repo, route="plan", research={"value_class": "scouts", "appetite": "small", "sources": ["web"], **research})
+
+
+def test_plan_preference_with_no_missing_fact_declines_the_research_split(repo):  # noqa: F811
+    _research_sizing(repo, questions=[])
+    _pref(repo, "plan", "mechanism X in coordinator_core/a.py, tests in tests/test_a.py")
+    reply = _call(repo, writes=_RESEARCH_WRITES)
+    assert (reply.get("halt") or {}).get("kind") != "research"
+    assert "plan honoured" in reply["research_declined"]
+
+
+def test_plan_preference_with_a_named_question_still_splits_to_research(repo):  # noqa: F811
+    _research_sizing(repo, questions=["which op owns the write?"])
+    _pref(repo, "plan", "mechanism X")
+    reply = _call(repo, writes=_RESEARCH_WRITES)
+    assert reply["halt"]["kind"] == "research" and "research_declined" not in reply
+
+
+def test_no_plan_preference_or_run_record_still_splits_to_research(repo):  # noqa: F811
+    _research_sizing(repo, questions=[])
+    _pref(repo, "roadmap")
+    reply = _call(repo, writes=_RESEARCH_WRITES, route_override_reason="one workstream")
+    assert reply["halt"]["kind"] == "research" and "research_declined" not in reply
+    bare = ask_gate._handler({"sizing_path": REL, "writes": _RESEARCH_WRITES}, repo_root=repo / ".git")
+    assert bare["halt"]["kind"] == "research" and "research_declined" not in bare

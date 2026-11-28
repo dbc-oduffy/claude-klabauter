@@ -240,9 +240,14 @@ def _index_clear_read(root: Path, wanted: tuple) -> frozenset:
 def _indexed_halt_marker(record: Path) -> Optional[dict]:
     """A stand-in halt marker (status and withheld paths only) for a run with a fresh index entry, else None:
     the caller reads `halted.json`. Trap: carries no other marker field."""
-    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit import halted_run, halted_withheld_index
 
+    root = halted_run._root_of(record)
+    row = halted_withheld_index.claim_get(root, record.name) if root is not None else None
     entry = halted_run.fresh_index_entry(record)
+    if row is not None and row["h"]:
+        paths = set(row["w"]) | set(entry.paths if entry is not None else ())  # the index entry may name more than the marker
+        return {halted_run.HALT_RUN_ARTIFACTS_FIELD: {"withheld": {p: "" for p in paths}}, "status": halted_run.STATUS_HALTED}
     if entry is None:
         return None
     return {
@@ -405,7 +410,8 @@ def halted_records(
     record-dir scan, file reads only; never raises. With `covering`, only runs withholding one of those paths.
     With `skip_irrelevant`, a run with a fresh index entry that `halted_hold_release.irrelevant` clears
     against the scope's interest is dropped without opening its marker (the prefetch skips it anyway)."""
-    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, run_token
+    from coordinator_core.ops import warp_run_deliverable
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, halted_withheld_index, run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     out: list = []
@@ -417,6 +423,11 @@ def halted_records(
                 continue
             record = root / RECORD_DIR_ROOT / name
             if skip_irrelevant:
+                row = halted_withheld_index.claim_footprint(root, name)
+                if row is not None and not row["h"]:
+                    continue  # a valid row whose marker is not halted: nothing to read
+                if row is None and warp_run_deliverable._no_marker(root, name):
+                    continue  # no marker at all (a live run): two stats, nothing to read
                 standin = _indexed_halt_marker(record)
                 if standin is not None and halted_hold_release.irrelevant(root, record, standin):
                     continue
@@ -433,11 +444,13 @@ def _extra_declared(root: Path, run_id: str) -> set:
     """Paths a run's own records name that the manifest reader does not: `run.json`
     `sizing_rel`, `run-outcome.json` `inline_review.prep.slice_files`, and the manifest's
     `review_declared_paths`. Read once per `release_scope` (`landing_halted_view`)."""
-    from coordinator_core.ops.dispatch_emit import landing_halted_view
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index, landing_halted_view
 
-    return set(landing_halted_view.shared(
-        "extra_declared", (str(root), run_id), lambda: frozenset(_extra_declared_read(root, run_id)),
-    ))
+    def read() -> frozenset:
+        row = halted_withheld_index.claim_footprint(root, run_id)
+        return frozenset(row["e"]) if row is not None else frozenset(_extra_declared_read(root, run_id))
+
+    return set(landing_halted_view.shared("extra_declared", (str(root), run_id), read))
 
 
 def _extra_declared_read(root: Path, run_id: str) -> set:

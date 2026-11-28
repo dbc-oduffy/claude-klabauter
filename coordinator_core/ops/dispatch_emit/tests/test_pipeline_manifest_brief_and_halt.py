@@ -69,7 +69,7 @@ def test_vendored_schema_matches_doe_when_present():
 def test_key_sets_are_derived_from_the_schema():
     schema = json.loads(VENDORED.read_text(encoding="utf-8"))
     assert pm._STAGE_KEYS == set(schema["$defs"]["stage"]["properties"]) | {
-        "halts_unless_nonempty", "halts_unless_count",
+        "halts_unless_nonempty", "halts_unless_count", "requires_output",
     }
     assert pm._TOP_KEYS == set(schema["properties"])
     assert pm._INPUT_KEYS == set(schema["properties"]["inputs"]["properties"])

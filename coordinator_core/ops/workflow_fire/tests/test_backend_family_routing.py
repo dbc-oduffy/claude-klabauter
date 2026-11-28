@@ -72,7 +72,7 @@ def _stub_spawn(monkeypatch, spawned):
 @pytest.mark.skipif(not shutil.which('node'), reason='node unavailable')
 @pytest.mark.parametrize('backend', ['grok', 'agy', None])
 def test_every_stage_routes_to_the_named_family_only(tmp_path, monkeypatch, backend):
-    extra = {} if backend is None else {'backend': backend}
+    extra = {'caller': 'codex-em'} if backend is None else {'backend': backend}
     reply, fired = _submit(tmp_path, monkeypatch, **extra)
     assert 'refused' not in reply and len(fired) == 1
     expected = backend or 'codex'

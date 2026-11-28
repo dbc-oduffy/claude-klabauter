@@ -96,7 +96,11 @@ def _scout(tshirt: str, flags: list[str]) -> dict:
     return {
         "tshirt": tshirt, "intent": "add a thing", "name": "fixture-thing",
         "premise_provenance": "read", "premise_evidence": "read it",
-        "exit_criterion": "the thing exists", "writes": ["src/thing.py"], "gated": [],
+        "exit_criterion": (
+            "`coordinator-invoke dispatch.emit` parks the thing; "
+            "`python -m pytest coordinator_core/ops/dispatch_emit/tests/test_ask_compose_parked_after_plan.py` passes"
+        ),
+        "writes": ["src/thing.py"], "gated": [],
         "jtbd_unclear": "--jtbd-unclear" in flags,
     }
 

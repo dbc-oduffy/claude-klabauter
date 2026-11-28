@@ -34,6 +34,12 @@ Popen = Callable[..., Any]
 
 HANDLE_TTL_S = 3600.0
 DRAIN_BATCH = 2
+REMOTE_CHECK_INTERVAL_S = 180.0
+REMOTE_CHECK_TIMEOUT_S = 20.0
+REMOTE_BOX_BATCH = 2
+REMOTE_RUN_STATUS_OP = "dispatch.stage_wait_status"
+REMOTE_RESULT_PREFIX = "remote-"
+REMOTE_TERMINAL = frozenset({"ended", "landed", "cleared", "done", "halted", "failed", "dead"})
 
 
 def requests_dir() -> Path:
@@ -178,11 +184,114 @@ def run_child(key: str, *, try_remote: Optional[Callable[..., Optional[dict]]] =
         return 2
 
 
-def drain_pending(
-    limit: int = DRAIN_BATCH, *, try_remote: Optional[Callable[..., Optional[dict]]] = None
+def _wait_records(root: Path) -> "list[dict]":
+    from coordinator_core.ops.dispatch_emit import stage_wait
+
+    directory = stage_wait._wait_dir(root)
+    if directory is None:
+        return []
+    records = []
+    for entry in os.scandir(directory):
+        if entry.name.endswith(".json") and not entry.name.startswith(REMOTE_RESULT_PREFIX) and entry.is_file():
+            record = stage_wait.read(root, entry.name[: -len(".json")])
+            if record is not None and not record.get("started"):
+                records.append(record)
+    return records
+
+
+def _result_due(path: Path, now: float) -> bool:
+    try:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    if not isinstance(cached, dict):
+        return True
+    if cached.get("status") in REMOTE_TERMINAL:
+        return False
+    return now - float(cached.get("checked_at") or 0.0) >= REMOTE_CHECK_INTERVAL_S
+
+
+def _query_box(box: dict, ref: str, runner: Any) -> dict:
+    from coordinator_core.group_em import box_transport
+
+    res = box_transport.invoke_remote(box, REMOTE_RUN_STATUS_OP, {"run_id": ref}, runner, timeout=REMOTE_CHECK_TIMEOUT_S)
+    reply = res.get("reply") if res.get("ok") else None
+    if isinstance(reply, dict) and isinstance(reply.get("result"), dict):
+        reply = reply["result"]
+    if not isinstance(reply, dict) or not isinstance(reply.get("status"), str):
+        return {"status": "unknown", "reason": res.get("reason") or "no_status_in_reply"}
+    out = {"status": reply["status"]}
+    if isinstance(reply.get("sha"), str):
+        out["sha"] = reply["sha"]
+    return out
+
+
+def check_remote_runs(
+    root: Path,
+    *,
+    runner: Any = None,
+    boxes: Optional[list] = None,
+    now: Optional[float] = None,
 ) -> int:
-    """Run up to `limit` queued entries (oldest first) and sweep expired files; returns the count run."""
+    """Cache each due `remote_run` blocker's far status at `blocker_check.remote_result_path`; returns the calls made, never raises."""
+    calls = 0
+    try:
+        from coordinator_core.group_em import box_registry
+        from coordinator_core.ops.dispatch_emit import blocker_check
+
+        stamp = time.time() if now is None else now
+        wanted: "dict[str, dict]" = {}
+        for record in _wait_records(root):
+            for blocker in record.get("typed_blockers") or ():
+                if blocker.get("kind") == "remote_run":
+                    wanted[str(blocker["ref"])] = blocker
+        registry = boxes if boxes is not None else box_registry.read_boxes()
+        by_id = {b.get("box_id"): b for b in registry if isinstance(b, dict)}
+        spent: "dict[str, int]" = {}
+        for ref, blocker in sorted(wanted.items()):
+            path = blocker_check.remote_result_path(root, ref)
+            if path is None or not _result_due(path, stamp):
+                continue
+            box_id = blocker.get("box")
+            box = by_id.get(box_id)
+            if not isinstance(box_id, str) or box is None or spent.get(box_id, 0) >= REMOTE_BOX_BATCH:
+                continue
+            spent[box_id] = spent.get(box_id, 0) + 1
+            calls += 1
+            result = {**_query_box(box, ref, runner), "box": box_id, "ref": ref, "checked_at": stamp}
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _write_atomic(ref, result, path=path)
+        _drop_orphan_results(root, set(wanted))
+    except Exception:  # noqa: BLE001 - contract: never raises
+        pass
+    return calls
+
+
+def _drop_orphan_results(root: Path, live_refs: "set[str]") -> None:
+    from coordinator_core.ops.dispatch_emit import stage_wait
+
+    directory = stage_wait._wait_dir(root)
+    if directory is None:
+        return
+    for entry in os.scandir(directory):
+        name = entry.name
+        if name.startswith(REMOTE_RESULT_PREFIX) and name.endswith(".json") and name[len(REMOTE_RESULT_PREFIX) : -len(".json")] not in live_refs:
+            try:
+                os.unlink(entry.path)
+            except OSError:
+                pass
+
+
+def drain_pending(
+    limit: int = DRAIN_BATCH,
+    *,
+    try_remote: Optional[Callable[..., Optional[dict]]] = None,
+    root: Optional[Path] = None,
+) -> int:
+    """Run up to `limit` queued entries (oldest first), sweep expired files; returns the count run. A `root` adds `check_remote_runs(root)`."""
     ran = 0
+    if root is not None:
+        check_remote_runs(root)
     try:
         sweep()
         entries = sorted(

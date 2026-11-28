@@ -97,6 +97,47 @@ def test_elect_loses_to_a_live_first_instance() -> None:
         _winapi.CloseHandle(winner)
 
 
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("is_server", [True, False])
+def test_elect_retires_the_breadcrumb_predecessor_only_inside_the_warm_server(
+    monkeypatch: pytest.MonkeyPatch, is_server: bool
+) -> None:
+    import _winapi
+    import subprocess
+
+    from coordinator_core.session.core import _win_create_time_epoch
+    from coordinator_core.warm import breadcrumb, lifecycle
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    handle = None
+    try:
+        breadcrumb.write_breadcrumb(
+            pipe="p", pid=child.pid, stable_pid_start_epoch=_win_create_time_epoch(child.pid), engine_sha=None
+        )
+        monkeypatch.setattr(lifecycle, "_drain_ceiling_secs", lambda: 0.0)
+        monkeypatch.setattr(election, "RETIRE_GRACE_MARGIN_SECS", 0.0)
+        monkeypatch.setattr(election, "_running_as_warm_server", lambda: is_server)
+        threads = []
+        real = election.retire_superseded_server
+        monkeypatch.setattr(
+            election, "retire_superseded_server", lambda *a, **k: threads.append(real(*a, **k))
+        )
+        handle = election.elect(_unique_pipe_name())
+        if is_server:
+            threads[0].join(15)
+            assert child.wait(timeout=10) is not None
+        else:
+            assert threads == []
+            assert child.poll() is None
+    finally:
+        child.kill()
+        if handle is not None:
+            _winapi.CloseHandle(handle)
+
+
 def test_elect_reelectable_after_winner_closes_handle() -> None:
     import _winapi
 
@@ -148,6 +189,30 @@ def test_current_logon_sid_reads_the_process_token_and_feeds_the_pipe_dacl(monke
     )
     election._build_security_attributes(election.current_user_sid())
     assert seen == [logon]
+
+
+def test_sandbox_principal_sids_resolves_names_and_skips_unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(election, "_configured_sandbox_principals", lambda: ("Alpha", "Missing", "Alpha", "Missing"))
+    monkeypatch.setattr(
+        election, "_lookup_account_sid", lambda name: "S-1-5-21-1-2-3-1006" if name == "Alpha" else None
+    )
+    election.sandbox_principal_sids.cache_clear()
+    try:
+        assert election.sandbox_principal_sids() == ("S-1-5-21-1-2-3-1006",)
+    finally:
+        election.sandbox_principal_sids.cache_clear()
+
+
+def test_sandbox_principal_default_is_codex_sandbox_users_and_resolves_for_real(monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import machine_resolver
+
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: None)
+    assert election._configured_sandbox_principals() == ("CodexSandboxUsers",)
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: "A, B;C")
+    assert election._configured_sandbox_principals() == ("A", "B", "C")
+    # a real LookupAccountNameW: a SID for a built-in, nothing for a nonexistent name
+    assert re.fullmatch(r"S-1-5-32-545", election._lookup_account_sid("BUILTIN\\Users") or "")
+    assert election._lookup_account_sid("no-such-account-" + uuid.uuid4().hex) is None
 
 
 def _open_pipe_as_restricted_token(name: str, restricting_sids: list) -> bool:

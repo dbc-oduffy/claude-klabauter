@@ -93,7 +93,7 @@ def test_agy_child_conversation_with_no_workspace_in_payload_still_draws_the_sub
 @pytest.mark.parametrize("row", [_EM_ROW, None], ids=["em-row", "no-rows"])
 def test_agy_em_conversation_in_the_store_is_not_a_subagent(repo, tmp_path, monkeypatch, row):
     _agy_store(tmp_path, monkeypatch, _CONVERSATION, row)
-    answer = shim.decide("agy", _payload(repo, "git clean -fdx"))
+    answer = shim.decide("agy", _payload(repo, "git reset --hard"))
     assert answer.get("decision") != "deny"
     assert _SUBAGENT_GUARD not in str(answer)
 
@@ -109,6 +109,6 @@ def test_agy_unreadable_store_reads_as_em_never_denies(repo, tmp_path, monkeypat
 
 @pytest.mark.parametrize("extra", [{}, {"agentId": ""}, {"agentId": None}], ids=["absent", "empty", "null"])
 def test_agy_em_payload_does_not_draw_the_subagent_guard(repo, extra):
-    answer = shim.decide("agy", _payload(repo, "git clean -fdx", **extra))
+    answer = shim.decide("agy", _payload(repo, "git reset --hard", **extra))
     assert answer.get("decision") != "deny"
     assert _SUBAGENT_GUARD not in str(answer)

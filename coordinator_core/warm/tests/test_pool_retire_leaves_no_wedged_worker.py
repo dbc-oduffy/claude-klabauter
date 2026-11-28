@@ -173,6 +173,48 @@ def test_retire_worker_refuses_a_pid_that_is_not_in_the_pool_and_a_pool_that_can
         pool.shutdown(wait=False, cancel_futures=True)
 
 
+class _FakeProc:
+    def __init__(self) -> None:
+        self.alive = True
+        self.terminated = 0
+
+    def is_alive(self) -> bool:
+        return self.alive
+
+    def terminate(self) -> None:
+        self.terminated += 1
+        self.alive = False
+
+    def join(self, timeout=None) -> None:
+        pass
+
+
+class _FakePool:
+    _safe_to_dynamically_spawn_children = True
+
+    def __init__(self, proc: _FakeProc) -> None:
+        self._processes = {4242: proc}
+
+
+def test_retire_worker_terminates_inline_when_the_helper_thread_cannot_start(monkeypatch):
+    proc, done = _FakeProc(), []
+    pool = _FakePool(proc)
+
+    def _no_thread(self):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(threading.Thread, "start", _no_thread)
+    assert pool_retire.retire_worker(pool, 4242, on_done=lambda: done.append(1)) is True
+    assert 4242 not in pool._processes and proc.terminated == 1 and not proc.alive and done == [1]
+
+
+def test_retire_worker_leaves_a_fake_worker_to_its_helper_thread_when_threads_start(monkeypatch):
+    proc, gone = _FakeProc(), threading.Event()
+    pool = _FakePool(proc)
+    assert pool_retire.retire_worker(pool, 4242, on_done=gone.set) is True
+    assert gone.wait(10) and proc.terminated == 1 and 4242 not in pool._processes
+
+
 def _release_self_deadlocked_manager(pool, mgmt) -> None:
     """A manager thread left blocked on its own executor's `_shutdown_lock` would hang interpreter exit."""
     if mgmt is None:

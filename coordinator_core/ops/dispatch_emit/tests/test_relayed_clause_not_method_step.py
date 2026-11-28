@@ -35,7 +35,7 @@ def test_38c2c8_r3_r4_met_rows_pass_the_verdict_without_a_trace(tmp_path: Path) 
         for rid, (text, anchor) in zip(("R3", "R4"), rl._lettered_entries(R2))
     )
     ledger = rl.Ledger(items, False, "state/sizings/x.yaml", ())
-    verdict = {"items": [{"id": "R3", "status": "met", "met_by": "a.py"}, {"id": "R4", "status": "met", "met_by": "a.py"}]}
+    verdict = {"items": [{"id": "R3", "status": "met", "evidence": "verified"}, {"id": "R4", "status": "met", "evidence": "verified"}]}
     out = rl.judge(ledger, verdict, repo_root=tmp_path, plan_text="")
     assert out["pass"], out
 
@@ -45,7 +45,7 @@ def test_method_lead_sentence_still_marks_and_is_refused_without_a_trace(tmp_pat
     anchor = entries[0][1]
     assert method_step.is_method_step({"anchor": anchor})
     ledger = rl.Ledger((rl.Item("R1", STEP, "relayed", "", anchor, ""),), False, "x", ())
-    out = rl.judge(ledger, {"items": [{"id": "R1", "status": "met", "met_by": "a.py"}]}, repo_root=tmp_path, plan_text="")
+    out = rl.judge(ledger, {"items": [{"id": "R1", "status": "met", "evidence": "verified"}]}, repo_root=tmp_path, plan_text="")
     assert not out["pass"]
     assert any("no mechanism trace" in f["reason"] for f in out["failures"])
 

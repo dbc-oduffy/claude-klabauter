@@ -45,10 +45,14 @@ _RUN_STAMP = re.compile(r"\d{8}T\d{6}-[0-9a-f]{6}$")
 
 def recorded_xs_writes(repo_root: Path, sizing_rel: str) -> list[str]:
     """The `X1` writes of the newest earlier run of this sizing whose `manifest.json` recorded
-    them, else `[]`. Reads record files only: no tree walk beyond the two run-dir roots, no spawn."""
+    them, else `[]`. Reads record files only: no tree walk beyond the two run-dir roots, no spawn.
+
+    Runs are `warp-<stem>-<stamp>` dirs and every `ask-<stamp>` record dir that binds the sizing
+    (`halted_run.bound_runs`): a halted ask-run's refire reads that run's own manifest."""
     import json
 
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.halted_run import _run_stamp, bound_runs
 
     stem = PurePosixPath(str(sizing_rel).replace("\\", "/")).stem
     prefix = f"warp-{stem}-"
@@ -60,7 +64,12 @@ def recorded_xs_writes(repo_root: Path, sizing_rel: str) -> list[str]:
                 d for d in root.iterdir()
                 if d.name.startswith(prefix) and _RUN_STAMP.fullmatch(d.name[len(prefix):]) and d.is_dir()
             )
-    for run in sorted(runs, key=lambda d: d.name[len(prefix):], reverse=True):
+    seen = {d.name for d in runs}
+    runs.extend(
+        Path(repo_root) / RECORD_DIR_ROOT / name
+        for name in bound_runs(Path(repo_root), str(sizing_rel)) if name not in seen
+    )
+    for run in sorted(runs, key=lambda d: _run_stamp(d.name), reverse=True):
         try:
             rows = json.loads((run / "manifest.json").read_text(encoding="utf-8")).get("rows") or []
         except (OSError, ValueError, AttributeError):
@@ -179,10 +188,6 @@ def _named_only_as_target(path: str, texts: Sequence[str]) -> bool:
     return bool(naming) and all(_DETECT_CUE.search(t) and not _EDIT_VERB.search(t) for t in naming)
 
 
-class AskExcludedWriteError(ValueError):
-    """A supplied `writes` entry falls under a path the sizing's ask rules out."""
-
-
 class MemoReceiverUnresolvedError(ValueError):
     """An XS write is a memo-outbox draft and no receiver resolves from the sizing, the draft or
     the exit criterion."""
@@ -226,9 +231,13 @@ def mint_xs_spine(
     out_dir: Path,
     gated: Sequence[Mapping] = (),
     repo_root: Path | None = None,
+    conflicts: list[dict[str, str]] | None = None,
 ) -> tuple[str, Path]:
     """Return `(spine_text, out_dir / "<sizing-stem>.spine.md")`; raises the inventory_mint
     footprint errors for a glob or directory-shaped `writes` entry, `ValueError` for empty writes.
+
+    A supplied write the ask excludes stays in the footprint and is appended to `conflicts`
+    (`{path, sentence, status}`) when the caller passes a list.
 
     Each `gated` entry (`title`, `owner_repo`, optional `requires`/`id`) is minted as a pathless
     row carrying an uncleared `external_gate`, so a declared external deliverable surfaces as
@@ -240,11 +249,10 @@ def mint_xs_spine(
         raise ValueError("XS arm needs at least one --writes path")
     excluded = excluded_paths(sizing)
     for path in paths:
-        if is_excluded(path, excluded):
-            raise AskExcludedWriteError(
-                f"{path} is a supplied write the ask excludes (exclusions: {', '.join(excluded)}): "
-                "drop it from writes or revise the ask"
-            )
+        if is_excluded(path, excluded) and conflicts is not None:
+            hit = ", ".join(e for e in excluded if is_excluded(path, [e]))
+            if all(c.get("path") != path for c in conflicts):
+                conflicts.append({"path": path, "sentence": f"ask excludes: {hit}", "status": "conflict"})
     for path in paths:
         _refuse_if_glob(XS_ROW_ID, path, path)
         _refuse_if_directory_shaped(XS_ROW_ID, path, path)

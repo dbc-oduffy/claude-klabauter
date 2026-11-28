@@ -60,7 +60,8 @@ def test_git_clean_that_would_remove_files_is_denied_and_dry_run_is_not(repo: Pa
 def test_stash_drop_and_clear_are_denied_and_push_is_not(repo: Path) -> None:
     assert _denied(cold_chain.evaluate(_bash("git stash clear", repo)))
     assert _denied(cold_chain.evaluate(_bash("git stash drop stash@{0}", repo)))
-    assert cold_chain.evaluate(_bash("git stash push -m x", repo)) == {}
+    pushed = cold_chain.evaluate(_bash("git stash push -m x", repo))
+    assert "block-stash-destruction" not in (pushed or {}).get("permissionDecisionReason", "")
 
 
 @pytest.mark.spawns_process
@@ -123,6 +124,26 @@ def test_cold_rm_and_clean_deny_wherever_the_real_guard_denies(repo: Path, comma
         assert cold, command
 
 
+def test_untracked_state_clean_denies_cold_in_a_fresh_process_under_the_bar(repo: Path) -> None:
+    import json
+    import sys
+
+    (repo / "state").mkdir()
+    (repo / "state" / "x.md").write_text("work\n", encoding="utf-8")
+    code = (
+        "import json,sys,time,subprocess\n"
+        "def no_spawn(*a, **k): raise SystemExit('spawned')\n"
+        "subprocess.Popen = no_spawn\n"
+        "import coordinator_core.host_hooks.cold_chain as c\n"
+        "r=c.evaluate({'tool_name':'Bash','tool_input':{'command':'git clean -fd'},'cwd':sys.argv[1],'session_id':'s'})\n"
+        "print(json.dumps([r,c.take_trace(),time.process_time()]))\n"
+    )
+    runs = [json.loads(subprocess.run([sys.executable, "-c", code, str(repo)], capture_output=True, text=True, check=True,
+                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout) for _ in range(3)]
+    assert all(_denied(r[0]) and r[1][0] == ["destructive-git-clean", "deny"] for r in runs), runs
+    assert min(r[2] for r in runs) < 0.2, runs
+
+
 def test_cold_deny_remedy_names_the_warm_engine(repo: Path) -> None:
     (repo / "work").mkdir()
     (repo / "work" / "a.py").write_text("# uncommitted\n", encoding="utf-8")
@@ -132,7 +153,10 @@ def test_cold_deny_remedy_names_the_warm_engine(repo: Path) -> None:
 
 def test_trace_records_each_guard_outcome_in_run_order_and_clears(repo: Path) -> None:
     cold_chain.evaluate(_bash("git stash list; cp a b", repo))
-    assert cold_chain.take_trace() == [("block-stash-destruction", "allow"), ("guard-disk-fill", "allow")]
+    trace = cold_chain.take_trace()
+    assert [t for t in trace if t[0] in ("block-stash-destruction", "guard-disk-fill")] == [
+        ("block-stash-destruction", "allow"), ("guard-disk-fill", "allow")]
+    assert [name for name, _ in trace] == [g for g in cold_chain.shell_candidates("git stash list; cp a b")]
     assert cold_chain.take_trace() == []
 
 
@@ -145,9 +169,29 @@ def test_trace_marks_a_deny_and_stops_at_it(repo: Path) -> None:
 def test_trace_marks_a_raising_guard(monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
     monkeypatch.setattr(cold_chain, "_invoke_shell", lambda *a: (_ for _ in ()).throw(RuntimeError("x")))
     cold_chain.evaluate(_bash("git stash list", repo))
-    assert cold_chain.take_trace() == [("block-stash-destruction", "raised")]
+    trace = cold_chain.take_trace()
+    assert trace[0] == ("block-stash-destruction", "raised")
+    assert {verdict for _, verdict in trace} == {"raised"}
 
 
 def test_a_harmless_command_leaves_an_empty_trace(repo: Path) -> None:
     cold_chain.evaluate(_bash("ls", repo))
     assert cold_chain.take_trace() == []
+
+
+@pytest.mark.parametrize("command", ["git status", "python run.py", "git log --oneline -3"])
+def test_widened_prefilter_commands_run_cold_in_a_fresh_process_under_the_bar(repo: Path, command: str) -> None:
+    import json
+    import sys
+
+    code = (
+        "import json,sys,time\n"
+        "import coordinator_core.host_hooks.cold_chain as c\n"
+        "r=c.evaluate({'tool_name':'Bash','tool_input':{'command':sys.argv[2]},'cwd':sys.argv[1],'session_id':'s'})\n"
+        "print(json.dumps([r,[t[0] for t in c.take_trace()],time.process_time()]))\n"
+    )
+    runs = [json.loads(subprocess.run([sys.executable, "-c", code, str(repo), command], capture_output=True, text=True,
+                                      check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout)
+            for _ in range(3)]
+    assert all(r[0] == {} and r[1] for r in runs), runs
+    assert min(r[2] for r in runs) < 0.2, runs

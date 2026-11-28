@@ -90,7 +90,7 @@ def test_live_owner_parks_the_run_and_the_typed_line_names_owner_and_module(tmp_
     assert stage_wait.read(root, WAITER)["blockers"] == [OWNER]
 
 
-def test_halted_owner_yields_the_typed_cause_and_no_park(tmp_path, capsys):
+def test_halted_holder_yields_the_typed_cause_naming_the_peer_run_and_no_park(tmp_path, capsys):
     root = _repo(tmp_path)
     run_dir = root / "state" / "warp" / OWNER
     run_dir.mkdir(parents=True)
@@ -101,8 +101,8 @@ def test_halted_owner_yields_the_typed_cause_and_no_park(tmp_path, capsys):
     assert _export(root) == 2
 
     line = _typed(capsys)
-    assert line["cause"] == "co_tenant_dependency_on_halted_run" and line["owner"] == OWNER
-    assert line["owner_refire"] == "coordinator-invoke engine-ask X"
+    assert line["cause"] == "co_tenant_dependency" and line["owner"] is None and line["peer_runs"] == [OWNER]
+    assert "owner_refire" not in line
     assert stage_wait.read(root, WAITER) is None
 
 
@@ -117,7 +117,7 @@ def test_no_owner_still_refuses_typed_with_a_null_owner(tmp_path, capsys):
 
 
 @pytest.mark.parametrize("owner, kind", [
-    ("live", "co-tenant-wait"), ("halted", "co_tenant_dependency_on_halted_run"), (None, "co_tenant_dependency"),
+    ("live", "co-tenant-wait"), ("halted", "co_tenant_dependency"), (None, "co_tenant_dependency"),
 ])
 def test_verify_stamps_the_resolved_kind_as_the_zero_run_cause(tmp_path, monkeypatch, owner, kind):
     root = _repo(tmp_path)

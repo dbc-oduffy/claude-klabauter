@@ -53,6 +53,28 @@ def test_list_object_and_prose_stop():
     assert ex == ("a/b.py", "c/d.py")
 
 
+def test_conditional_or_time_bound_wait_yields_no_exclusion():
+    for text in (
+        "until the peer's merges land, don't edit pkg/x.py",
+        "wait for the peer to merge before editing pkg/x.py, do not edit pkg/x.py",
+        "do not touch pkg/x.py once the review is done",
+        "leave pkg/x.py alone for now",
+        "don't edit pkg/x.py after the freeze",
+    ):
+        assert excluded_paths(_sz(text)) == (), text
+
+
+def test_unconditional_exclusion_still_binds_beside_a_conditional_clause():
+    ex = excluded_paths(_sz("Until the peer lands, don't edit pkg/x.py; never touch pkg/y.py"))
+    assert ex == ("pkg/y.py",)
+    assert excluded_paths(_sz("Wait for review. Do not edit pkg/x.py.")) == ("pkg/x.py",)
+
+
+def test_pending_and_while_as_ordinary_words_do_not_suppress_an_exclusion():
+    assert excluded_paths(_sz("do not touch the pending-changes dir")) == ("pending-changes",)
+    assert excluded_paths(_sz("do not edit pkg/x.py while keeping pkg/y.py")) == ("pkg/x.py",)
+
+
 def test_drop_excluded_preserves_order_and_empty_passthrough():
     assert drop_excluded(["z.py", "a/b.py", "a/c.py"], ["a"]) == ["z.py"]
     assert drop_excluded(["z.py", "a.py"], ()) == ["z.py", "a.py"]

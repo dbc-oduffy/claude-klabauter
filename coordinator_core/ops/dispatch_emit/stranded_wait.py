@@ -1,31 +1,29 @@
-"""Idle-tick sweep that ends every un-started stage wait: a waiter whose blocker is dead is woken or its owner refired.
+"""Idle-tick sweep that ends every un-started stage wait: each typed blocker is evaluated by `blocker_check`.
 
 `stage_wait.wake_on_end` fires only from `run_token.consume`/`discard`; a blocker that halts does neither, so
-its waiter's record stays `started: false`. The warm idle tick calls `on_idle_tick`: per un-started record it
-classifies each blocker that holds no live run token, or a live one that is halted with no launcher escrow
-(nothing will end it), by its `halted.json` marker.
+its waiter's record stays `started: false`. The warm idle tick calls `on_idle_tick`; per un-started record:
 
-- landed, closed, unmarked, or superseded by a landed successor: `stage_wait.wake_on_end` then
-  `run_token._resume_stage_waiter` spool the waiter's own refire.
-- halted (a launcher minted-not-started halt included) or superseded with no landed successor: the OWNER's
-  `engine-ask` refire is spooled (`pending_oracle.spool_refire`, source `stranded-wait`), at most
-  `MAX_STRANDED_REFIRES` per owner. Past it the owner is recorded under the waiter's `proceeded_without` and
-  dropped from its blockers, so the wait always ends.
+- every blocker cleared: the record starts and `run_token._resume_stage_waiter` runs its `resume_action`
+  (`refire`, `close_landed` at the landed-marker sha, `notify`), stamped `resumed_by: engine`, `session: null`.
+- a halted owner (`live` with a sizing): the OWNER's `engine-ask` refire is spooled (`pending_oracle.spool_refire`,
+  source `stranded-wait`), at most `MAX_STRANDED_REFIRES` per owner, once none is outstanding.
+- a dead blocker: `on_blocker_dead: surface` holds the park (`status: attention`, one `pending_oracle` PM flag,
+  never `proceeded_without`); the flag's removal ends it, `resumed_by: pm`. `proceed` refires a dead owner up to
+  the cap, then records it under `proceeded_without` and drops it, so the wait always ends.
 
-A fresh owner refire is spooled only when none is outstanding: the owner re-halted since the last one, or
-`REFIRE_COOLDOWN_S` passed with the spool unconsumed. Stat/json reads only; no git, no spawn, no sleep.
+Stat/json reads only; no git, no spawn, no sleep. Only a `close_landed` resume spawns, and only on that event.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Iterable, Optional
 
-from coordinator_core.ops.dispatch_emit import co_tenant_owner, halted_run, pending_oracle, run_token, stage_wait
-from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from coordinator_core.ops.dispatch_emit import blocker_check, pending_oracle, run_token, stage_wait
 
 SOURCE = "stranded-wait"
 
@@ -35,7 +33,10 @@ MAX_STRANDED_REFIRES = pending_oracle.MAX_AUTO_REFIRES
 #: Seconds an owner refire may sit unconsumed (owner still halted, marker untouched) before the next attempt.
 REFIRE_COOLDOWN_S = 900.0
 
-_LIVE, _ENDED, _REFIRE, _PENDING = "live", "ended", "refire", "pending"
+STATUS_ATTENTION = "attention"
+
+# invariant: an attention park never expires; `stage_wait.expired` reads this deadline.
+_ATTENTION_DEADLINE_S = 10 * 365 * 24 * 3600.0
 
 _log = logging.getLogger(__name__)
 
@@ -82,33 +83,140 @@ def _cached_records(root: Path, directory: Path) -> list:
     return out
 
 
-def _classify(root: Path, owner: str) -> tuple:
-    """`(kind, sizing_rel, marker_mtime)` of a blocker: live (still running or unreadable, left alone), ended,
-    refire (halted or superseded, with the sizing its refire needs) or pending (resumed: a refire is running)."""
+def _verdict(root: Path, blocker: dict, memo: dict, home: Optional[Path]) -> blocker_check.Verdict:
+    """`blocker_check`'s verdict of one typed blocker, memoised per sweep; a failing check reads `pending`.
+
+    A `run_landed` blocker on a halted owner reads as that owner's `live` verdict, so the owner is refired."""
+    kind, ref = blocker["kind"], blocker["ref"]
+    key = (kind, ref, blocker.get("row"), blocker.get("expect"), blocker.get("mtime_after"))
+    held = memo.get(key)
+    if held is not None:
+        return held
     try:
-        if run_token.is_live(root, owner) and not co_tenant_owner._launcherless_halted(root, owner):
-            return _LIVE, None, 0.0
-        rdir = record_dir(root, owner)
-        marker = halted_run.read_strict(rdir)
-    except (ValueError, OSError):
-        return _LIVE, None, 0.0
-    if marker is None:
-        return _ENDED, None, 0.0
-    status = marker.get("status")
-    if status == halted_run.STATUS_RESUMED:
-        return _PENDING, None, 0.0
-    sizing_rel = marker.get("sizing_rel")
-    if status == halted_run.STATUS_SUPERSEDED and co_tenant_owner._landed_successor(root, owner, sizing_rel):
-        return _ENDED, None, 0.0
-    if status not in (halted_run.STATUS_HALTED, halted_run.STATUS_SUPERSEDED):
-        return _ENDED, None, 0.0
-    if not (isinstance(sizing_rel, str) and sizing_rel):
-        return _ENDED, None, 0.0
+        if kind == "run_end":
+            found = blocker_check._run_end(root, ref, home)
+        elif kind == "run_landed":
+            found = blocker_check._run_landed(root, ref)
+            if found.state == blocker_check.PENDING:
+                owner = blocker_check._run_end(root, ref, home)
+                if owner.state == blocker_check.LIVE and owner.payload.get("sizing_rel"):
+                    found = owner
+        else:
+            found = blocker_check.evaluate(root, blocker)
+    except Exception:  # noqa: BLE001 -- one blocker's failing check must not strand the other waiters
+        _log.warning("stranded-wait check of %s %s failed", kind, ref, exc_info=True)
+        found = blocker_check.Verdict(blocker_check.PENDING, {})
+    memo[key] = found
+    return found
+
+
+def _drop_and_start(root: Path, path: Path, record: dict, cleared: set, proceeded: set) -> Optional[dict]:
+    """With the record locked: drop the `(kind, ref)` pairs in `cleared` and `proceeded` (the latter recorded under
+    `proceeded_without`) and start the record when no blocker is left. The started record, else None."""
+    left = [b for b in stage_wait.typed_blockers(record) if (b["kind"], b["ref"]) not in (cleared | proceeded)]
+    record["typed_blockers"] = left
+    record["blockers"] = sorted({b["ref"] for b in left})
+    if proceeded:
+        record["proceeded_without"] = sorted({*(record.get("proceeded_without") or ()), *(ref for _, ref in proceeded)})
+    if left:
+        stage_wait._write_quiet(path, record)
+        return None
+    if not stage_wait._claim_start(path):
+        return None
+    stage_wait._notify_started(root, record)
+    record["started"] = True
+    record["started_at"] = time.time()
+    stage_wait._write_quiet(path, record)
+    return record
+
+
+def _apply_drop(root: Path, path: Path, cleared: set, proceeded: set) -> Optional[dict]:
+    """`_drop_and_start` on the freshly read record; None for a record that is gone, started or held for the PM."""
+    with stage_wait._lock, stage_wait._record_lock(path):
+        record = stage_wait.read(root, path.stem)
+        if not record or record.get("started") or record.get("status") == STATUS_ATTENTION:
+            return None
+        return _drop_and_start(root, path, record, cleared, proceeded)
+
+
+def _flag_row(kind: str, ref: str) -> str:
+    return "blocker-" + re.sub(r"[^A-Za-z0-9._-]", "_", f"{kind}-{ref}")[:80]
+
+
+def _surface(root: Path, path: Path, blocker: dict, now: float) -> Optional[dict]:
+    """Hold the waiter for the PM: one `pending_oracle` flag naming the dead blocker and the wait time, record
+    `status: attention`. A held record, or an existing flag for this wait and blocker, is left as is."""
+    kind, ref = blocker["kind"], blocker["ref"]
+    record = stage_wait.read(root, path.stem)
+    if not record or record.get("started") or record.get("status") == STATUS_ATTENTION:
+        return None
+    waited = max(0.0, now - float(record.get("parked_at") or now))
+    citation = f"stage wait of {path.stem} blocked on dead {kind} {ref} for {int(waited)}s; remove this flag to proceed without it"
     try:
-        mtime = (rdir / halted_run.HALTED_FILE).stat().st_mtime
-    except OSError:
-        mtime = 0.0
-    return _REFIRE, sizing_rel, mtime
+        flag = pending_oracle.write_pm_flag(
+            root, path.stem, _flag_row(kind, ref), {"owner": ref, "closing_check": {}, "requester_citation": citation}
+        )
+    except (OSError, ValueError):
+        _log.warning("stranded-wait attention flag for %s on %s failed", path.stem, ref, exc_info=True)
+        return None
+    with stage_wait._lock, stage_wait._record_lock(path):
+        fresh = stage_wait.read(root, path.stem)
+        if not fresh or fresh.get("started") or fresh.get("status") == STATUS_ATTENTION:
+            return None
+        fresh.update(
+            status=STATUS_ATTENTION,
+            flag=str(flag),
+            attention={"kind": kind, "ref": ref, "flagged_at": now, "waited_s": round(waited, 1)},
+            deadline=now + _ATTENTION_DEADLINE_S,
+        )
+        stage_wait._write_quiet(path, fresh)
+    return {"waiter": path.stem, "owner": ref, "action": STATUS_ATTENTION, "flag": str(flag)}
+
+
+def hold_close_landed(root: Path, waiter: dict, sha: Optional[str], reason: str) -> None:
+    """A `close_landed` resume the handler refused: reopen the start claim, flag the PM once, record
+    `status: attention`; the flag's removal resumes the waiter by `refire`."""
+    run_id = waiter["run_id"]
+    flag = pending_oracle.write_pm_flag(
+        root, run_id, "close-landed-refused",
+        {"owner": run_id, "closing_check": {}, "requester_citation": f"close_landed of {run_id} at {sha} refused: {reason}"},
+    )
+    path = stage_wait._path(root, run_id)
+    if path is not None:
+        try:
+            path.with_suffix(stage_wait._STARTED_SUFFIX).unlink()
+        except OSError:
+            pass
+    run_token._stamp_resume(root, run_id, {
+        "started": False,
+        "status": STATUS_ATTENTION,
+        "flag": str(flag),
+        "attention": {"kind": "close_landed", "ref": run_id, "sha": sha, "reason": reason, "resume_action": "refire"},
+        "deadline": time.time() + _ATTENTION_DEADLINE_S,
+    })
+
+
+def _attention_tick(root: Path, path: Path, record: dict, actions: list, resumes: list) -> None:
+    """A held park ends when its flag file is gone: the blocker named by the flag is dropped, recorded under
+    `proceeded_without`, and the record resumes `resumed_by: pm` once none is left."""
+    flag = record.get("flag")
+    if not isinstance(flag, str) or not flag or os.path.exists(flag):
+        return
+    with stage_wait._lock, stage_wait._record_lock(path):
+        fresh = stage_wait.read(root, path.stem)
+        if not fresh or fresh.get("started") or fresh.get("status") != STATUS_ATTENTION:
+            return
+        held = fresh.pop("attention", None) or {}
+        fresh.pop("status", None)
+        fresh.pop("flag", None)
+        fresh["pm_resolved"] = True
+        if held.get("resume_action") in stage_wait.RESUME_ACTIONS:
+            fresh["resume_action"] = held["resume_action"]
+        gone = {(held["kind"], held["ref"])} if held.get("ref") and held.get("kind") != "close_landed" else set()
+        woken = _drop_and_start(root, path, fresh, set(), gone)
+    if woken is not None:
+        resumes.append((woken, None))
+        actions.append({"waiter": path.stem, "owner": held.get("ref"), "action": "pm-resolved"})
 
 
 def _owner_refire(
@@ -116,7 +224,8 @@ def _owner_refire(
 ) -> Optional[dict]:
     """Spool one refire of `owner` for the waiter record at `path`, or end its wait on the owner past the cap.
 
-    Returns the action dict, plus `waiter` when the record woke; None when a refire is still outstanding."""
+    Returns the action dict, plus `woken` when the record started; `action: cap` when the cap is spent under a
+    surface policy (the caller holds the waiter for the PM); None when a refire is still outstanding."""
     with stage_wait._lock, stage_wait._record_lock(path):
         record = stage_wait.read(root, path.stem)
         if not record or record.get("started") or owner not in (record.get("blockers") or ()):
@@ -127,9 +236,10 @@ def _owner_refire(
         if _cooling(record, owner, marker_mtime, now):
             return None
         if done >= MAX_STRANDED_REFIRES:
-            record["proceeded_without"] = sorted({*(record.get("proceeded_without") or ()), owner})
-            stage_wait._write_quiet(path, record)
-            woken = stage_wait._wake_one(root, path, owner)
+            if record.get("on_blocker_dead", stage_wait.ON_BLOCKER_DEAD[0]) != "proceed":
+                return {"waiter": path.stem, "owner": owner, "action": "cap"}
+            gone = {(b["kind"], b["ref"]) for b in stage_wait.typed_blockers(record) if b["ref"] == owner}
+            woken = _drop_and_start(root, path, record, set(), gone)
             return {"waiter": path.stem, "owner": owner, "action": "proceed-without-owner", "woken": woken}
         attempt = done + 1
         pending_oracle.spool_refire(
@@ -142,43 +252,86 @@ def _owner_refire(
         return {"waiter": path.stem, "owner": owner, "action": "owner-refire", "attempt": attempt}
 
 
+def _tick_record(
+    root: Path, path: Path, record: dict, memo: dict, home: Optional[Path], now: float, actions: list, resumes: list,
+) -> None:
+    """Evaluate one un-started record's typed blockers and act: drop the cleared, refire a halted owner, hold or
+    proceed past a dead one."""
+    cleared: set = set()
+    shas: list = []
+    dead: list = []
+    refire: list = []
+    for blocker in record.get("typed_blockers") or ():
+        state, payload = _verdict(root, blocker, memo, home)
+        key = (blocker["kind"], blocker["ref"])
+        if state == blocker_check.CLEARED:
+            cleared.add(key)
+            if key[0] == "run_landed" and payload.get("sha"):
+                shas.append(payload["sha"])
+        elif state == blocker_check.DEAD:
+            dead.append((blocker, payload))
+        elif state == blocker_check.LIVE and payload.get("sizing_rel"):
+            refire.append((blocker, payload))
+    surface = record.get("on_blocker_dead", stage_wait.ON_BLOCKER_DEAD[0]) != "proceed"
+    if dead and surface:
+        if cleared:
+            _apply_drop(root, path, cleared, set())
+        acted = _surface(root, path, dead[0][0], now)
+        if acted is not None:
+            actions.append(acted)
+        return
+    proceeded: set = set()
+    for blocker, payload in dead:
+        if payload.get("sizing_rel"):
+            refire.append((blocker, payload))
+        else:
+            proceeded.add((blocker["kind"], blocker["ref"]))
+    for blocker, payload in refire:
+        owner, mtime = blocker["ref"], payload.get("marker_mtime", 0.0)
+        if _cooling(record, owner, mtime, now):
+            continue
+        acted = _owner_refire(root, path, owner, payload["sizing_rel"], mtime, now)
+        if acted is None:
+            continue
+        woken = acted.pop("woken", None)
+        if acted["action"] == "cap":
+            acted = _surface(root, path, blocker, now)
+            if acted is None:
+                continue
+        actions.append(acted)
+        if woken:
+            resumes.append((woken, None))
+    if cleared or proceeded:
+        woken = _apply_drop(root, path, cleared, proceeded)
+        if woken is not None:
+            ref = sorted(ref for _, ref in cleared | proceeded)[-1]
+            actions.append({"waiter": path.stem, "owner": ref, "action": "wake" if cleared else "proceed-without-owner"})
+            resumes.append((woken, shas[0] if shas else None))
+
+
 def sweep(root: Path, now: Optional[float] = None) -> list[dict]:
     """One pass over `root`'s un-started stage waits; the actions taken (`owner-refire`, `proceed-without-owner`,
-    `wake`), each with its `waiter` and `owner`. Idempotent: a second pass with nothing changed acts on nothing."""
+    `wake`, `attention`, `pm-resolved`), each with its `waiter` and `owner`. Idempotent: a second pass with
+    nothing changed acts on nothing."""
     moment = time.time() if now is None else now
     directory = stage_wait._wait_dir(Path(root))
     if directory is None:
         return []
-    verdicts: dict[str, tuple] = {}
+    home = run_token._record_home(Path(root))
+    memo: dict = {}
     actions: list[dict] = []
-    resume: list[dict] = []
-    ended: list[str] = []
+    resumes: list = []
     for name, record in _cached_records(Path(root), directory):
         if record.get("started"):
             continue
-        for owner in list(record.get("blockers") or ()):
-            if not isinstance(owner, str):
-                continue
-            if owner not in verdicts:
-                verdicts[owner] = _classify(root, owner)
-            kind, sizing_rel, mtime = verdicts[owner]
-            if kind == _ENDED:
-                if owner not in ended:
-                    ended.append(owner)
-            elif kind == _REFIRE and not _cooling(record, owner, mtime, moment):
-                acted = _owner_refire(root, directory / name, owner, sizing_rel, mtime, moment)
-                if acted is not None:
-                    woken = acted.pop("woken", None)
-                    actions.append(acted)
-                    if woken:
-                        resume.append(woken)
-    for owner in ended:
-        for waiter in stage_wait.wake_on_end(root, owner):
-            resume.append(waiter)
-            actions.append({"waiter": waiter["run_id"], "owner": owner, "action": "wake"})
-    for waiter in resume:
+        path = directory / name
+        if record.get("status") == STATUS_ATTENTION:
+            _attention_tick(root, path, record, actions, resumes)
+        else:
+            _tick_record(root, path, record, memo, home, moment, actions, resumes)
+    for waiter, sha in resumes:
         try:
-            run_token._resume_stage_waiter(root, waiter)
+            run_token._resume_stage_waiter(root, waiter, sha=sha)
         except Exception:  # noqa: BLE001 -- one waiter's resume failure must not strand the others
             _log.warning("stranded-wait resume of %s failed", waiter.get("run_id"), exc_info=True)
     return actions

@@ -657,6 +657,42 @@ def test_run_all_phases_scratchpad_class_dispatches_phase(tmp_path, monkeypatch,
     assert "scratchpad" in totals
 
 
+def _run_all_scratch_class(tmp_path, *, apply):
+    return cruft_sweep._run_all_phases(
+        "scratch", apply, False, True, 14, 7,
+        Path("/nonexistent-projects"), Path("/nonexistent-fh"), None, tmp_path / "log.tsv",
+        tmp_path / "not-a-repo", [], [], None, None,
+    )
+
+
+def test_default_scratch_sweep_removes_dead_pid_claim_and_keeps_live_one(tmp_path, monkeypatch):
+    from coordinator_core import run_scratch
+
+    monkeypatch.setenv("MACHINE_LOCAL_PATHS_SCRATCH_ROOT", str(tmp_path / "box-scratch"))
+    monkeypatch.setenv("MACHINE_LOCAL_PATHS_BUILD_ROOT", str(tmp_path / "box-build"))
+    live = run_scratch.claim("claude-klabauter", "land", "live")
+    dead = run_scratch.claim("claude-klabauter", "land", "dead", pid=2_000_000_000)
+
+    totals = _run_all_scratch_class(tmp_path, apply=True)
+
+    assert not dead.exists() and live.is_dir()
+    assert totals["scratch"]["items"] >= 1
+    assert "run-scratch" in (tmp_path / "log.tsv").read_text(encoding="utf-8")
+
+
+def test_dry_run_scratch_sweep_leaves_dead_pid_claim(tmp_path, monkeypatch):
+    from coordinator_core import run_scratch
+
+    monkeypatch.setenv("MACHINE_LOCAL_PATHS_SCRATCH_ROOT", str(tmp_path / "box-scratch"))
+    monkeypatch.setenv("MACHINE_LOCAL_PATHS_BUILD_ROOT", str(tmp_path / "box-build"))
+    run_scratch.claim("claude-klabauter", "land", "live")
+    dead = run_scratch.claim("claude-klabauter", "land", "dead", pid=2_000_000_000)
+
+    _run_all_scratch_class(tmp_path, apply=False)
+
+    assert dead.is_dir()
+
+
 def test_run_all_phases_harness_and_scratch_classes_do_not_dispatch_scratchpad(monkeypatch):
     called = {"hit": False}
 
@@ -1507,3 +1543,209 @@ def test_sweep_scratch_clone_with_zero_threshold_ignores_mtime_floor(tmp_path):
     )
     assert items == 1
     assert not clones["fresh"].exists()
+
+
+# ---------------------------------------------------------------------------
+# sweep_owner_dead_scratch: owner-marked scratch copies and temp indexes
+# ---------------------------------------------------------------------------
+
+
+def _owner_mark_file(target: Path, owner_id: str, *, age_secs: int = 3 * 86400) -> None:
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    created = (datetime.now(timezone.utc) - timedelta(seconds=age_secs)).isoformat()
+    mark = {"owner_kind": "session", "owner_id": owner_id, "repo": None, "created": created, "ttl_hours": None}
+    _write(target, json.dumps(mark))
+
+
+def _owned_copy(scratch: Path, name: str, owner_id: str, *, age_secs: int = 3 * 86400) -> Path:
+    copy = scratch / name
+    _write(copy / "pyproject.toml", "[project]\n")
+    _owner_mark_file(copy / ".owner.json", owner_id, age_secs=age_secs)
+    return copy
+
+
+def _owned_index(scratch: Path, name: str, owner_id: str, *, age_secs: int = 3 * 86400) -> Path:
+    index = scratch / "gw" / name
+    _write(index, "idx")
+    _owner_mark_file(Path(str(index) + ".owner.json"), owner_id, age_secs=age_secs)
+    return index
+
+
+@pytest.fixture
+def owner_world(monkeypatch, tmp_path):
+    """Owners `live` and `unknown` map to True and None; any other owner id is dead. Keep-set empty."""
+    from coordinator_core import owner_mark
+
+    table = {"live": True, "unknown": None}
+    monkeypatch.setattr(owner_mark, "owner_alive", lambda mark: table.get(mark["owner_id"], False))
+    keep: dict = {"publish-engine": [], "clean-mirror": [], "publish-clone": []}
+    monkeypatch.setattr(owner_mark, "keep_paths", lambda: keep)
+    scratch = tmp_path / "repo" / "scratch"
+    scratch.mkdir(parents=True)
+    return scratch, keep
+
+
+def _owner_sweep(scratch: Path, *, apply: bool = True):
+    return cruft_sweep.sweep_owner_dead_scratch(scratch.parent, now=time.time(), apply=apply, quiet=True)
+
+
+def test_owner_dead_copy_and_temp_index_swept_live_unknown_unmarked_kept(owner_world):
+    scratch, _ = owner_world
+    dead = _owned_copy(scratch, "verify-x", "dead")
+    live = _owned_copy(scratch, "live-copy", "live")
+    unknown = _owned_copy(scratch, "unk-copy", "unknown")
+    unmarked = scratch / "unmarked"
+    _write(unmarked / "f.txt", "x")
+    dead_idx = _owned_index(scratch, "land.index", "dead")
+    live_idx = _owned_index(scratch, "live.index", "live")
+    bare_idx = scratch / "gw" / "bare.index"
+    _write(bare_idx, "idx")
+
+    _, items = _owner_sweep(scratch)
+
+    assert items == 2
+    assert not dead.exists() and not dead_idx.exists()
+    assert not Path(str(dead_idx) + ".owner.json").exists()
+    for kept in (live, unknown, unmarked, live_idx, bare_idx):
+        assert kept.exists(), kept.name
+
+
+def test_owner_dead_but_inside_floor_is_kept(owner_world):
+    scratch, _ = owner_world
+    young = _owned_copy(scratch, "young", "dead", age_secs=3600)
+    young_idx = _owned_index(scratch, "young.index", "dead", age_secs=3600)
+
+    assert _owner_sweep(scratch) == (0, 0)
+    assert young.exists() and young_idx.exists()
+
+
+def test_dry_run_counts_owner_dead_without_deleting(owner_world):
+    scratch, _ = owner_world
+    dead = _owned_copy(scratch, "verify-x", "dead")
+
+    _, items = _owner_sweep(scratch, apply=False)
+
+    assert items == 1 and dead.exists()
+
+
+def test_keep_set_member_survives_at_any_age(owner_world):
+    scratch, keep = owner_world
+    engine = _owned_copy(scratch, "claude-klabauter-publish-engine", "dead", age_secs=400 * 86400)
+    holder = _owned_copy(scratch, "mirror-holder", "dead", age_secs=400 * 86400)
+    keep["publish-engine"].append(engine)
+    keep["clean-mirror"].append(holder / "inner")
+    plain = _owned_copy(scratch, "plain", "dead", age_secs=400 * 86400)
+
+    _, items = _owner_sweep(scratch)
+
+    assert items == 1
+    assert engine.exists() and holder.exists() and not plain.exists()
+
+
+def test_unreadable_keep_set_deletes_nothing(owner_world, monkeypatch):
+    from coordinator_core import owner_mark
+
+    scratch, _ = owner_world
+    dead = _owned_copy(scratch, "verify-x", "dead")
+
+    def boom():
+        raise OSError("registry unreadable")
+
+    monkeypatch.setattr(owner_mark, "keep_paths", boom)
+
+    assert _owner_sweep(scratch) == (0, 0)
+    assert dead.exists()
+
+
+def test_tracked_content_and_unreadable_index_are_never_deleted(owner_world, monkeypatch):
+    scratch, _ = owner_world
+    dead = _owned_copy(scratch, "verify-x", "dead")
+    other = _owned_copy(scratch, "other", "dead")
+
+    monkeypatch.setattr(cruft_sweep, "_tracked_under", lambda root, rels: {"scratch/verify-x"})
+    _, items = _owner_sweep(scratch)
+    assert items == 1 and dead.exists() and not other.exists()
+
+    again = _owned_copy(scratch, "again", "dead")
+    monkeypatch.setattr(cruft_sweep, "_tracked_under", lambda root, rels: None)
+    assert _owner_sweep(scratch) == (0, 0)
+    assert again.exists()
+
+
+def test_pid_suffixed_temp_index_with_dead_pid_is_swept(monkeypatch, tmp_path):
+    from coordinator_core import owner_mark
+    from coordinator_core.ask_spool import record
+
+    monkeypatch.setattr(owner_mark, "keep_paths", lambda: {})
+    monkeypatch.setattr(record, "pid_state", lambda pid: pid == 4242)
+    monkeypatch.setattr(record, "pid_create_time", lambda pid: None)
+    scratch = tmp_path / "repo" / "scratch"
+    dead = scratch / "gw" / "land-999999.index"
+    live = scratch / "gw" / "land-4242.index"
+    for f in (dead, live):
+        _write(f, "idx")
+        old = time.time() - 3 * 86400
+        os.utime(f, (old, old))
+
+    _, items = _owner_sweep(scratch)
+
+    assert items == 1
+    assert not dead.exists() and live.exists()
+
+
+def _link_dir(link: Path, target: Path) -> bool:
+    """Make `link` a symlink or (Windows) junction to `target`; False when neither is permitted."""
+    import subprocess
+
+    try:
+        os.symlink(target, link, target_is_directory=True)
+        return True
+    except (OSError, NotImplementedError):
+        pass
+    if sys.platform != "win32":
+        return False
+    done = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return done.returncode == 0
+
+
+def test_link_inside_swept_dir_is_unlinked_and_target_untouched(owner_world, tmp_path):
+    scratch, _ = owner_world
+    dead = _owned_copy(scratch, "verify-x", "dead")
+    outside = tmp_path / "outside"
+    _write(outside / "precious.txt", "keep me")
+    if not _link_dir(dead / "state", outside):
+        pytest.skip("no symlink or junction permission")
+
+    _, items = _owner_sweep(scratch)
+
+    assert items == 1 and not dead.exists()
+    assert (outside / "precious.txt").read_text() == "keep me"
+
+
+def test_unlink_links_in_removes_link_not_target(tmp_path):
+    tree = tmp_path / "tree"
+    (tree / "nested").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    _write(outside / "precious.txt", "keep me")
+    if not _link_dir(tree / "nested" / "lnk", outside):
+        pytest.skip("no symlink or junction permission")
+
+    assert cruft_sweep._unlink_links_in(tree) == 1
+    assert not (tree / "nested" / "lnk").exists()
+    assert (outside / "precious.txt").exists() and tree.exists()
+
+
+def test_unlink_links_in_on_a_link_root_removes_only_the_link(tmp_path):
+    outside = tmp_path / "outside"
+    _write(outside / "precious.txt", "keep me")
+    link = tmp_path / "lnk"
+    if not _link_dir(link, outside):
+        pytest.skip("no symlink or junction permission")
+
+    assert cruft_sweep._unlink_links_in(link) == 1
+    assert not link.exists() and (outside / "precious.txt").exists()

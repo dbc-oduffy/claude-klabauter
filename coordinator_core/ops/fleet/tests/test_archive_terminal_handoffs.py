@@ -219,6 +219,39 @@ def test_a_held_claim_no_longer_retains_a_terminal_baton(repo: Path):
     )
 
 
+def test_month_dir_shipped_baton_is_listed_by_default_dry_run(repo: Path):
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    name = "2026-11-05-month-dir-shipped.md"
+    path = repo / "state" / "handoffs" / "2026-11" / name
+    _write(
+        path,
+        f'---\ntitle: "{name}"\ncreated: 2026-11-05\nstatus: claimed\n'
+        f'deployment_state: shipped\nshipped_in: "{head_sha}"\n---\n\nBody.\n',
+    )
+    _git(repo, "add", str(path.relative_to(repo)))
+    _git(repo, "commit", "-q", "-m", f"add {name}")
+    cid = f"state/handoffs/2026-11/{name}"
+
+    assert path in collect_live_handoff_paths(repo)
+    (repo / "state" / "handoffs" / "notamonth").mkdir()
+    _write(repo / "state" / "handoffs" / "notamonth" / "x.md", "x\n")
+    assert all("notamonth" not in p.parts for p in collect_live_handoff_paths(repo))
+
+    preview = _run(_handler(
+        {"mode": "already-terminal", "dry_run": True, "cap": 10},
+        repo_root=_common_dir(repo),
+    ))
+    assert cid in [c["id"] for c in preview.get("candidates", [])], preview
+
+    act = _run(_handler(
+        {"mode": "already-terminal", "dry_run": False, "cap": 10, "candidate_ids": [cid]},
+        repo_root=_common_dir(repo),
+    ))
+    assert cid in [item["id"] for item in act.get("acted", [])], act
+    assert not path.exists()
+    assert len(list((repo / "archive" / "handoffs").rglob(name))) == 1
+
+
 def test_ac3_unresolvable_shipped_in_refusal_is_named_in_skipped(repo: Path):
     name = "2026-01-03-unresolvable-shipped-in.md"
     _seed(

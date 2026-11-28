@@ -51,7 +51,21 @@ RESUME_KEYS = ("run_id", "sizing", "halted", "stage")
 # HALT_PHASE omits it (a full pass).
 RESUME_PHASE_KEY = "phase"
 
-INPUT_KINDS = ("rule", "repin", "touchpoint", "em-discharge", "wait")
+# A halt whose fix lies outside the plan's frozen footprint: a refire replays the same plan and halts again, so
+# the envelope names the replan (resume phase `plan`) and carries the scope the replan must mint rows for.
+REPLAN_KIND = "replan"
+HALT_PREMISE_WIDENED = "premise_widened"
+HALT_OUTSIDE_FOOTPRINT = "outside_footprint"
+REPLAN_HALTS = (HALT_PREMISE_WIDENED, HALT_OUTSIDE_FOOTPRINT)
+# ask_stage's `PREMISE-WIDENED:` refusal prefix, spelled out because this leaf must not import ask_stage.
+PREMISE_WIDENED_MARKER = "PREMISE-WIDENED:"
+OUTSIDE_FOOTPRINT_BLOCKER = r"gate-blocker:\s*outside-footprint"
+# `self_correction.status` of a halt-fix loop that needed a path outside the run footprint.
+SELF_CORRECTION_SCOPE_STATUS = "scope"
+SELF_CORRECTION_KEY = "self_correction"
+HALT_TEXT_KEYS = ("reason", "error", "detail")
+
+INPUT_KINDS = ("rule", "repin", "touchpoint", "em-discharge", "wait", REPLAN_KIND)
 LEGACY_INPUT_KIND = {
     "rule_and_refire": "rule",
     "rule_on_blocking_rows": "rule",
@@ -105,7 +119,8 @@ def refire_next_action(
     """The envelope `{kind, op, call, resume, input, detail}`; `stage` is copied unchanged.
 
     `resume.phase` is HALT_PHASE[halted] and absent for a kind that map does not name. `host` defaults to
-    `detect_host()`; an engine-ask `call` is rendered host-native by `host_native_call`.
+    `detect_host()`; an engine-ask `call` is rendered host-native by `host_native_call`. A `halted` in
+    REPLAN_HALTS makes the envelope `kind` REPLAN_KIND; every other field keeps the refire shape.
     """
     call = host_native_call(call, detect_host() if host is None else host) if op == OP_ENGINE_ASK else call
     resume = {"run_id": run_id, "sizing": sizing, "halted": halted, "stage": stage}
@@ -113,7 +128,7 @@ def refire_next_action(
     if phase is not None:
         resume[RESUME_PHASE_KEY] = phase
     return {
-        "kind": REFIRE_KIND,
+        "kind": REPLAN_KIND if halted in REPLAN_HALTS else REFIRE_KIND,
         "op": op,
         "call": call,
         "resume": resume,
@@ -128,7 +143,49 @@ def refire_next_action(
 def refire_applied(run_id: str, halted: str, phase: str | None) -> list[str]:
     """What the refire re-arms: the halted run, its halt kind and the phase it resumes at."""
     where = f" at phase {phase}" if phase is not None else " as a full pass"
-    return [f"re-arm {halted} halt of run {run_id}{where}"]
+    verb = "replan" if halted in REPLAN_HALTS else "re-arm"
+    return [f"{verb} {halted} halt of run {run_id}{where}"]
+
+
+def replan_halt_kind(halted: object) -> str | None:
+    """HALT_PREMISE_WIDENED or HALT_OUTSIDE_FOOTPRINT when `halted` (a halt record) is replan-class, else None.
+
+    Replan-class: a `PREMISE-WIDENED:` stage refusal in `reason`/`error`/`detail`, a `self_correction` that
+    ended `scope`, or a `gate-blocker: outside-footprint` line in those fields. Twin of `_replanKind` in the
+    emitted finaliser.
+    """
+    if not isinstance(halted, dict):
+        return None
+    texts = [halted[k] for k in HALT_TEXT_KEYS if isinstance(halted.get(k), str)]
+    if any(PREMISE_WIDENED_MARKER in t for t in texts):
+        return HALT_PREMISE_WIDENED
+    sc = halted.get(SELF_CORRECTION_KEY)
+    if isinstance(sc, dict) and sc.get("status") == SELF_CORRECTION_SCOPE_STATUS:
+        return HALT_OUTSIDE_FOOTPRINT
+    if any(re.search(OUTSIDE_FOOTPRINT_BLOCKER, t) for t in texts):
+        return HALT_OUTSIDE_FOOTPRINT
+    return None
+
+
+def replan_input(halted: object) -> dict:
+    """The `input` of a replan envelope: `added_scope` (the widened-premise reason text) and `needs_paths`.
+
+    `needs_paths` is the halt's self-correction `needs_paths`, strings only; the replan mints rows for them.
+    """
+    rec = halted if isinstance(halted, dict) else {}
+    sc = rec.get(SELF_CORRECTION_KEY)
+    paths = sc.get("needs_paths") if isinstance(sc, dict) else None
+    scope = []
+    for key in HALT_TEXT_KEYS:
+        text = rec.get(key)
+        if isinstance(text, str) and PREMISE_WIDENED_MARKER in text:
+            scope.append(text.split(PREMISE_WIDENED_MARKER, 1)[1].strip())
+            break
+    return {
+        "kind": REPLAN_KIND,
+        "added_scope": scope,
+        "needs_paths": [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else [],
+    }
 
 
 def refire_reply(envelope: dict) -> MutationReply:
@@ -237,12 +294,12 @@ def _call_is_one_engine_call(op: str, call: str, host: str | None = None) -> boo
 
 
 def is_refire_next_action(obj: object, host: str | None = None) -> bool:
-    """True only for an envelope naming one engine call and no hand-repair step.
+    """True only for an envelope naming one engine call and no hand-repair step; a replan envelope qualifies.
 
     `host` names a Workflow-less submitter (see `detect_host`): its engine-ask call must be the CLI submit.
     `input` is not scanned: it carries reviewer and ruling text verbatim.
     """
-    if not isinstance(obj, dict) or obj.get("kind") != REFIRE_KIND:
+    if not isinstance(obj, dict) or obj.get("kind") not in (REFIRE_KIND, REPLAN_KIND):
         return False
     op = obj.get("op")
     if op not in OPS:
@@ -348,6 +405,33 @@ _WITH_FOOTPRINT_JS = "\n".join(
 )
 
 
+def _replan_js() -> str:
+    """JS twins of `replan_halt_kind` and `replan_input`: `_replanKind(_h)` and `_replanInput(_h)`."""
+    j = json.dumps
+    return "\n".join(
+        [
+            "function _replanKind(_h) {",
+            "  if (!_h || typeof _h !== 'object') return null;",
+            f"  const _t = {j(list(HALT_TEXT_KEYS))}.map((_k) => _h[_k]).filter((_v) => typeof _v === 'string');",
+            f"  if (_t.some((_v) => _v.includes({j(PREMISE_WIDENED_MARKER)}))) return {j(HALT_PREMISE_WIDENED)};",
+            f"  const _sc = _h[{j(SELF_CORRECTION_KEY)}];",
+            f"  if (_sc && typeof _sc === 'object' && _sc.status === {j(SELF_CORRECTION_SCOPE_STATUS)}) return {j(HALT_OUTSIDE_FOOTPRINT)};",
+            f"  if (_t.some((_v) => new RegExp({j(OUTSIDE_FOOTPRINT_BLOCKER)}).test(_v))) return {j(HALT_OUTSIDE_FOOTPRINT)};",
+            "  return null;",
+            "}",
+            "function _replanInput(_h) {",
+            f"  const _sc = _h[{j(SELF_CORRECTION_KEY)}];",
+            "  const _scope = [];",
+            f"  for (const _k of {j(list(HALT_TEXT_KEYS))}) {{",
+            f"    if (typeof _h[_k] === 'string' && _h[_k].includes({j(PREMISE_WIDENED_MARKER)})) {{ _scope.push(_h[_k].split({j(PREMISE_WIDENED_MARKER)}).slice(1).join({j(PREMISE_WIDENED_MARKER)}).trim()); break; }}",
+            "  }",
+            f"  return {{ kind: {j(REPLAN_KIND)}, added_scope: _scope,",
+            "    needs_paths: (_sc && Array.isArray(_sc.needs_paths) ? _sc.needs_paths : []).filter((_p) => typeof _p === 'string') };",
+            "}",
+        ]
+    )
+
+
 # JS twin of `host_native_call`, emitted only for a Workflow-less submitter so a Claude script is unchanged.
 _HOST_NATIVE_JS = "\n".join(
     [
@@ -387,6 +471,7 @@ def refire_next_action_js(
     return "\n".join(
         [
             _WITH_FOOTPRINT_JS,
+            _replan_js(),
             *([_HOST_NATIVE_JS] if native else []),
             "function _refireNextAction() {",
             "  if (!_halted || typeof _halted !== 'object') return;",
@@ -405,11 +490,13 @@ def refire_next_action_js(
             f"    if (!(_halted.next_action && _halted.next_action.kind === {j(EXIT_KIND)})) _halted['next_action'] = _emptyPrepLandedExit();",
             "    return;",
             "  }",
-            f"  const _hk = {kind_js};",
+            f"  let _hk = {kind_js};",
             f"  if ({j(list(ENVELOPE_EXEMPT_KINDS))}.includes(_hk)) return;",
             f"  if ({j(list(FANNED_KINDS))}.includes(_hk) && Array.isArray(_halted.fire) && _halted.fire.length) return;",
             f"  const _legacy = {legacy_js};",
             f"  if (_legacy && typeof _legacy === 'object' && _legacy.kind === {j(REFIRE_KIND)}) return;",
+            f"  if (_legacy && typeof _legacy === 'object' && _legacy.kind === {j(REPLAN_KIND)}) return;",
+            "  const _rk = typeof _hk === 'string' && _hk !== " + j(HALT_USAGE_LIMIT) + " ? _replanKind(_halted) : null;",
             f"  const _legacyKind = {j(LEGACY_INPUT_KIND)};",
             f"  const _byHalt = {j(INPUT_BY_HALT)};",
             f"  const _haltPhase = {j(HALT_PHASE)};",
@@ -423,15 +510,16 @@ def refire_next_action_js(
             f"    _detail = {detail_js};",
             "  }",
             "  if (!_input && _byHalt[_hk]) _input = { kind: _byHalt[_hk] };",
+            "  if (_rk) { _input = Object.assign({}, _input && typeof _input === 'object' ? _input : {}, _replanInput(_halted)); _hk = _rk; }",
             "  _halted.next_action = {",
-            f"    kind: {j(REFIRE_KIND)},",
+            f"    kind: _rk ? {j(REPLAN_KIND)} : {j(REFIRE_KIND)},",
             f"    op: _hk === {j(HALT_USAGE_LIMIT)} ? {j(OP_WORKFLOW_RESUME)} : {j(OP_ENGINE_ASK)},",
             f"    call: {'_hostNativeCall(' if native else ''}_withFootprint({call_js}){')' if native else ''},",
             f"    resume: Object.assign({{ run_id: {run_id_js}, sizing: {sizing_js}, halted: _hk, stage: {stage_js} }}, Object.prototype.hasOwnProperty.call(_haltPhase, _hk) ? {{ {j(RESUME_PHASE_KEY)}: _haltPhase[_hk] }} : {{}}),",
             "    input: _input,",
             "    detail: _detail === undefined ? null : _detail,",
             f"    {EM_RULE_KEY}: {j(EM_ACTION_AFTER_HALT_RULE)},",
-            f"    {APPLIED_KEY}: ['re-arm ' + _hk + ' halt of run ' + {run_id_js} + (Object.prototype.hasOwnProperty.call(_haltPhase, _hk) ? ' at phase ' + _haltPhase[_hk] : ' as a full pass')],",
+            f"    {APPLIED_KEY}: [(_rk ? 'replan ' : 're-arm ') + _hk + ' halt of run ' + {run_id_js} + (Object.prototype.hasOwnProperty.call(_haltPhase, _hk) ? ' at phase ' + _haltPhase[_hk] : ' as a full pass')],",
             f"    {REFUSED_KEY}: [],",
             "  };",
             "}",

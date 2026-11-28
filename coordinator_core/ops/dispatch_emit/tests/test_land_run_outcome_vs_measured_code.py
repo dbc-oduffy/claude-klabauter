@@ -114,3 +114,12 @@ def test_land_legs_record_always_carries_withheld_reasons_even_empty(tmp_path):
     rid = "ask-20261120T000001-abcdef"
     land_leg_record.write(tmp_path, rid, outcome="landed", leg=None, bound_by=None, legs=[])
     assert json.loads((record_dir(tmp_path, rid) / land_leg_record.FILE_NAME).read_text())["withheld_reasons"] == {}
+
+
+def test_a_partial_record_is_a_committed_outcome_and_is_not_overwritten_by_a_halt(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    rid = "ask-20261120T000002-abcdef"
+    land_leg_record.write(tmp_path, rid, outcome="partial", leg=None, bound_by=None, legs=[])
+    land_leg_record.write(tmp_path, rid, outcome=land_leg_record.OUTCOME_HALT, leg="x", bound_by=None, legs=[])
+    assert json.loads((record_dir(tmp_path, rid) / land_leg_record.FILE_NAME).read_text())["outcome"] == "partial"

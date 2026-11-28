@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from coordinator_core import machine_resolver, publish_round
+from coordinator_core import machine_resolver, publish_round, run_scratch
 
 
 @pytest.fixture
@@ -36,8 +36,8 @@ def _dead_pid() -> int:
 def test_round_dir_layout_and_normal_exit_removal(scratch):
     with publish_round.round_dir() as rnd:
         assert rnd.is_dir()
-        assert rnd.parent == scratch / publish_round._REPO_DIR_NAME
-        assert rnd.name.startswith(f"publish-round-{os.getpid()}-")
+        assert rnd.parent == scratch / publish_round._REPO_DIR_NAME / "publish-round"
+        assert rnd.name.startswith("round.") and rnd.name.endswith(f".{os.getpid()}")
         assert os.environ[publish_round.ROUND_ENV] == str(rnd)
         assert publish_round.current_round() == rnd
     assert not rnd.exists()
@@ -96,12 +96,12 @@ def test_current_round_ignores_env_naming_a_missing_dir(scratch, monkeypatch):
 
 
 def test_reap_dead_rounds_removes_dead_keeps_live_and_foreign(scratch):
-    root = scratch / publish_round._REPO_DIR_NAME
-    dead = root / f"publish-round-{_dead_pid()}-aabbccdd"
-    (dead / "mirror-k").mkdir(parents=True)
-    foreign = root / "not-a-round"
-    foreign.mkdir()
+    root = scratch / publish_round._REPO_DIR_NAME / "publish-round"
     with publish_round.round_dir() as live:
+        dead = run_scratch.claim(publish_round._REPO_DIR_NAME, "publish-round", "round", pid=_dead_pid())
+        (dead / "mirror-k").mkdir()
+        foreign = root / "not-a-round"
+        foreign.mkdir()
         removed = publish_round.reap_dead_rounds()
         assert removed == [dead]
         assert live.is_dir()
@@ -114,7 +114,7 @@ def test_is_round_path_refuses_round_candidates_and_accepts_engine_root(scratch)
     engine_script.parent.mkdir()
     engine_script.write_text("")
     assert not publish_round.is_round_path(engine_script)
-    assert not publish_round.is_round_path(scratch / publish_round._REPO_DIR_NAME / "not-a-round" / "x.py")
+    assert not publish_round.is_round_path(scratch / publish_round._REPO_DIR_NAME / "publish-round" / "not-a-round" / "x.py")
     with publish_round.round_dir() as rnd:
         assert publish_round.is_round_path(rnd)
         assert publish_round.is_round_path(publish_round.mirror_dest("k") / "coordinator" / "bin" / "x.py")
@@ -126,9 +126,8 @@ def test_is_round_path_false_when_scratch_root_unset(monkeypatch):
 
 
 def test_live_round_mirrors_lists_only_live_owner_mirrors(scratch):
-    root = scratch / publish_round._REPO_DIR_NAME
-    dead = root / f"publish-round-{_dead_pid()}-aabbccdd"
-    (dead / "mirror-k").mkdir(parents=True)
+    dead = run_scratch.claim(publish_round._REPO_DIR_NAME, "publish-round", "round", pid=_dead_pid())
+    (dead / "mirror-k").mkdir()
     with publish_round.round_dir() as live:
         mine = publish_round.mirror_dest("k")
         mine.mkdir()

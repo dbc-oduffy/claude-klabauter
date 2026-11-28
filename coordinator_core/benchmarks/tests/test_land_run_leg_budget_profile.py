@@ -132,7 +132,7 @@ def test_rows_over_small_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     siblings = 2
     rows = lb.run(tmp_path, siblings, tracked=20, chain=3, attribute=False)
     by_axis = {r.axis: r for r in rows}
-    assert set(by_axis) == {lb.WHOLE_OP, lb.AXIS_READ_TO_INTEGRITY, lb.AXIS_HOLDS, lb.AXIS_SPINE}
+    assert {lb.WHOLE_OP, lb.AXIS_READ_TO_INTEGRITY, lb.AXIS_HOLDS, lb.AXIS_SPINE} <= set(by_axis)
     for row in rows:
         assert row.process_time_ms >= 0.0 and row.spawns >= 0
         assert row.attribution["siblings"] == siblings
@@ -142,6 +142,50 @@ def test_rows_over_small_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     whole = by_axis[lb.WHOLE_OP]
     assert whole.spine_parses >= holds.spine_parses
     assert whole.attribution["sizing_parses"] >= siblings and whole.attribution["plan_parses"] >= siblings
+
+
+def test_claims_fixture_yields_receipts_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _bind_env(monkeypatch)
+    lb.main(["--claims", "6", "--siblings", "0", "--tracked", "20", "--chain", "3", "--json", "--dir", str(tmp_path)])
+    rows = json.loads(capsys.readouterr().out)
+    by_axis = {r["axis"]: r for r in rows}
+    for axis in (lb.WHOLE_OP, lb.AXIS_RECEIPTS, lb.LEG_AXIS_PREFIX + lb.LEG_RECEIPTS):
+        row = by_axis[axis]
+        assert row["process_time_ms"] >= 0.0 and row["spawns"] >= 0
+        assert row["attribution"]["claims"] == 6
+    receipts = by_axis[lb.AXIS_RECEIPTS]["attribution"]
+    assert receipts["measured"] is True and receipts["calls"] == 1
+    assert by_axis[lb.LEG_AXIS_PREFIX + lb.LEG_RECEIPTS]["process_time_ms"] == by_axis[lb.AXIS_RECEIPTS]["process_time_ms"]
+
+
+def test_add_claims_spreads_foreign_claims_and_holds_one_handoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _bind_env(monkeypatch)
+    from coordinator_core.session import core as session_core
+    from coordinator_core.tests.git_seed import seeded_repo
+
+    repo = seeded_repo(tmp_path, readme="x")
+    assert lb.add_claims(repo, 7) == 7
+    hub = Path(session_core.sessions_dir(str(repo)))
+    counts = {cls: len(list((hub / cls).iterdir())) for cls in lb.FOREIGN_CLAIM_CLASSES}
+    assert sorted(counts.values()) == [2, 2, 3]
+    mine = hub / "handoff-claims" / lb.CLAIM_BATON / "session_id"
+    assert mine.read_text(encoding="utf-8") == lb.SELF
+    assert (repo / "state" / "handoffs" / lb.CLAIM_BATON).is_file()
+
+
+def test_install_meters_mark_and_check_and_undoes_both() -> None:
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    real = (land_deadline.check, land_deadline.mark)
+    prof = lb.Profiler(attribute=False, per_leg=True)
+    undo = lb._install(prof)
+    try:
+        land_deadline.mark("land_run.receipts")
+        land_deadline.check("land_run.integrity")
+    finally:
+        undo()
+    assert [m[0] for m in prof.marks] == ["land_run.receipts", "land_run.integrity"]
+    assert (land_deadline.check, land_deadline.mark) == real
 
 
 def test_script_mode_mints_no_token_into_the_outer_settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

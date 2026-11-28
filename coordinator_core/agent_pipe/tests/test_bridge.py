@@ -21,6 +21,7 @@ LABEL = "[from a (claude) via bridge]"
 @pytest.fixture(autouse=True)
 def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    monkeypatch.setenv("AGY_BRAIN_DIR", str(tmp_path / "ag" / "brain"))
 
 
 def _mail(session: str) -> list[dict]:
@@ -101,6 +102,86 @@ def test_agy_leg_resumes_conversation_with_labelled_text(monkeypatch: pytest.Mon
     res.wait(20)
     assert res.status == "handed-off"
     assert json.loads(out.read_text()) == ["conv-9", f"{LABEL}\nyo"]
+
+
+def _spool(tmp_path: Path, conv: str) -> list[dict]:
+    path = tmp_path / "unimatrix" / "agy-legs" / f"{conv}.queue.jsonl"
+    return [json.loads(x) for x in path.read_text().splitlines()] if path.exists() else []
+
+
+def test_agy_delivery_with_presence_lock_held_spools_and_spawns_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from coordinator_core.agent_pipe import agy as agy_mod
+
+    def no_spawn(*a, **kw):
+        raise AssertionError("agy spawned over a held presence lock")
+
+    monkeypatch.setattr(bridge.subprocess, "Popen", no_spawn)
+    roster.bind("a", "claude", "sess-a")
+    roster.bind("ag", "agy", "conv-9")
+    lock = tmp_path / "ag" / "presence" / "conv-9.lock"
+    lock.parent.mkdir(parents=True)
+    with open(lock, "a+b") as fh:
+        assert agy_mod._try_lock(fh)
+        res = bridge.route(bridge.make_message("a", "ag", "yo"))
+        agy_mod._unlock(fh)
+    assert (res.status, res.reason) == ("queued", "spooled")
+    [line] = _spool(tmp_path, "conv-9")
+    assert line["text"] == f"{LABEL}\nyo" and line["from"] == "a"
+
+
+def test_concurrent_agy_deliveries_never_run_two_resumes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    started = tmp_path / "started"
+    script = f"import time;open({str(started)!r},'a').write('x');time.sleep(1.0)"
+
+    class FakeAgy:
+        def resume_argv(self, conversation, text):
+            return [sys.executable, "-c", script]
+
+    monkeypatch.setattr(bridge, "AgyAdapter", FakeAgy)
+    roster.bind("a", "claude", "sess-a")
+    roster.bind("ag", "agy", "conv-9")
+    first = bridge.route(bridge.make_message("a", "ag", "one"))
+    second = bridge.route(bridge.make_message("a", "ag", "two"))
+    third = bridge.route(bridge.make_message("a", "ag", "three"))
+    assert first.status == "handed-off"
+    assert (second.status, third.status) == ("queued", "queued")
+    assert [x["text"].split("\n")[1] for x in _spool(tmp_path, "conv-9")] == ["two", "three"]
+    first.wait(20)
+    assert started.read_text() == "xx"
+    assert _spool(tmp_path, "conv-9") == []
+    again = bridge.route(bridge.make_message("a", "ag", "four"))
+    assert again.status == "handed-off"
+    again.wait(20)
+    assert started.read_text() == "xxx"
+
+
+def test_spooled_text_is_resumed_once_when_the_running_resume_exits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    out = tmp_path / "texts.jsonl"
+    script = (f"import sys,json,time;open({str(out)!r},'a').write(json.dumps(sys.argv[2])+'\\n');"
+              "time.sleep(0.5)")
+
+    class FakeAgy:
+        def resume_argv(self, conversation, text):
+            return [sys.executable, "-c", script, conversation, text]
+
+    monkeypatch.setattr(bridge, "AgyAdapter", FakeAgy)
+    roster.bind("a", "claude", "sess-a")
+    roster.bind("ag", "agy", "conv-9")
+    first = bridge.route(bridge.make_message("a", "ag", "one"))
+    assert bridge.route(bridge.make_message("a", "ag", "two")).status == "queued"
+    first.wait(20)
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    assert len(rows) == 2 and rows[0].endswith("one") and rows[1].endswith("two")
+
+
+def test_agy_spool_refusal_is_unroutable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*a, **kw):
+        raise bridge.SpoolRefused("spool full")
+
+    monkeypatch.setattr(bridge, "claim_resume", refuse)
+    roster.bind("ag", "agy", "conv-9")
+    res = bridge.route(bridge.make_message("a", "ag", "yo"))
+    assert res.status == "unroutable" and "spool full" in res.reason
 
 
 def _last_log() -> dict:

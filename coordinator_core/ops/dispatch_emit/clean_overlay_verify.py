@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable, Collection, ContextManager, Iterator, Mapping, Optional, Sequence
 
-from coordinator_core import temp_layout
+from coordinator_core import run_scratch, temp_layout
 from coordinator_core.git.run import _git_exe, run_git
 from coordinator_core.locked_write import LockTimeout, held_lock
 from coordinator_core.ops._path_guard import safe_id
@@ -1781,6 +1781,19 @@ def _base_failing(
         return _base_failing_body(dest, mroot, root, run_id, base_sha, ids, extra)
 
 
+RUN_HOLDER_KIND = "overlay-run"
+
+
+def _claim_run_dirs(root: Path, slug: str) -> tuple:
+    """(holder, basetemp, tmp), created: the holder is a run_scratch scratch claim of this process."""
+    repo = re.sub(r"[^A-Za-z0-9_.-]", "-", Path(root).resolve().name) or "repo"
+    holder = run_scratch.claim(repo, RUN_HOLDER_KIND, re.sub(r"[^A-Za-z0-9_.-]", "-", slug) or "run")
+    basetemp, tmp = holder / "bt", holder / "tmp"
+    basetemp.mkdir()
+    tmp.mkdir()
+    return holder, basetemp, tmp
+
+
 def _base_failing_body(
     dest: Path, mroot: Path, root: Path, run_id: str, base_sha: str, ids: Sequence[str], extra,
 ) -> frozenset:
@@ -1790,7 +1803,7 @@ def _base_failing_body(
             _note(extra, files_written=_advance(dest, mroot, base_sha, _mirror_closure(mroot)))
         except _MirrorStale:
             return frozenset()
-        run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, f"{run_id}-base")
+        run_holder, basetemp, tmp = _claim_run_dirs(root, f"{run_id}-base")
         ran = _run(
             _pytest_argv(root, dest, basetemp, ids), dest, None, stall_s=PYTEST_STALL_S,
             env=_pytest_env(tmp, dest, ids),
@@ -1799,7 +1812,7 @@ def _base_failing_body(
         return frozenset()
     finally:
         if run_holder is not None:
-            shutil.rmtree(run_holder, ignore_errors=True)
+            run_scratch.finish(run_holder)
     return frozenset(failing_ids(ran.stdout + ran.stderr)) & frozenset(ids)
 
 
@@ -1977,7 +1990,7 @@ def _real_tree_verdict(
     test either (a genuine infra failure keeps the overlay's own verdict) or could not be launched."""
     from coordinator_core.ops.dispatch_emit import retest_targeted
 
-    run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, run_id)
+    run_holder, basetemp, tmp = _claim_run_dirs(root, run_id)
     try:
         argv = _pytest_argv(root, root, basetemp, seeds, marker)
         ran = _run_pytest_retrying(argv, root, _pytest_env(tmp, root, seeds))
@@ -1992,7 +2005,7 @@ def _real_tree_verdict(
     except (OSError, subprocess.SubprocessError):
         return None
     finally:
-        shutil.rmtree(run_holder, ignore_errors=True)
+        run_scratch.finish(run_holder)
     argv_all = (*launched, shlex.join(argv))
     lead = f"real-tree run: the overlay could not import {source} (a peer's uncommitted hunk)"
     tail = text.strip()[-_OUTPUT_TAIL:]
@@ -2051,7 +2064,7 @@ def verify(
             if extras:
                 _widen(root, dest, mroot, sha, extras)
             run_seeds = narrow_touched_tests(root, dest, base_sha, sha, seeds, touched)
-            run_holder, basetemp, tmp = scoped_pytest.per_run_dirs(root, run_id)
+            run_holder, basetemp, tmp = _claim_run_dirs(root, run_id)
             run_dirs.append(run_holder)
             env = _pytest_env(tmp, dest, [*run_seeds, *extras])
             shard_note = ""
@@ -2159,7 +2172,7 @@ def verify(
         return OverlayVerdict("inconclusive", f"overlay verify did not complete: {type(exc).__name__}: {exc}", seeds, argv=tuple(launched))
     finally:
         for run_dir in run_dirs:
-            shutil.rmtree(run_dir, ignore_errors=True)
+            run_scratch.finish(run_dir)
     argv = tuple(launched)
     if foreign_src:
         fallback = _real_tree_verdict(root, run_id, seeds, marker, foreign_src, argv)
@@ -2341,9 +2354,10 @@ def legacy_landing_key(measured: dict) -> str:
 
 
 def _run_landed_blobs(record_dir: Path) -> dict:
-    """`{path: raw blob sha}` of the run's own latest bytes per path: `kept.json` chunk blobs then
-    post-checkpoint blobs (later wins), then the halt's `evicted.json` blobs for paths neither recorded."""
+    """`{path: raw blob sha}` of the run's own latest bytes per path: `kept.json` chunk blobs, post-checkpoint blobs,
+    then the latest write prints (later wins), then the halt's `evicted.json` blobs for paths none recorded."""
     from coordinator_core.ops.dispatch_emit import kept_work
+    from coordinator_core.ops.dispatch_emit.own_hunk_candidate import printed_blobs
 
     kept = kept_work.read(record_dir)
     found: dict = {}
@@ -2351,6 +2365,7 @@ def _run_landed_blobs(record_dir: Path) -> dict:
         for rel, blob in (recorded.items() if isinstance(recorded, dict) else ()):
             if isinstance(blob, str) and blob:
                 found[rel] = blob
+    found.update(printed_blobs(record_dir))
     try:
         evicted = json.loads((record_dir / "evicted.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -2679,7 +2694,7 @@ def own_hunk_overrides(root: Path, run_id: str, paths: Sequence[str]) -> dict:
 
 def own_delta(root: Path, run_id: str, seed: Sequence[str]) -> tuple:
     """`(paths, overrides)`: `seed` plus the run's own delta it lacks (the manifest's `review_declared_paths`
-    and `_own_written`), and `{path: bytes}` for each of those paths another live run also declared, at HEAD
+    and `_own_written`), and `{path: bytes}` for each of those paths another live run declared or any run's record names (`peer_hunk_runs`, halted included), at HEAD
     plus only the run's own hunks (`own_hunk_overrides`). A shared path with no splittable own hunks (an
     untracked new file has no HEAD blob to split) stays in `paths` and reaches the mirror at its worktree
     bytes, peer hunks included; never HEAD or absent. A path only a peer declares is never added, so it stays
@@ -2722,7 +2737,17 @@ def own_delta(root: Path, run_id: str, seed: Sequence[str]) -> tuple:
     # is the peer's and stays at HEAD. A path the run itself declared or wrote stays even when shared.
     declared = {review_edits.norm(p) for p in owned}
     wanted = [p for p in dict.fromkeys(review_edits.norm(p) for p in extra) if p not in sibling or p in declared]
-    shared = [p for p in (*(review_edits.norm(s) for s in seed), *wanted) if p in sibling]
+    from coordinator_core.ops.dispatch_emit import co_tenant_owner
+
+    def peer_named(p: str) -> bool:
+        if p in sibling:
+            return True
+        try:
+            return bool(co_tenant_owner.peer_hunk_runs(root, p, exclude_run_id=run_id))
+        except Exception:  # noqa: BLE001 -- peers unknown: the path is not split
+            return False
+
+    shared = [p for p in (*(review_edits.norm(s) for s in seed), *wanted) if peer_named(p)]
     split = own_hunk_overrides(root, run_id, list(dict.fromkeys(shared)))
     return [*seed, *wanted], {p: split[p] for p in dict.fromkeys(shared) if p in split}
 

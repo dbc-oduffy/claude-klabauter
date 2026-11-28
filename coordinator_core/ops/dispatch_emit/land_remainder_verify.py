@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -66,6 +67,23 @@ def _past_deadline(record: dict) -> bool:
         return True
 
 
+def _child_may_be_alive(record: dict) -> bool:
+    """False only when the running record carries its child's pid and that process is gone: a dead child
+    writes no verdict, so waiting out the deadline is waiting on nothing. No pid recorded reads alive."""
+    pid = record.get("pid")
+    if pid is None:
+        return True
+    from coordinator_core.ops.dispatch_emit import retest_targeted
+
+    return retest_targeted._pid_alive(pid)
+
+
+def _stamp_pid(vpath: Path) -> None:
+    record = _read_verdict(vpath)
+    if record and record.get("status") == _RUNNING:
+        _write_verdict(vpath, {**record, "pid": os.getpid()})
+
+
 def _closure_findings(root: Path, paths: Sequence[str]) -> list[str]:
     from coordinator_core.ops.dispatch_emit import landing_integrity
 
@@ -107,7 +125,7 @@ def verify_remainder(
             return {"retest": record}
         if status == "fail":
             return {"refused": contract.REFUSED_RETEST_FAILED, "retest": record}
-        if status == _RUNNING and not _past_deadline(record):
+        if status == _RUNNING and not _past_deadline(record) and _child_may_be_alive(record):
             return {"refused": contract.REFUSED_RETEST_PENDING, "retest": record}
 
     if not (vpath.parent / BASE_EXPORT_NAME).is_dir():
@@ -150,6 +168,7 @@ def run_child(
     fingerprint = landing_retest.landing_fingerprint(root, rels)
     tests = [p for p in rels if _is_test_file(p) and (root / p).is_file()]
     now = lambda: datetime.now(timezone.utc).isoformat()  # noqa: E731
+    _stamp_pid(vpath)
 
     def finish(status: str, reason: str = "", **extra) -> int:
         _write_verdict(vpath, {

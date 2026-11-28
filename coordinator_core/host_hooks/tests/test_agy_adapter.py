@@ -145,10 +145,10 @@ def test_subagent_payload_carries_agent_id_into_engine_event_and_em_payload_does
 
 
 def test_subagent_payload_reaches_the_guard_chain_with_agent_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    from coordinator_core.host_hooks import tool_policy
+    from coordinator_core.host_hooks import cold_chain
 
     seen = []
-    monkeypatch.setattr(tool_policy, "evaluate", lambda event, **kw: seen.append(event) or {})
+    monkeypatch.setattr(cold_chain, "evaluate", lambda event: seen.append(event) or {})
     from coordinator_core.host_hooks import shim
 
     adapter = AgyAdapter()

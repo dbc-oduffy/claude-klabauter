@@ -66,10 +66,13 @@ def _write_plan(
     return path
 
 
-_CLEAN_FM = """census: []
+_WIRED = "`coordinator-invoke plan.stamp` lands the four fields; `python -m pytest coordinator_core/roadmap/tests/test_prep_gate.py` passes"
+_WIRED_YAML = json.dumps(_WIRED)
+
+_CLEAN_FM = f"""census: []
 capabilities: []
 prime_exit_criterion:
-  statement: the four fields land and validate
+  statement: {_WIRED_YAML}
   derived_from: state/sizings/2026-09-07-fixture.yaml
 """
 
@@ -578,7 +581,7 @@ def test_prose_where_the_schema_wants_a_sizings_path_is_a_defect(tmp_path):
                 "census: []\n"
                 "capabilities: []\n"
                 "prime_exit_criterion:\n"
-                "  statement: the four fields land and validate\n"
+                "  statement: " + _WIRED_YAML + "\n"
                 "  derived_from: >-\n"
                 "    The replan brief names this work, and the sizing it came"
                 " from was archived.\n"
@@ -1264,7 +1267,7 @@ def test_a_schema_only_refusal_does_not_name_a_converter_that_cannot_fix_it(tmp_
                 "census: []\n"
                 "capabilities: []\n"
                 "prime_exit_criterion:\n"
-                "  statement: the four fields land and validate\n"
+                "  statement: " + _WIRED_YAML + "\n"
                 "  derived_from: this is prose, not a sizings path\n"
             ),
             spine=_CLEAN_SPINE,
@@ -1287,7 +1290,7 @@ def test_a_derivable_defect_still_routes_to_the_converter(tmp_path):
             tmp_path,
             frontmatter=(
                 "prime_exit_criterion:\n"
-                "  statement: the four fields land and validate\n"
+                "  statement: " + _WIRED_YAML + "\n"
                 "  derived_from: this is prose, not a sizings path\n"
             ),
             spine=_CLEAN_SPINE,
@@ -1320,7 +1323,7 @@ def test_a_date_typed_created_is_not_a_schema_defect(tmp_path):
         "created": datetime.date(2026, 8, 20),
         "census": [],
         "prime_exit_criterion": {
-            "statement": "the four fields land and validate",
+            "statement": _WIRED,
             "derived_from": "state/sizings/2026-09-07-fixture.yaml",
         },
     }
@@ -1520,7 +1523,7 @@ _DOC_GATE_ACCEPTANCE = (
 
 def _doc_gate_plan(tmp_path, *, statement, acceptance):
     (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
-    fm = _CLEAN_FM.replace("the four fields land and validate", statement)
+    fm = _CLEAN_FM.replace(_WIRED, statement)
     spine = _CLEAN_SPINE + f"  acceptance: {json.dumps(acceptance)}\n"
     return _write_plan(tmp_path, frontmatter=fm, spine=spine)
 
@@ -1540,11 +1543,25 @@ def test_spine_rejects_contradictory_executor_and_em_routes(tmp_path):
 def test_a_spine_row_acceptance_requiring_pm_approval_of_a_doc_is_refused(tmp_path):
     report = _gate(
         tmp_path,
-        _doc_gate_plan(tmp_path, statement="the four fields land and validate", acceptance=_DOC_GATE_ACCEPTANCE),
+        _doc_gate_plan(tmp_path, statement=_WIRED, acceptance=_DOC_GATE_ACCEPTANCE),
     )
     assert report["verdict"] == pg.NOT_PREPPED
     assert report["classes"]["PRIME_EXIT"]["kind"] == "prime-exit-doc-approval"
     assert "row C1 acceptance" in report["classes"]["PRIME_EXIT"]["detail"]
+
+
+def test_an_unwired_prime_exit_with_no_accepted_sizing_is_refused(tmp_path):
+    report = _gate(
+        tmp_path,
+        _doc_gate_plan(tmp_path, statement="the four fields land and validate", acceptance="tests pass"),
+    )
+    assert report["verdict"] == pg.NOT_PREPPED
+    assert report["classes"]["PRIME_EXIT"]["kind"] == "prime-exit-unwired"
+
+
+def test_a_wired_prime_exit_with_no_accepted_sizing_passes_prime_exit(tmp_path):
+    report = _gate(tmp_path, prepped_plan(tmp_path))
+    assert report["classes"]["PRIME_EXIT"]["status"] == "PASS"
 
 
 def test_a_prime_exit_requiring_an_approved_doc_is_refused(tmp_path):
@@ -1570,7 +1587,7 @@ def test_a_prime_exit_requiring_an_approved_doc_is_refused(tmp_path):
 def test_direction_scope_and_irreversible_approvals_still_pass_the_gate(tmp_path, acceptance):
     report = _gate(
         tmp_path,
-        _doc_gate_plan(tmp_path, statement="the four fields land and validate", acceptance=acceptance),
+        _doc_gate_plan(tmp_path, statement=_WIRED, acceptance=acceptance),
     )
     assert report["classes"]["PRIME_EXIT"]["status"] == "PASS"
 

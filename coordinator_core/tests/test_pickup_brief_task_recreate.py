@@ -67,7 +67,9 @@ def test_carried_tasks_become_directives(repo: Path) -> None:
     assert steps[0]["args"] == {"subject": "First", "description": "do one"}
     assert steps[2]["args"] == {"status": "in_progress"}
     assert steps[3]["args"] == {"addBlockedBy": ["1"]}
-    assert "Recreate 2 carried tasks via harness_task_directives." in obj["next_move"]
+    assert "Recreate 2 carried tasks via harness_task_directives;" in obj["next_move"]
+    assert "work from harness_task_checklist" in obj["next_move"]
+    assert obj["harness_task_checklist"] == ["- [~] #1 First", "- [ ] #2 Second (blocked by #1)"]
     assert all(d.get("tool") is None for d in obj["directives"])
 
 
@@ -75,7 +77,9 @@ def test_empty_list_writes_nothing_and_leaves_next_move(repo: Path) -> None:
     _seed(repo, "No tasks carried.")
     obj = pb.brief(_H, repo_root=repo).decision_object
     assert obj["harness_task_directives"] == []
+    assert obj["harness_task_checklist"] == []
     assert "harness_task_directives" not in obj["next_move"]
+    assert "harness_task_checklist" not in obj["next_move"]
 
 
 def test_non_handoff_artifact_gets_empty_list(repo: Path) -> None:
@@ -92,3 +96,4 @@ def test_non_handoff_artifact_gets_empty_list(repo: Path) -> None:
     _git(repo, "commit", "-m", "add memo")
     obj = pb.brief(rel, repo_root=repo).decision_object
     assert obj["harness_task_directives"] == []
+    assert obj["harness_task_checklist"] == []

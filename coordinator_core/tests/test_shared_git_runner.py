@@ -188,7 +188,6 @@ _CONTRACT_EXEMPT_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/classify-legacy-engine-noun-references.py",
         "coordinator/bin/frontmatter-parse-check.py",
         "coordinator/bin/klabauter-reconcile.py",
-        "coordinator/bin/plan-reversibility-eligibility.py",
         "coordinator/bin/pre_commit_corpus_artifact_guard.py",
         "coordinator/bin/remove-claude-klabauter-precommit-hook.py",
         "coordinator/bin/tier-last-run.py",

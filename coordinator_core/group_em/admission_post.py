@@ -78,7 +78,13 @@ def record_undelivered(artifact_dir: Path, posted: dict) -> None:
     if posted.get("delivered"):
         return
     record = {k: posted.get(k) for k in ("phase", "reason", "path")}
-    print(f"admission_post: {record['phase']} undelivered, run proceeds: {record['reason']}", file=sys.stderr)
+    record["degraded"] = bool(posted.get("degraded"))
+    record["spooled"] = bool(posted.get("spooled"))
+    if record["degraded"]:
+        state = "spooled" if record["spooled"] else "not spooled"
+        print(f"admission_post: {record['phase']} degraded ({state}), run proceeds: {record['reason']}", file=sys.stderr)
+    else:
+        print(f"admission_post: {record['phase']} undelivered, run proceeds: {record['reason']}", file=sys.stderr)
     try:
         (Path(artifact_dir) / "admission-undelivered.json").write_text(json.dumps(record), encoding="utf-8")
     except OSError as exc:
@@ -122,6 +128,9 @@ def post(
     and REQUEST lines only, as ``declared_peak_mb``; an absent or invalid value omits the field.
     The holder is the fleet's live Group EM (a remote-roster hit counts), else the local box record.
     A non-live holder still receives the line: it is tailed once the holder is back.
+    With no holder, START and END are spooled via ``admission_spool`` for the managing Group EM
+    to drain; the reply is ``posted``/``delivered`` False, ``degraded`` True, ``spooled`` per the
+    append, and ``spool_error`` when it failed. REQUEST keeps the plain ``no_box_holder`` reply.
     With ``require_holder=False`` a holderless box is still written (``holder_session`` null,
     ``holder_live`` False) so a governor reading the file sees the line.
     """
@@ -132,12 +141,15 @@ def post(
     if phase == "REQUEST" and peak is None:
         return {"posted": False, "reason": "bad_peak"}
     holder = nomination.fleet_holder(directory, now) or nomination.box_holder(directory, now)
+    spool = False
     if holder is None:
         if require_holder:
             denial = _holder_denial(directory)
             if denial:
                 return {"posted": False, "reason": denial}
-            return {"posted": False, "reason": "no_box_holder"}
+            if phase not in ("START", "END"):
+                return {"posted": False, "reason": "no_box_holder"}
+            spool = True
         holder = {}
     live: list[int] = []
     dead: list[int] = []
@@ -160,6 +172,25 @@ def post(
     }
     if phase in ("START", "REQUEST") and peak is not None:
         line["declared_peak_mb"] = peak
+    if spool:
+        from coordinator_core.group_em import admission_spool
+
+        spool_error = admission_spool.spool_line(line, directory)
+        spooled = spool_error is None
+        path = admission_spool.spool_path(directory)
+        return {
+            "posted": False,
+            "delivered": False,
+            "spooled": spooled,
+            "degraded": True,
+            "reason": "no_box_holder",
+            **({"spool_error": spool_error} if spool_error else {}),
+            "path": str(path),
+            "phase": phase,
+            "pids": live,
+            "dead_pids": dead,
+            "holder_live": False,
+        }
     path = admission_path(directory)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

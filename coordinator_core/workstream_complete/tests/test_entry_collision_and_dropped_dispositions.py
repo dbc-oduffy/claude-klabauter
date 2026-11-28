@@ -136,6 +136,45 @@ def test_frontmatter_claimed_by_closing_session_is_held_no_dropped_diagnostic(mo
     assert tail.dropped_disposition_diagnostics(tmp_path, "sid", decisions) == []
 
 
+def _month_handoff(tmp_path, name, claimed_by, month="2026-11") -> str:
+    d = tmp_path / "state" / "handoffs" / month
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(f"---\nclaimed_by: {claimed_by}\n---\n", encoding="utf-8")
+    return f"state/handoffs/{month}/{name}"
+
+
+def test_month_dir_baton_is_stamped_with_its_disposition_shipped_in(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    rel = _month_handoff(tmp_path, "m.md", "sid")
+    monkeypatch.setattr(tail, "_held_handoff_basenames", lambda *_a, **_k: [])
+    decisions = {"handoff_dispositions": {"m.md": {"disposition": "shipped", "shipped_in": "deadbeef"}}}
+    assert tail.resolve_ship_stamp_candidates(tmp_path, "sid", decisions) == [(rel, "deadbeef")]
+    assert tail.resolve_close_stamp_candidates(tmp_path, "sid", decisions) == []
+    assert tail.dropped_disposition_diagnostics(tmp_path, "sid", decisions) == []
+
+
+def test_month_dir_closed_baton_resolves_and_flat_wins_over_month(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    rel = _month_handoff(tmp_path, "c.md", "sid")
+    monkeypatch.setattr(tail, "_held_handoff_basenames", lambda *_a, **_k: [])
+    decisions = {"handoff_dispositions": {"c.md": {"disposition": "closed", "closed_reason": "displaced"}}}
+    assert tail.resolve_close_stamp_candidates(tmp_path, "sid", decisions) == [(rel, "closed", "displaced")]
+    _handoff_claimed_by(tmp_path, "c.md", "sid")
+    assert tail.active_handoff_relpath(tmp_path, "c.md") == "state/handoffs/c.md"
+
+
+def test_month_dir_baton_not_held_or_absent_is_still_reported_dropped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _month_handoff(tmp_path, "theirs.md", "other-sid")
+    monkeypatch.setattr(tail, "_held_handoff_basenames", lambda *_a, **_k: [])
+    decisions = {
+        "handoff_dispositions": {
+            "theirs.md": {"disposition": "shipped", "shipped_in": "abc"},
+            "nowhere.md": {"disposition": "shipped", "shipped_in": "abc"},
+        }
+    }
+    assert tail.resolve_ship_stamp_candidates(tmp_path, "sid", decisions) == []
+    diags = tail.dropped_disposition_diagnostics(tmp_path, "sid", decisions)
+    assert len(diags) == 2 and all("no handoff claim held" in d for d in diags)
+
+
 def test_frontmatter_claimed_by_other_session_is_not_held(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _handoff_claimed_by(tmp_path, "theirs.md", "other-sid")
     monkeypatch.setattr(tail, "_held_handoff_basenames", lambda *_a, **_k: [])
@@ -146,3 +185,18 @@ def test_frontmatter_claimed_by_other_session_is_not_held(monkeypatch: pytest.Mo
     assert tail.resolve_close_stamp_candidates(tmp_path, "sid", decisions) == []
     diags = tail.dropped_disposition_diagnostics(tmp_path, "sid", decisions)
     assert len(diags) == 1 and "no handoff claim held" in diags[0]
+
+
+def test_claim_minted_batons_claims_a_month_dir_baton_authored_by_sid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from coordinator_core.session import claims
+
+    d = tmp_path / "state" / "handoffs" / "2026-11"
+    d.mkdir(parents=True)
+    (d / "mine.md").write_text("---\nauthoring_session: sid\n---\n", encoding="utf-8")
+    (d / "theirs.md").write_text("---\nauthoring_session: other\n---\n", encoding="utf-8")
+    monkeypatch.setattr(tail, "_held_handoff_basenames", lambda *_a, **_k: [])
+    seen: list[str] = []
+    monkeypatch.setattr(claims, "claim_handoff", lambda name, cwd=None: seen.append(name) or True)
+    decisions = {"handoff_dispositions": {"mine.md": {}, "theirs.md": {}, "nowhere.md": {}}}
+    assert ws_apply._claim_minted_batons(tmp_path, "sid", decisions) == ["mine.md"]
+    assert seen == ["mine.md"]

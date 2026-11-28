@@ -39,3 +39,17 @@ def test_base_exception_unlinks_temp(tmp_path, monkeypatch, exc):
         atomic_write_bytes(tmp_path / "out.txt", b"x")
     assert _temps(tmp_path) == []
     assert not (tmp_path / "out.txt").exists()
+
+
+def test_sweep_parses_dotted_target_names_and_spares_malformed_siblings(tmp_path, monkeypatch):
+    monkeypatch.setattr(atomic_replace, "_pid_alive", lambda pid: pid == os.getpid())
+    monkeypatch.setattr(atomic_replace, "_last_sweep", {})
+    dead = tmp_path / ".atomic-write.my.dotted.name.txt.999999.abcd"
+    live = tmp_path / f".atomic-write.my.dotted.name.txt.{os.getpid()}.abcd"
+    malformed = tmp_path / ".atomic-write.nopid"
+    for p in (dead, live, malformed):
+        p.write_bytes(b"x")
+    atomic_write_bytes(tmp_path / "out.txt", b"y")
+    assert not dead.exists()
+    assert live.exists()
+    assert malformed.exists()

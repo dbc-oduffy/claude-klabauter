@@ -76,6 +76,7 @@ class OpClass(enum.Enum):
 # rather than silently corrupting the classification surface (test-pollution and runtime-
 # privilege-escalation risk). Any caller doing OP_CLASSIFICATION["x"] = ... now fails loud.
 OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType({
+    "box.dir_census": OpClass.COMPUTE_ONLY,  # Reads dir stats and owner marks; deletes nothing.
     "box_memory.admit": OpClass.MUTATING,  # Writes the admission-file reservation.
     "box_memory.register": OpClass.MUTATING,  # Writes the admission-file reservation.
     "box_memory.release": OpClass.MUTATING,  # Removes the admission-file reservation.
@@ -308,6 +309,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.agent_postuse_dispatch": OpClass.MUTATING,
     # Same handler, registered under DoE hooks.json's script-basename-derived name too.
     "hooks.postuse_agent_dispatch": OpClass.MUTATING,
+    # hooks.dispatch_event -- MUTATING by union: runs every EVENT_TABLE op for one tool-call event
+    # in-process, including hooks.agent_postuse_dispatch and hooks.stop_dispatch (both MUTATING).
+    "hooks.dispatch_event": OpClass.MUTATING,
     "hooks.track_dispatched_agents": OpClass.MUTATING,
     # hooks.sessionend_archive_session — MUTATING: moves the session's claim
     # directory to <sessions_dir>/.archive/<sid>-<date>/ via
@@ -1395,6 +1399,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   1. Writes, deletes, or reorders any state? Yes (target repo files).
     #   3. Opens any file for write? Yes.  5. Observable across processes? Yes.
     "repo.setup": OpClass.MUTATING,
+    # repo.declared_project_type — COMPUTE_ONLY: reads at most two coordinator.local.md files under the
+    # caller-supplied root's git toplevel; writes nothing.
+    #   1. Writes, deletes, or reorders any state? No.  3. Opens any file for write? No.
+    #   5. Persistent state changes observable across processes? No.
+    "repo.declared_project_type": OpClass.COMPUTE_ONLY,
     # plan.readiness_verdict — COMPUTE_ONLY: runs the plan.prep_gate read over ONE plan and
     # combines it with caller-supplied coverage and reviewer values into a verdict.
     #   1. Writes, deletes, or reorders any state? No.  2. rag store? No.
@@ -1415,6 +1424,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "rulings.search": OpClass.COMPUTE_ONLY,
     "rulings.gate": OpClass.COMPUTE_ONLY,
     "rulings.coverage": OpClass.COMPUTE_ONLY,
+    # deferral.challenge — MUTATING: appends one line to the EM flag queue .coordinator-local/em-flags/<session_id>.jsonl when flag_em.
+    "deferral.challenge": OpClass.MUTATING,
     # plan.backfill_warp_executing — MUTATING with apply: rewrites the `status:` line of pre-executing docs/plans/*.md
     # that a warp manifest names and commits them; a dry run writes nothing.
     "plan.backfill_warp_executing": OpClass.MUTATING,
@@ -2514,6 +2525,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # returns statuses plus released fire calls; writes no file and spawns no process
     # (ops/dispatch_emit/sibling_status.py).
     "dispatch.sibling_status": OpClass.COMPUTE_ONLY,
+    "dispatch.stage_wait_status": OpClass.COMPUTE_ONLY,
     # dispatch.reap_abandoned_runs — MUTATING: commits the state/warp/<run_id>/ record files of runs with no
     # live token and their orphaned sizings in one ceremony.commit_v2 call (ops/dispatch_emit/abandoned_runs.py).
     # DR-208 five-question affirmation (citing dispatch.reap_abandoned_runs handler):
@@ -2657,6 +2669,24 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # DR-208 five-question affirmation: 1 YES (marker rewrite, index entry removal); 2 No; 5 YES (persisted on disk).
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.close_halted_run_rejected": OpClass.MUTATING,
+    # dispatch.rebind_plan_base — MUTATING: rewrites the `baseline_ref:` and `pins:` frontmatter lines of one plan file
+    # (ops/dispatch_emit/plan_base_rebind.py).
+    # DR-208 five-question affirmation: 1 YES (plan file rewrite); 2 No; 3 YES (the plan file); 4 YES (the
+    # falsifier and register gates that read the plan's pinned base); 5 YES (persisted on disk).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.rebind_plan_base": OpClass.MUTATING,
+    # dispatch.ship_hand_landed_batons — MUTATING: ships a hand-landed run's claimed batons at the landed sha and
+    # settles the baton-ship leg on its close-job record (ops/dispatch_emit/run_close_hand_landed.py).
+    # DR-208 five-question affirmation: 1 YES (baton and close-job record writes); 2 No; 3 YES (the baton files);
+    # 4 YES (the run-close gate that reads the leg); 5 YES (persisted on disk).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.ship_hand_landed_batons": OpClass.MUTATING,
+    # dispatch.adopt_predecessor_work — MUTATING: credits a predecessor run's kept paths into the fresh run's write
+    # baseline and stamps `adopted_from` on its run.json (ops/dispatch_emit/adopt_predecessor_work.py).
+    # DR-208 five-question affirmation: 1 YES (manifest and run.json rewrite); 2 No; 3 YES (run home files); 4 YES
+    # (the foreign-dirt gate that reads the write baseline); 5 YES (persisted on disk).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.adopt_predecessor_work": OpClass.MUTATING,
     # dispatch.close_plan_checkpoints — MUTATING: one commit stamping `Checkpoint-Run-Closed` for every open
     # run-open checkpoint of a plan (ops/dispatch_emit/plan_checkpoints_close.py).
     # DR-208 five-question affirmation: 1 YES (git commit); 2 No; 5 YES (persisted in history).
@@ -2677,6 +2707,16 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # DR-208 five-question affirmation: 1 No (reads only); 2 No; 3 No; 4 No; 5 No.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.docs_check_rag_gate": OpClass.COMPUTE_ONLY,
+    # dispatch.stage_rag_gate — COMPUTE_ONLY: reads the run's agent transcripts and returns a verdict;
+    # writes no file and spawns no process (ops/dispatch_emit/stage_rag_gate_op.py).
+    # DR-208 five-question affirmation: 1 No (reads only); 2 No; 3 No; 4 No; 5 No.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.stage_rag_gate": OpClass.COMPUTE_ONLY,
+    # dispatch.run_rag_use — COMPUTE_ONLY: reads the run's agent transcripts and returns the rag_use receipt;
+    # writes no file and spawns no process (ops/dispatch_emit/run_rag_use_op.py).
+    # DR-208 five-question affirmation: 1 No (reads only); 2 No; 3 No; 4 No; 5 No.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.run_rag_use": OpClass.COMPUTE_ONLY,
     # dispatch.land_combined_index — MUTATING: writes tree and commit objects, advances HEAD, and records
     # fully-landed halted runs (ops/dispatch_emit/combined_landing.py).
     # DR-208 five-question affirmation: 1 YES (git objects, HEAD ref, run markers); 2 No; 3 YES;
@@ -2898,6 +2938,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?      YES.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "test_verdict.record": OpClass.MUTATING,
+    "test_leg.remote_run": OpClass.MUTATING,
+    "agent_leg.remote_run": OpClass.MUTATING,
+    "test_leg.remote_poll": OpClass.COMPUTE_ONLY,
+    "agent_leg.remote_poll": OpClass.COMPUTE_ONLY,
     # testing.suite_runs — COMPUTE_ONLY: reads the suite-run records and asks git what changed.
     "testing.suite_runs": OpClass.COMPUTE_ONLY,
     # receipt.approve — MUTATING: appends a quoted superseding completion
@@ -3127,6 +3171,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # groupem.admission_post -- MUTATING: appends a line to
     # <settings-home>/state/group-em/box/admission.jsonl.
     "groupem.admission_post": OpClass.MUTATING,
+    "groupem.admission_spool_read": OpClass.COMPUTE_ONLY,
     # groupem.slot_grant -- MUTATING: writes or removes a record under
     # <settings-home>/state/group-em/slot-grants/.
     "groupem.slot_grant": OpClass.MUTATING,
@@ -3147,6 +3192,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "groupem.capacity_admit": OpClass.MUTATING,
     "groupem.capacity_place": OpClass.COMPUTE_ONLY,
     "groupem.idle_capacity_watch": OpClass.COMPUTE_ONLY,
+    # groupem.fleet_book -- MUTATING: appends one booking grant row to this box's capacity-grants ledger.
+    "groupem.fleet_book": OpClass.MUTATING,
+    # groupem.job_ledger / job_ledger_local -- COMPUTE_ONLY: join the process census to the grant ledger, write nothing; remote_safe.
+    # groupem.job_progress -- MUTATING: writes one progress counter on a grant row of this box's ledger. The booker
+    # calls it on its own box; it is not in PHASE2_MUTATING_ALLOWLIST, so a far box refuses it.
+    "groupem.job_ledger": OpClass.COMPUTE_ONLY,
+    "groupem.job_ledger_local": OpClass.COMPUTE_ONLY,
+    "groupem.job_progress": OpClass.MUTATING,
+    # groupem.capacity_local -- COMPUTE_ONLY: samples this box in-process, writes nothing; remote_safe.
+    "groupem.capacity_local": OpClass.COMPUTE_ONLY,
+    # groupem.file_cache_report -- COMPUTE_ONLY: reads memory counters, trims nothing; remote_safe.
+    "groupem.file_cache_report": OpClass.COMPUTE_ONLY,
+    # groupem.file_cache_trim -- MUTATING: trims this box's file cache; far only via PHASE2_MUTATING_ALLOWLIST.
+    "groupem.file_cache_trim": OpClass.MUTATING,
     # groupem.suite_grant_receive / box_key_pin -- MUTATING: write a relayed grant record or a
     # pinned peer key under <settings-home>/state/group-em/.
     "groupem.suite_grant_receive": OpClass.MUTATING,
@@ -3162,6 +3221,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # reads peer transcripts, the harness registry, and the Group-EM's own
     # offer log; it writes nothing.
     "groupem.idle_report": OpClass.COMPUTE_ONLY,
+    # groupem.roll_call / groupem.roll_call_reply -- MUTATING: each writes the roll-call record under
+    # the group-em home (cross-tree), sanctioned under DR-214's send-class lineage; roll_call also
+    # launches one detached delivery worker. groupem.roll_call_status only reads that record.
+    "groupem.roll_call": OpClass.MUTATING,
+    "groupem.roll_call_reply": OpClass.MUTATING,
+    "groupem.roll_call_status": OpClass.COMPUTE_ONLY,
     # groupem.standing -- COMPUTE_ONLY: reads the nomination record and the
     # session registry; claims and writes nothing.
     "groupem.standing": OpClass.COMPUTE_ONLY,
@@ -3198,12 +3263,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     No.
     #      Returns {"repos": {...}, "errors": [...]} only.
     # Spec: docs/plans/2026-08-19-fleet-work-state-who-holds-which-baton.md, chunk C5.
-    # groupem.roll_call / groupem.roll_call_reply -- MUTATING: each writes the roll-call record under
-    # the group-em home (cross-tree), sanctioned under DR-214's send-class lineage; roll_call also
-    # launches one detached delivery worker. groupem.roll_call_status only reads that record.
-    "groupem.roll_call": OpClass.MUTATING,
-    "groupem.roll_call_reply": OpClass.MUTATING,
-    "groupem.roll_call_status": OpClass.COMPUTE_ONLY,
     "fleet.work_state": OpClass.COMPUTE_ONLY,
     # fleet.record_history — COMPUTE_ONLY: fans records.history's own
     # derive_type_history() out across every registered active sibling (read
@@ -4615,6 +4674,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "ask_spool.withdraw": OpClass.MUTATING,
     # run.hold — MUTATING: writes or removes a run's held.json in its record dir.
     "run.hold": OpClass.MUTATING,
+    # run.false_finished_sweep — COMPUTE_ONLY: reads state/warp runs and sizings, lists committed runs with open register rows.
+    "run.false_finished_sweep": OpClass.COMPUTE_ONLY,
     # scratch.record_run_path, scratch.keep — MUTATING: write the run's scratch-ledger.json and
     # scratch/.kept-index.json (ops/scratch_record.py); neither deletes a path.
     "scratch.record_run_path": OpClass.MUTATING,

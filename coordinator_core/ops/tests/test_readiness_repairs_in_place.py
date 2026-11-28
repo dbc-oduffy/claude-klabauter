@@ -12,7 +12,7 @@ PASS_GATE = {"plan": "docs/plans/p.md", "verdict": "PREPPED", "withheld_rows": [
 def _verdict(prep_gate=None, rows=None, anchor_findings=None, anchor_entries=None):
     return op.readiness_verdict(
         prep_gate or PASS_GATE, None, [], None, rows or [], None, None, None, None, "",
-        anchor_findings, [], True, None, anchor_entries, None,
+        anchor_findings, [], None, anchor_entries, None,
     )
 
 

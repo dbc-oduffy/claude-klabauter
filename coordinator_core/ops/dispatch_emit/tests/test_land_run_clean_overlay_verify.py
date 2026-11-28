@@ -2178,3 +2178,76 @@ def test_infra_setup_error_refuses_runs_that_completed_a_test_or_failed_collecti
 def test_infra_setup_error_falls_back_to_the_short_summary_line_when_no_traceback_printed():
     text = "ERROR t/test_x.py::test_a - OSError: no space\n248 errors in 7.78s\n"
     assert "OSError: no space" in cov.infra_setup_error(text)
+
+
+def _own_delta_repo(tmp_path, monkeypatch, declared):
+    from coordinator_core.ops.dispatch_emit import review_edits
+
+    root, _head = _repo(tmp_path)
+    record = cov.measured_rev_record_path(root, "runPrints")
+    record.parent.mkdir(parents=True)
+    record.with_name("manifest.json").write_text(json.dumps({"review_declared_paths": declared}), encoding="utf-8")
+    monkeypatch.setattr(review_edits, "live_sibling_declared", lambda *_a, **_k: {})
+    monkeypatch.setattr(cov, "_own_written", lambda *_a, **_k: [])
+    monkeypatch.setattr(cov, "_snapshot_scope", lambda *_a, **_k: [])
+    return root
+
+
+def test_own_delta_carries_an_untracked_module_the_run_printed_but_never_declared(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_write_prints
+
+    root = _own_delta_repo(tmp_path, monkeypatch, ["t/test_new.py"])
+    _write(root, "t/test_new.py", "def test_x():\n    pass\n")
+    _write(root, "t/newmod.py", "X = 1\n")
+    _write(root, "t/peer_only.py", "Y = 1\n")
+    run_write_prints.record(root, "runPrints", ["t/newmod.py"])
+
+    paths, _overrides = cov.own_delta(root, "runPrints", ["t/test_new.py"])
+
+    assert "t/newmod.py" in paths
+    assert "t/peer_only.py" not in paths
+
+
+def test_own_delta_drops_a_printed_scratch_path(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_write_prints
+
+    root = _own_delta_repo(tmp_path, monkeypatch, ["t/test_new.py"])
+    _write(root, "scratch/arm/probe.py", "Z = 1\n")
+    run_write_prints.record(root, "runPrints", ["scratch/arm/probe.py"])
+
+    paths, _overrides = cov.own_delta(root, "runPrints", ["t/test_new.py"])
+
+    assert "scratch/arm/probe.py" not in paths
+
+
+def _foreign_symbol_result():
+    from coordinator_core.ops import test_leg_run as tlr
+
+    return {tlr._MISSING_KEY: ("decode_literal", "pkg.lit"), "tests_run": 0}
+
+
+def test_foreign_dependency_names_an_untracked_module_outside_the_run_own_set(tmp_path):
+    from coordinator_core.ops import test_leg_run as tlr
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+    root, _head = _repo(tmp_path)
+    _write(root, "pkg/lit.py", "def decode_literal():\n    return 1\n")
+    result = _foreign_symbol_result()
+
+    tlr._name_foreign_dependency(result, root, ())
+
+    assert result[ltt.ZERO_RUN_CAUSE_KEY] == ltt.ZERO_RUN_FOREIGN_DEPENDENCY
+    assert result[tlr.IMPORT_ERROR_KEY]["source_path"] == "pkg/lit.py"
+
+
+def test_foreign_dependency_never_names_a_file_the_mirror_carries_whole(tmp_path):
+    from coordinator_core.ops import test_leg_run as tlr
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+    root, _head = _repo(tmp_path)
+    _write(root, "pkg/lit.py", "def decode_literal():\n    return 1\n")
+    result = _foreign_symbol_result()
+
+    tlr._name_foreign_dependency(result, root, lambda: {"pkg/lit.py"})
+
+    assert ltt.ZERO_RUN_CAUSE_KEY not in result

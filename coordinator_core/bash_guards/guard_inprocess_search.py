@@ -206,6 +206,20 @@ _ANSWERED_MARKER = (
 )
 
 
+#: Every first-token basename `search.answer.plan_for` can answer: `search.engine.GREP_FAMILY`, `sources_read.READ_VERBS`
+#: and `ls`. Pinned equal to those sets by `test_guard_inprocess_search_prefilter.py`.
+_SEARCH_VERBS = ("grep", "egrep", "fgrep", "rg", "cat", "head", "tail", "sed", "ls")
+_QUOTING_CHARS = str.maketrans("", "", "'\"\\")
+
+
+def _may_name_a_search_verb(command: str) -> bool:
+    """Necessary condition for `plan_for` to answer: its first token's basename is one of `_SEARCH_VERBS`, and the
+    tokenizer yields that token from the raw text with quotes and backslashes removed, so the verb is a substring
+    of that stripped text. A False here lets the cold path skip importing `search.answer` (~12ms)."""
+    stripped = command.translate(_QUOTING_CHARS).lower()
+    return any(verb in stripped for verb in _SEARCH_VERBS)
+
+
 def _repo_root_from_cwd(cwd: str) -> Optional[str]:
     try:
         current = os.path.abspath(cwd)
@@ -377,6 +391,8 @@ def check(
     if not command:
         return None
     if os.environ.get(_DISABLE_ENV_VAR, "0") == "1":
+        return None
+    if not _may_name_a_search_verb(command):
         return None
     try:
         from coordinator_core.search.answer import answer

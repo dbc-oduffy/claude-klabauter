@@ -74,3 +74,10 @@ def test_render_names_every_id_and_waiver_form():
         assert cid in text
     assert "constraint_waived" in text
     assert "anchor_premises: []" in text
+
+
+def test_no_elision_rule_is_rendered_and_not_waivable():
+    text = ac.render_prompt()
+    assert "anchor-check-malformed" in text
+    assert "never elides with '...'" in text
+    assert ac.get_constraint("anchor-check-malformed").waivable is False

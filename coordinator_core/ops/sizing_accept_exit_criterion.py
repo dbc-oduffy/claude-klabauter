@@ -69,6 +69,7 @@ from coordinator_core.roadmap.post_stamp_clause import (
     post_stamp_refusal,
     suite_tier_refusal,
 )
+from coordinator_core.roadmap.wiring_clause import wiring_clause_refusal
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -267,6 +268,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             or suite_tier_refusal(new_statement)
             or doc_approval_refusal(new_statement)
             or consumer_clause_refusal(new_statement)
+            or wiring_clause_refusal(new_statement)
         )
         if refusal is not None:
             raise MutateAbort(f"refusing to accept on {p}: {refusal}")

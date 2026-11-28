@@ -1,4 +1,4 @@
-"""Compose-time map from research-pipeline stages to stage-family binding roles.
+"""Compose-time map from research-pipeline stages to the roles of the EM's `stage_families` choice.
 
 Pure: no I/O. A stage with no entry in `ROLE_BY_STAGE`, or whose bound family is
 claude, is absent from the result and stays on claude.

@@ -89,7 +89,7 @@ def _relay_app_server(run_dir: Path, req: dict, argv: list) -> Optional[dict]:
     except codex_app_server.AppServerUnreachable:
         return None
     except codex_app_server.AppServerError as exc:
-        return _app_server_failure(run_dir, argv, conversation, 0, exc)
+        return _relay_failure(run_dir, argv, conversation, 0, exc)
     (run_dir / ARGV_FILENAME).write_text(json.dumps(argv), encoding="utf-8")
     messages = 0
     (run_dir / AGENT_LOG_FILENAME).write_bytes(b"")
@@ -98,7 +98,7 @@ def _relay_app_server(run_dir: Path, req: dict, argv: list) -> Optional[dict]:
             _append(req["agent"], conversation, req["reply_to"], text)
             messages += 1
     except codex_app_server.AppServerError as exc:
-        return _app_server_failure(run_dir, argv, conversation, messages, exc)
+        return _relay_failure(run_dir, argv, conversation, messages, exc)
     return {
         "run_id": run_dir.name,
         "status": STATUS_COMPLETED,
@@ -109,7 +109,7 @@ def _relay_app_server(run_dir: Path, req: dict, argv: list) -> Optional[dict]:
     }
 
 
-def _app_server_failure(run_dir: Path, argv: list, conversation: str, messages: int, exc: Exception) -> dict:
+def _relay_failure(run_dir: Path, argv: list, conversation: str, messages: int, exc: Exception) -> dict:
     (run_dir / ARGV_FILENAME).write_text(json.dumps(argv), encoding="utf-8")
     (run_dir / AGENT_LOG_FILENAME).write_text(str(exc), encoding="utf-8")
     return {
@@ -130,6 +130,33 @@ def _relay(run_dir: Path, req: dict, adapter: Adapter) -> dict:
         delivered = _relay_app_server(run_dir, req, proxy_argv())
         if delivered is not None:
             return delivered
+    from coordinator_core.agent_pipe.agy import AgyAdapter, SpoolRefused, claim_resume
+
+    lease = None
+    if req.get("conversation") and isinstance(adapter, AgyAdapter):
+        try:
+            lease = claim_resume(req["conversation"], req["text"], reply_to)
+        except SpoolRefused as exc:
+            return _relay_failure(run_dir, [], req["conversation"], 0, exc)
+        if lease is None:
+            (run_dir / AGENT_LOG_FILENAME).write_bytes(b"")
+            return {
+                "run_id": run_dir.name,
+                "status": STATUS_COMPLETED,
+                "exit_code": 0,
+                "conversation": req["conversation"],
+                "messages": 0,
+                "error": None,
+                "spooled": True,
+            }
+    try:
+        return _run_child(run_dir, req, adapter, agent, reply_to)
+    finally:
+        if lease is not None:
+            lease.release()
+
+
+def _run_child(run_dir: Path, req: dict, adapter: Adapter, agent: str, reply_to: str) -> dict:
     if req.get("conversation"):
         argv = adapter.resume_argv(req["conversation"], req["text"])
     else:
@@ -304,7 +331,7 @@ def _bridge_cmd(rest: List[str]) -> int:
                 delivery = bridge.route(msg)
                 delivery.wait()
                 print(json.dumps({"status": delivery.status, "reason": delivery.reason, "id": msg.id}))
-                return 0 if delivery.status in ("delivered", "handed-off") else 1
+                return 0 if delivery.status in ("delivered", "handed-off", "queued") else 1
             print(bridge.enqueue(msg))
         elif args.verb == "serve":
             try:

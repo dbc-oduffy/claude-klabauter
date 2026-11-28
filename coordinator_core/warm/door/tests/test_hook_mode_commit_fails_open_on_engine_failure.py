@@ -117,10 +117,13 @@ def _assert_one_line_allow(proc) -> dict:
     return body
 
 
-def _assert_irreversible_deny(proc) -> None:
-    body = json.loads(proc.stdout.decode("utf-8"))
-    assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "irreversible-external command is not run unguarded" in body["hookSpecificOutput"]["permissionDecisionReason"]
+def _assert_irreversible_warn_allow(proc, command: str) -> None:
+    assert proc.returncode == 0, proc.stderr
+    out = proc.stdout.decode("utf-8")
+    hso = json.loads(out)["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "DENIED" in hso["permissionDecisionReason"]
+    assert command in hso["permissionDecisionReason"]
 
 
 @_posix_only
@@ -128,7 +131,7 @@ def _assert_irreversible_deny(proc) -> None:
 @pytest.mark.warm_tier
 @pytest.mark.cadence
 @pytest.mark.parametrize("op", [_PRECHECK_OP, _OTHER_OP])
-def test_worker_died_response_allows_a_commit_and_still_denies_a_push(door, tmp_path: Path, runtime_base, op) -> None:
+def test_worker_died_response_allows_a_commit_and_warns_then_allows_a_push(door, tmp_path: Path, runtime_base, op) -> None:
     root = _make_stub_engine_root(tmp_path)
     sock = _socket_path_for(runtime_base, root)
     _make_socket_dir(sock)
@@ -146,14 +149,14 @@ def test_worker_died_response_allows_a_commit_and_still_denies_a_push(door, tmp_
         pushed = _run(door, root, runtime_base, op, "git push origin main")
     finally:
         server.close()
-    _assert_irreversible_deny(pushed)
+    _assert_irreversible_warn_allow(pushed, "git push origin main")
 
 
 @_posix_only
 @pytest.mark.spawns_process
 @pytest.mark.warm_tier
 @pytest.mark.cadence
-def test_a_never_answering_engine_allows_a_commit_and_still_denies_a_push(door, tmp_path: Path, runtime_base) -> None:
+def test_a_never_answering_engine_allows_a_commit_and_warns_then_allows_a_push(door, tmp_path: Path, runtime_base) -> None:
     root = _make_stub_engine_root(tmp_path)
     sock = _socket_path_for(runtime_base, root)
     _make_socket_dir(sock)
@@ -172,7 +175,7 @@ def test_a_never_answering_engine_allows_a_commit_and_still_denies_a_push(door, 
         pushed = _run(door, root, runtime_base, _PRECHECK_OP, "git push origin main")
     finally:
         wedge.close()
-    _assert_irreversible_deny(pushed)
+    _assert_irreversible_warn_allow(pushed, "git push origin main")
 
 
 @pytest.mark.parametrize("source", [DOOR_WINDOWS_C, DOOR_POSIX_C], ids=lambda p: p.name)
@@ -181,9 +184,10 @@ def test_both_doors_route_every_non_irreversible_hook_failure_to_the_one_line_al
     failure = text[text.index("static int emit_post_delivery_failure("):]
     failure = failure[: failure.index("\n}\n")]
     assert "emit_hook_pass_loudly" not in failure
+    assert "emit_hook_deny" not in failure
     assert "if (g_precheck_armed && emit_precheck_if_matched()) return 0;" in failure
     assert "if (g_door_hook_mode) return emit_hook_post_delivery(detail);" in failure
-    assert failure.index("emit_hook_deny(reason)") < failure.index("emit_hook_post_delivery(detail)")
+    assert failure.index("emit_hook_irreversible_unchecked(detail)") < failure.index("emit_hook_post_delivery(detail)")
     assert "door_engine_failure_allow_envelope(&out, detail, event_name)" in text
     assert "build_hook_post_delivery_envelope" not in text
     assert "!g_precheck_armed && !g_door_hook_mode" in text

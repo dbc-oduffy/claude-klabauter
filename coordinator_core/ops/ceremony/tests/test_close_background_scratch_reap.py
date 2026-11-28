@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core import run_scratch as run_scratch_mod
 from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.dispatch_emit import run_close, run_scratch
 
@@ -15,6 +16,17 @@ PRED = "ask-20261108T000000-cccccc"
 PEER = "ask-20261109T000001-bbbbbb"
 
 pytestmark = pytest.mark.complete
+
+
+DEAD_PID = 2_000_000_000
+
+
+@pytest.fixture(autouse=True)
+def box_roots(tmp_path, monkeypatch):
+    scratch, build = tmp_path / "box-scratch", tmp_path / "box-build"
+    monkeypatch.setenv("MACHINE_LOCAL_PATHS_SCRATCH_ROOT", str(scratch))
+    monkeypatch.setenv("MACHINE_LOCAL_PATHS_BUILD_ROOT", str(build))
+    return scratch, build
 
 
 def _tree(root: Path, rel: str) -> Path:
@@ -124,6 +136,36 @@ def test_peer_ledger_path_is_untouched(tmp_path):
 
 def test_run_with_no_scratch_is_not_applicable(tmp_path):
     assert _run(tmp_path).status == "not-applicable"
+
+
+def test_close_leg_sweeps_dead_pid_claims_and_keeps_live_ones(tmp_path):
+    live = run_scratch_mod.claim("claude-klabauter", "land", "y", "scratch")
+    dead = run_scratch_mod.claim("claude-klabauter", "land", "x", "scratch", pid=DEAD_PID)
+    dead_build = run_scratch_mod.claim("claude-klabauter", "clone", "z", "build", pid=DEAD_PID)
+
+    result = _run(tmp_path)
+
+    assert result.status == "ran" and "run-scratch swept 2" in result.detail
+    assert not dead.exists() and not dead_build.exists()
+    assert live.is_dir()
+
+
+def test_close_leg_prunes_complete_builds_beyond_keep_two(tmp_path):
+    paths = [run_scratch_mod.claim("claude-klabauter", "clone", f"b{i}", "build") for i in range(3)]
+    for path in paths:
+        run_scratch_mod.finish(path, keep=99)
+
+    result = _run(tmp_path)
+
+    assert "run-scratch swept 1" in result.detail
+    assert sum(p.exists() for p in paths) == 2
+
+
+def test_close_leg_with_only_live_claims_stays_not_applicable(tmp_path):
+    live = run_scratch_mod.claim("claude-klabauter", "land", "y", "scratch")
+
+    assert _run(tmp_path).status == "not-applicable"
+    assert live.is_dir()
 
 
 def test_leg_is_registered_and_ordered_after_close_commit():

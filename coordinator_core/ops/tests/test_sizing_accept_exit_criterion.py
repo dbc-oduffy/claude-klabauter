@@ -12,6 +12,7 @@ Run (from repo root):
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -96,7 +97,10 @@ def _base(**overrides) -> dict:
     return params
 
 
-_PROPOSED = "exit_criterion:\n  statement: Beat vanilla on category X.\n  accepted: null\n"
+_WIRING = "`coordinator-invoke sizing.accept_exit_criterion` records it; `python -m pytest coordinator_core/ops/tests/test_sizing_accept_exit_criterion.py` passes"
+_BAR = f"Beat vanilla on category X: {_WIRING}"
+_SHARP = f"A sharper bar: {_WIRING}"
+_PROPOSED = f"exit_criterion:\n  statement: {json.dumps(_BAR)}\n  accepted: null\n"
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +118,7 @@ def test_accept_writes_accepted_and_keeps_statement(tmp_path):
     assert result["exit_code"] == 0, result
     assert result["applied"] is True
     doc = yaml.safe_load(sizing.read_text(encoding="utf-8"))
-    assert doc["exit_criterion"]["statement"] == "Beat vanilla on category X."
+    assert doc["exit_criterion"]["statement"] == _BAR
     accepted = doc["exit_criterion"]["accepted"]
     assert accepted["pm_quote"] == "Yes, that's the right bar."
     assert accepted["mode"] == "hands-on"
@@ -126,11 +130,11 @@ def test_accept_with_statement_replaces_the_proposed_one(tmp_path):
     _init_repo(repo)
     sizing = _seed_sizing(repo, exit_criterion=_PROPOSED)
 
-    result = _run(_base(statement="A sharper criterion the PM prefers."), repo)
+    result = _run(_base(statement=_SHARP), repo)
 
     assert result["exit_code"] == 0, result
     doc = yaml.safe_load(sizing.read_text(encoding="utf-8"))
-    assert doc["exit_criterion"]["statement"] == "A sharper criterion the PM prefers."
+    assert doc["exit_criterion"]["statement"] == _SHARP
 
 
 def test_accept_records_given_mode(tmp_path):
@@ -301,16 +305,16 @@ def test_amend_appends_keeps_prior_quote_and_validates(tmp_path):
     sizing = _seed_sizing(repo, exit_criterion=_PROPOSED)
     assert _run(_base(), repo)["exit_code"] == 0
 
-    result = _run(_base(pm_quote="Amend it.", statement="A sharper bar.", mode="pm"), repo)
+    result = _run(_base(pm_quote="Amend it.", statement=_SHARP, mode="pm"), repo)
 
     assert result["exit_code"] == 0, result
     assert result["applied"] is True
     ec = yaml.safe_load(sizing.read_text(encoding="utf-8"))["exit_criterion"]
-    assert ec["statement"] == "A sharper bar."
+    assert ec["statement"] == _SHARP
     assert ec["accepted"]["pm_quote"] == "Yes, that's the right bar."
     assert len(ec["amendments"]) == 1
     am = ec["amendments"][0]
-    assert (am["pm_quote"], am["statement"], am["mode"]) == ("Amend it.", "A sharper bar.", "pm")
+    assert (am["pm_quote"], am["statement"], am["mode"]) == ("Amend it.", _SHARP, "pm")
     assert am["on"]
     assert accept_mod._validate_sizing_fm(yaml.safe_load(sizing.read_text(encoding="utf-8"))) == []
 
@@ -320,12 +324,12 @@ def test_a_second_amend_appends_again(tmp_path):
     _init_repo(repo)
     sizing = _seed_sizing(repo, exit_criterion=_PROPOSED)
     assert _run(_base(), repo)["exit_code"] == 0
-    assert _run(_base(pm_quote="One.", statement="Bar one."), repo)["exit_code"] == 0
+    assert _run(_base(pm_quote="One.", statement=f"Bar one: {_WIRING}"), repo)["exit_code"] == 0
 
-    assert _run(_base(pm_quote="Two.", statement="Bar two."), repo)["exit_code"] == 0
+    assert _run(_base(pm_quote="Two.", statement=f"Bar two: {_WIRING}"), repo)["exit_code"] == 0
 
     ec = yaml.safe_load(sizing.read_text(encoding="utf-8"))["exit_criterion"]
-    assert ec["statement"] == "Bar two."
+    assert ec["statement"] == f"Bar two: {_WIRING}"
     assert [a["pm_quote"] for a in ec["amendments"]] == ["One.", "Two."]
     assert ec["accepted"]["pm_quote"] == "Yes, that's the right bar."
 
@@ -373,12 +377,12 @@ def test_missing_sizing_refusal_names_every_accepted_param():
 
 _CEO = "interaction_mode: ceo\n" + _PROPOSED
 _APM_ACCEPTED = (
-    "interaction_mode: ceo\nexit_criterion:\n  statement: Beat vanilla on category X.\n"
+    f"interaction_mode: ceo\nexit_criterion:\n  statement: {json.dumps(_BAR)}\n"
     "  accepted:\n    source: apm\n    apm_ruling: Ruled fine.\n    ruling_ref: run-1\n    on: '2026-01-01'\n"
     "    mode: ceo\n"
 )
 _PM_ACCEPTED = (
-    "interaction_mode: ceo\nexit_criterion:\n  statement: Beat vanilla on category X.\n"
+    f"interaction_mode: ceo\nexit_criterion:\n  statement: {json.dumps(_BAR)}\n"
     "  accepted:\n    pm_quote: PM said yes.\n    on: '2026-01-01'\n    mode: ceo\n"
 )
 
@@ -529,7 +533,7 @@ def test_an_empty_statement_amendment_is_refused(tmp_path, blank):
 
 
 _APM_NO_REF = (
-    "interaction_mode: ceo\nexit_criterion:\n  statement: Beat vanilla on category X.\n"
+    f"interaction_mode: ceo\nexit_criterion:\n  statement: {json.dumps(_BAR)}\n"
     "  accepted:\n    source: apm\n    apm_ruling: Ruled fine.\n    on: '2026-01-01'\n    mode: ceo\n"
 )
 
@@ -554,19 +558,19 @@ def test_a_different_ruling_never_repairs_a_legacy_acceptance_silently(tmp_path)
 @pytest.mark.parametrize("tshirt", ["XS", "S", "M", "L"])
 def test_hands_on_apm_ruling_at_xs_to_l_records_the_statement_only(tmp_path, tshirt):
     repo, sizing = _setup(tmp_path, _PROPOSED, tshirt=tshirt)
-    result = _run(_apm(statement="A new bar."), repo)
+    result = _run(_apm(statement=_SHARP), repo)
     assert result["exit_code"] == 0 and result["applied"] is True, result
     ec = _doc(sizing)["exit_criterion"]
-    assert ec["statement"] == "A new bar." and ec["accepted"] is None
+    assert ec["statement"] == _SHARP and ec["accepted"] is None
 
 
 def test_no_words_at_s_records_the_statement_only_and_is_idempotent(tmp_path):
     repo, sizing = _setup(tmp_path, "", tshirt="S")
-    params = {"sizing": "state/sizings/20260101-a.yaml", "statement": "Fresh bar."}
+    params = {"sizing": "state/sizings/20260101-a.yaml", "statement": _SHARP}
     result = _run(params, repo)
     assert result["exit_code"] == 0 and result["applied"] is True, result
     ec = _doc(sizing)["exit_criterion"]
-    assert ec["statement"] == "Fresh bar." and ec["accepted"] is None
+    assert ec["statement"] == _SHARP and ec["accepted"] is None
     assert _run(params, repo)["applied"] is False
 
 
@@ -615,12 +619,33 @@ def test_a_producer_only_wire_clause_is_refused_naming_the_clause(tmp_path):
     assert sizing.read_bytes() == before
 
 
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "Beat vanilla on category X.",
+        "coordinator-invoke sizing.accept_exit_criterion refuses it.",
+        "Run `python -m pytest coordinator_core/ops/tests/test_sizing_accept_exit_criterion.py` and it passes.",
+    ],
+    ids=["neither", "no-check", "no-entry-point"],
+)
+def test_a_criterion_naming_no_wiring_path_or_no_runnable_check_is_refused(tmp_path, statement):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sizing = _seed_sizing(repo, exit_criterion=_PROPOSED)
+    before = sizing.read_bytes()
+
+    result = _run(_base(statement=statement), repo)
+
+    assert result["exit_code"] == 1 and "no " in result["error"], result
+    assert sizing.read_bytes() == before
+
+
 def test_a_wire_clause_with_a_consumer_command_is_accepted(tmp_path):
     repo = tmp_path / "repo"
     _init_repo(repo)
     sizing = _seed_sizing(repo, exit_criterion=_PROPOSED)
 
-    result = _run(_base(statement="The census is wired into the planner: `census-cli --check` shows it."), repo)
+    result = _run(_base(statement="The census is wired into the planner: `coordinator-invoke census.check` shows it; `census-cli --check` passes."), repo)
 
     assert result["exit_code"] == 0 and result["applied"] is True, result
     assert "census-cli" in _doc(sizing)["exit_criterion"]["statement"]

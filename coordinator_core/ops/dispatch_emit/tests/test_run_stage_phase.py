@@ -35,10 +35,10 @@ def _read(d):
 
 
 def test_first_touch_sets_executing_even_inside_the_throttle(tmp_path: Path) -> None:
-    _stage(tmp_path)
+    _stage(tmp_path, "staged")
     assert touch_run_activity(tmp_path, now=T0 + timedelta(seconds=1)) is True
     data = _read(tmp_path)
-    assert data["phase"] == "executing" and data["stage"] == "minted"
+    assert data["phase"] == "executing" and data["stage"] == "staged"
 
 
 def test_a_touch_never_overwrites_an_existing_phase(tmp_path: Path) -> None:
@@ -95,7 +95,7 @@ def test_an_admit_sets_executing_without_a_spawn(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(run_token, "TOKEN_RE", __import__("re").compile(r".+"))
     d = tmp_path / "w" / RUN_ID
     monkeypatch.setattr(record_homes, "home_dir", lambda root, kind: str(tmp_path / "w"))
-    _stage(d)
+    _stage(d, "staged")
     spawns = []
 
     def no_spawn(*a, **k):
@@ -109,5 +109,5 @@ def test_an_admit_sets_executing_without_a_spawn(tmp_path: Path, monkeypatch: py
     assert "phase" not in _read(d)
     assert run_token.admits(tmp_path, RUN_ID, TOKEN, SCRIPT) is True
     data = _read(d)
-    assert data["phase"] == "executing" and data["stage"] == "minted"
+    assert data["phase"] == "executing" and data["stage"] == "staged"
     assert spawns == []

@@ -57,10 +57,11 @@ def test_no_contention_keeps_the_whole_window(world: Path) -> None:
     assert _run_written(world, "sess-1", RUN_A, None) == [A_FILE, B_FILE]
 
 
-def test_halt_evicts_own_declared_path_and_leaves_the_peers_untouched(world: Path) -> None:
+def test_halt_parks_own_declared_path_and_leaves_the_tree_untouched(world: Path) -> None:
     written = _run_written(world, "sess-1", RUN_A, [RUN_A, RUN_B])
-    plan = plan_tree_eviction(world, REC, written, {A_FILE, B_FILE}, written, {}, [], RUN_A)
+    plan = plan_tree_eviction(world, REC, written, {A_FILE, B_FILE}, written, {}, [])
     assert plan is not None
     plan.apply()
-    assert (world / A_FILE).read_text(encoding="utf-8") == "X = 0\n"
+    assert plan.evicted == [A_FILE]
+    assert (world / A_FILE).read_text(encoding="utf-8") == "X = 1\n"
     assert (world / B_FILE).read_text(encoding="utf-8") == "X = 2\n"

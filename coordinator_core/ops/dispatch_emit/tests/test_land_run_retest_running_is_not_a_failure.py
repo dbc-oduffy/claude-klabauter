@@ -53,7 +53,7 @@ def test_a_live_running_retest_is_an_await_not_a_refusal(run):
     out = _land(run)
 
     assert out["committed"] is False and out["refused"] is None and out["remedy_step"] is None, out
-    assert out["awaiting"]["awaiting"] == "retest" and out["error"].endswith(" --poll --wait"), out
+    assert out["awaiting"]["awaiting"] == "retest" and out["error"].endswith(" --poll"), out
     assert "targeted-tests-failed" not in out["error"] and "refused" not in out["error"]
     assert _git(["rev-parse", "HEAD"], run).strip() == head
 

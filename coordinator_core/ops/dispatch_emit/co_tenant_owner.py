@@ -1,16 +1,15 @@
 """Which run owns a peer-dirty path a run's clean export needs, and what the needing run does about it.
 
-`owner_of` reads the live-run index (fallback `live_run_writes.live_footprints`) and the halted-withheld
-index; `resolve` parks the needing run behind a live owner through `stage_wait.park` (the owner's
-`run_token.consume`/`discard` wakes it) or returns the typed cause for a halted or unattributable owner.
-In-process reads only: no spawn, no poll.
+`owner_of` reads the live-run index (fallback `live_run_writes.live_footprints`) and names only a live run;
+`peer_hunk_runs` also reads the halted-withheld index, for attribution. `resolve` parks the needing run
+behind a live owner through `stage_wait.park` (the owner's `run_token.consume`/`discard` wakes it) or
+returns the typed cause when no live run holds the path. In-process reads only: no spawn, no poll.
 """
 
 from __future__ import annotations
 
 import os
 import re
-import time
 from pathlib import Path, PurePosixPath
 from typing import Mapping, Optional
 
@@ -19,7 +18,6 @@ from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
 PARKED = "co-tenant-wait"
 CAUSE_TYPED = "co_tenant_dependency"
-CAUSE_HALTED_OWNER = "co_tenant_dependency_on_halted_run"
 CAUSE_CYCLE = co_tenant_cycle.CAUSE_CYCLE
 _INDEX_DEADLINE_MS = 150.0
 
@@ -138,53 +136,32 @@ def _landed_successor(root: Path, run_id: str, sizing_rel: object) -> Optional[s
     return None
 
 
-def _halted_age_s(root: Path, run_id: str, entry) -> Optional[int]:
-    """Seconds since `run_id` halted: its index `entry`'s write time, else its `halted.json` mtime; None when neither reads."""
-    at_ns = entry.at_ns if entry and entry.at_ns else 0
-    if not at_ns:
-        try:
-            at_ns = (record_dir(root, run_id) / halted_run.HALTED_FILE).stat().st_mtime_ns
-        except (OSError, ValueError):
-            return None
-    return max(0, int(time.time() - at_ns / 1e9))
-
-
-def _stranded(root: Path, run_id: str) -> bool:
-    """A run with no halt marker whose stage reads `staged` and which holds no live token or launcher escrow:
-    nothing will end it, so it is attributed like a halted run."""
-    if (ask_contract.read_run_stage(root, run_id) or {}).get("stage") != "staged":
-        return False
-    return run_token.escrowed(root, run_id) is None and not run_token.is_live(root, run_id)
-
-
-def _refire_call(root: Path, run_id: str, entry) -> Optional[str]:
-    """The refire call of `run_id`'s halt marker; a stranded run, which has none, gets an engine-ask resume of its sizing."""
-    marker = _halted_marker(root, run_id)
-    if marker is None:
-        if not (entry and entry.sizing_rel):
-            return None
-        return ask_contract.refire_next_action_for(
-            "stranded_staged", run_id=run_id, sizing_rel=entry.sizing_rel, detail="stranded staged run: resume it",
-        ).get("call")
-    action = marker.get(halted_run.HALT_NEXT_ACTION_FIELD)
-    call = action.get("call") if isinstance(action, dict) else None
-    return call if isinstance(call, str) else None
-
-
 def _names(path: str, held: tuple) -> bool:
     """True when `held` (repo-relative paths) holds `path` itself or a directory containing it."""
     return bool(live_run_writes.overlaps([path], {"_": frozenset(held)}))
 
 
+def peer_hunk_runs(root: Path, path: str, *, exclude_run_id: str) -> tuple:
+    """Other runs (live footprint, halted withheld or kept paths) whose records name `path`, chain kin dropped; attribution only, never a hold."""
+    root = Path(root)
+    path = _norm(path)
+    live = live_run_writes.overlaps([path], _live_footprints(root, exclude_run_id))
+    named = {rid for rid in live if rid != exclude_run_id and run_token.is_live(root, rid)}
+    for rid, entry in halted_withheld_index.entries(root).items():
+        if rid == exclude_run_id or not _names(path, (*entry.paths, *entry.declared)):
+            continue
+        if _names(path, entry.paths) or _names(path, tuple(co_tenant_kept.kept_paths(root, rid))):
+            named.add(rid)
+    kin = run_lineage.chain_kin(root, exclude_run_id, sorted(named))
+    return tuple(sorted(rid for rid in named if rid not in kin))
+
+
 def owner_of(root: Path, path: str, *, exclude_run_id: str, include_waiting: bool = False) -> dict:
-    """`{run_id, state}` of the run holding `path` uncommitted: state "live" (a run with a live token whose
-    staged footprint names it), else "halted" (a halted record, or a stranded `staged` run with no halt
-    marker and no live launcher, whose withheld paths or kept paths name it, the most recently halted first;
-    a run that only declares the path, its footprint recording no write of it, is never the owner), else
-    `{run_id: None, state: None}`.
-    `exclude_run_id`, its chain kin and a live
-    run already parked behind `exclude_run_id` are never the owner, unless `include_waiting`: `resolve` keeps
-    that run so the two-run wait cycle is named instead of read as no owner."""
+    """`{run_id, state}` of the live run holding `path` uncommitted (a run with a live token whose staged
+    footprint names it), else `{run_id: None, state: None}`: a halted run holds nothing (`peer_hunk_runs`
+    names it for attribution). `exclude_run_id`, its chain kin and a live run already parked behind
+    `exclude_run_id` are never the owner, unless `include_waiting`: `resolve` keeps that run so the two-run
+    wait cycle is named instead of read as no owner."""
     root = Path(root)
     path = _norm(path)
     live = live_run_writes.overlaps([path], _live_footprints(root, exclude_run_id))
@@ -194,30 +171,10 @@ def owner_of(root: Path, path: str, *, exclude_run_id: str, include_waiting: boo
         if rid != exclude_run_id and rid not in skipped and run_token.is_live(root, rid)
         and (include_waiting or exclude_run_id not in ((stage_wait.read(root, rid) or {}).get("blockers") or ()))
     )
-    halted: dict[str, int] = {}
-    for rid, entry in halted_withheld_index.entries(root).items():
-        if rid == exclude_run_id or rid in live or rid in skipped or not _names(path, (*entry.paths, *entry.declared)):
-            continue
-        if _names(path, entry.paths) or _names(path, tuple(co_tenant_kept.kept_paths(root, rid))):
-            halted[rid] = entry.at_ns
-    kin = run_lineage.chain_kin(root, exclude_run_id, [*candidates, *halted])
+    kin = run_lineage.chain_kin(root, exclude_run_id, candidates)
     for rid in candidates:
         if rid not in kin:
             return {"run_id": rid, "state": "live"}
-    entries = halted_withheld_index.entries(root)
-    for rid in sorted(halted, key=lambda r: (halted[r], r), reverse=True):
-        if rid in kin:
-            continue
-        entry = entries.get(rid)
-        marker = _halted_marker(root, rid)
-        if marker is None:
-            if not _stranded(root, rid):
-                continue
-            sizing_rel = entry.sizing_rel if entry else None
-        else:
-            sizing_rel = marker.get("sizing_rel") or (entry.sizing_rel if entry else None)
-        if _landed_successor(root, rid, sizing_rel) is None:
-            return {"run_id": rid, "state": "halted"}
     return {"run_id": None, "state": None}
 
 
@@ -239,10 +196,9 @@ def _park_behind(root: Path, run_id: str, owner: str, exc) -> bool:
 
 def resolve(root: Path, run_id: str, exc) -> dict:
     """Park `run_id` behind the live owner of `exc.peer` -> `{parked: "co-tenant-wait", owner, module,
-    symbol, importer}`; a halted owner (never one whose sizing has a later landed run) -> `{cause:
-    "co_tenant_dependency_on_halted_run", owner, chain: [run_id, owner], owner_halted_age_s,
-    owner_refire, module, symbol, importer}` and no park record; no owner -> `{cause:
-    "co_tenant_dependency", owner: None, ...}`. An owner whose own needs lead back to `run_id` ->
+    symbol, importer}`; no live owner (a halted run's record only, or none) -> `{cause:
+    "co_tenant_dependency", owner: None, peer_runs: [halted or other runs naming the path], ...}` and no
+    park record. An owner whose own needs lead back to `run_id` ->
     `{cause: "co_tenant_cycle", cycle: [run ids], remedy, owner, ...}` with no park record and no `parked`
     key (`clean_overlay_verify` reads `parked` before `cause`). An owner that ended between attribution and
     the park (its wake already ran) is un-parked and attributed once more."""
@@ -259,13 +215,9 @@ def resolve(root: Path, run_id: str, exc) -> dict:
             }
         if found["state"] == "live" and _park_behind(root, run_id, found["run_id"], exc):
             return {"parked": PARKED, "owner": found["run_id"], **named}
-        if found["state"] == "halted" or (found["state"] == "live" and _launcherless_halted(root, found["run_id"])):
-            entry = halted_withheld_index.entries(root).get(found["run_id"])
-            return {
-                "cause": CAUSE_HALTED_OWNER, "owner": found["run_id"], "chain": [run_id, found["run_id"]],
-                "owner_halted_age_s": _halted_age_s(root, found["run_id"], entry),
-                "owner_refire": _refire_call(root, found["run_id"], entry), **named,
-            }
-        if found["state"] is None:
+        if found["state"] is None or _launcherless_halted(root, found["run_id"]):
             break
-    return {"cause": CAUSE_TYPED, "owner": None, **named}
+    return {
+        "cause": CAUSE_TYPED, "owner": None,
+        "peer_runs": list(peer_hunk_runs(root, exc.peer, exclude_run_id=run_id)), **named,
+    }

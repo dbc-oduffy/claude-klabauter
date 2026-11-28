@@ -29,6 +29,8 @@ FLEET_COLLECT_TOTAL_BUDGET_S = 240
 _DETAIL_CAP = 99
 _INSTALL_TIMEOUT_S = 120
 
+_SCRATCH_DIRS = ("scratch", "scratchpad")
+_VANISHED = re.compile(r"FileNotFoundError[^\n]*(?:" + "|".join(_SCRATCH_DIRS) + ")")
 _NO_MODULE = re.compile(r"No module named ['\"]([^'\"]+)['\"]")
 _COLLECTED = re.compile(r"(?:(\d+)/)?(\d+) tests? collected")
 _ERROR_LINE = re.compile(r"^(?:E\s+)?(\w*(?:Error|Exception)\b.*)$", re.MULTILINE)
@@ -144,6 +146,8 @@ def _install_deps(key: str, py: Path, root: Path, deps: list, timeout: float) ->
 def _collect(key: str, py: str, root: Path, timeout: float) -> CheckItem:
     name = f"fleet-test-env:{key}"
     argv = [py, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"]
+    for scratch in _SCRATCH_DIRS:
+        argv.append(f"--ignore={scratch}")
     # A registered checkout can be nested inside a different fleet repository.
     argv.extend(["--confcutdir", str(root.resolve())])
     try:
@@ -153,6 +157,8 @@ def _collect(key: str, py: str, root: Path, timeout: float) -> CheckItem:
     except OSError as exc:
         return CheckItem(name, False, _cap(f"never ran: interpreter unavailable: {exc}"))
     output = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+    if proc.returncode != 0 and _VANISHED.search(output):
+        return CheckItem(name, False, "never ran: a path vanished during collect")
     if proc.returncode == 0:
         match = None
         for match in _COLLECTED.finditer(output):

@@ -117,30 +117,39 @@ def curl_config_path(engine_root: Optional[Path] = None) -> Path:
 
 
 def grant_logon_sid_read(path: Path) -> bool:
-    """Add ONE allow ACE, FILE_GENERIC_READ (`FR`), for this process's logon
-    SID to `path`'s own DACL; Windows only. True when the ACE is present
-    afterwards, False when there is no logon SID, no Windows, or the grant
-    failed (best effort: a failed grant must not stop a boot).
+    """Add one allow ACE, FILE_GENERIC_READ (`FR`), to `path`'s own DACL for
+    this process's logon SID and for each `election.sandbox_principal_sids()`
+    SID not already granted; Windows only. True when every wanted ACE is
+    present afterwards, False when there is none to grant, no Windows, or the
+    grant failed (best effort: a failed grant must not stop a boot).
 
     A codex workspace-write restricted token lists the logon SID among its
     restricting SIDs, and must pass the file's DACL for them as well as for
-    the user. Touches exactly `path`: never its directory, never a write or
-    delete right, no other trustee.
+    the user; the codex sandbox user needs the sandbox ACE to read the door
+    credential at all. Touches exactly `path`: never its directory, never a
+    write or delete right, no other trustee.
     """
     if sys.platform != "win32":
         return False
-    from coordinator_core.warm.election import current_logon_sid
+    from coordinator_core.warm import election
 
-    logon_sid = current_logon_sid()
-    if not logon_sid:
+    wanted = []
+    for sid in (election.current_logon_sid(), *election.sandbox_principal_sids()):
+        if sid and sid not in wanted:
+            wanted.append(sid)
+    if not wanted:
         return False
     try:
         sddl = _directory_dacl_sddl(path)
+        granted = set()
         for match in _ACE_RE.finditer(sddl):
             fields = match.group(1).split(";")
-            if len(fields) >= 6 and fields[0] == "A" and fields[2] == "FR" and fields[5] == logon_sid:
-                return True
-        return _set_dacl_from_sddl(path, _dacl_part(sddl) + f"(A;;FR;;;{logon_sid})")
+            if len(fields) >= 6 and fields[0] == "A" and fields[2] == "FR":
+                granted.add(fields[5])
+        missing = [sid for sid in wanted if sid not in granted]
+        if not missing:
+            return True
+        return _set_dacl_from_sddl(path, _dacl_part(sddl) + "".join(f"(A;;FR;;;{sid})" for sid in missing))
     except OSError:
         return False
 

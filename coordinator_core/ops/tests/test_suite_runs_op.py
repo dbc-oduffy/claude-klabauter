@@ -172,6 +172,70 @@ def test_log_skipped_when_every_sha_is_head_and_bounded_otherwise(repo, monkeypa
     assert calls[1][-1] == f"{_git(repo, 'rev-parse', 'HEAD~1')}..HEAD"
 
 
+def _red(repo, ids, sha=None, collection: str = "default") -> None:
+    log = repo / "run.log"
+    log.write_text("".join(f"FAILED {i} - boom\n" for i in ids), encoding="utf-8")
+    fields = {
+        "repo_root": str(repo), "collection": collection, "command": ["pytest"],
+        "head_sha": sha or _git(repo, "rev-parse", "HEAD"),
+        "started_at": "t0", "ended_at": "t1", "dirty_paths": [],
+        "duration_s": 1.0, "exit_code": 1, "outcome": "fail", "serialized": True,
+        "log_truncated": False,
+    }
+    srr.write_run(srr.record_dir(repo, collection), fields, log if ids else None)
+
+
+def test_split_names_previous_and_new_with_both_shas(repo) -> None:
+    _git(repo, "symbolic-ref", "HEAD", "refs/heads/feature")
+    _red(repo, ["t.py::a", "t.py::b"], sha="a" * 40)
+    _red(repo, ["t.py::b", "t.py::c"], sha="b" * 40)
+    split = suite_runs_op._suite_runs({"repo_root": str(repo)})["collections"]["default"]["failure_split"]
+    assert split["previous_sha"] == "a" * 40 and split["main_sha"] is None
+    assert split["ids"]["t.py::b"] == {"status": "pre-existing", "red_at": ["previous"]}
+    assert split["ids"]["t.py::c"] == {"status": "new", "red_at": []}
+
+
+def test_main_slot_written_only_on_main_and_keeps_its_sha(repo) -> None:
+    _git(repo, "symbolic-ref", "HEAD", "refs/heads/main")
+    _red(repo, ["t.py::m"], sha="c" * 40)
+    _git(repo, "symbolic-ref", "HEAD", "refs/heads/feature")
+    _red(repo, ["t.py::x"], sha="d" * 40)
+    _red(repo, ["t.py::x", "t.py::m", "t.py::n"], sha="e" * 40)
+    out = suite_runs_op._suite_runs({"repo_root": str(repo)})["collections"]["default"]
+    assert out["main"]["head_sha"] == "c" * 40
+    split = out["failure_split"]
+    assert split["main_sha"] == "c" * 40 and split["previous_sha"] == "d" * 40
+    assert split["ids"]["t.py::m"] == {"status": "pre-existing", "red_at": ["main"]}
+    assert split["ids"]["t.py::x"]["red_at"] == ["previous"]
+    assert split["ids"]["t.py::n"]["status"] == "new"
+
+
+def test_explicit_failed_ids_override_current_and_add_no_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    _git(repo, "symbolic-ref", "HEAD", "refs/heads/main")
+    _red(repo, ["t.py::a"], sha="1" * 40)
+    _red(repo, [], sha="2" * 40)
+    baseline = _count_spawns(monkeypatch)
+    suite_runs_op._suite_runs({"repo_root": str(repo)})
+    plain = len(baseline)
+    baseline.clear()
+    out = suite_runs_op._suite_runs({"repo_root": str(repo), "failed_ids": ["t.py::a", "t.py::z"]})
+    ids = out["collections"]["default"]["failure_split"]["ids"]
+    assert ids["t.py::a"]["status"] == "pre-existing" and ids["t.py::z"]["status"] == "new"
+    assert len(baseline) == plain
+
+
+def test_run_on_main_is_not_its_own_baseline(repo) -> None:
+    _git(repo, "symbolic-ref", "HEAD", "refs/heads/main")
+    _red(repo, ["t.py::a"], sha="1" * 40)
+    split = suite_runs_op._suite_runs({"repo_root": str(repo)})["collections"]["default"]["failure_split"]
+    assert split["ids"]["t.py::a"] == {"status": "new", "red_at": []}
+
+
+def test_green_run_has_no_split(repo) -> None:
+    _record(repo)
+    assert "failure_split" not in suite_runs_op._suite_runs({"repo_root": str(repo)})["collections"]["default"]
+
+
 def test_handler_cpu_under_500ms(repo) -> None:
     _record(repo)
     _record(repo)

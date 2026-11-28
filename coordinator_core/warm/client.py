@@ -189,7 +189,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 __all__ = [
     "ERROR_PIPE_BUSY",
@@ -367,6 +367,10 @@ COLD_BUCKET_MUTATION_DEADLINE_COLD_REPLAY = "mutation-deadline-cold-replay"
 #: files refuse a differing re-write of a non-run-keyed id, and the sidecar and
 #: blobs use `atomic_write_bytes`. Re-verify the op against this invariant before adding a name.
 _COLD_REPLAY_SAFE = frozenset({"review.prep"})
+
+#: invariant: admission needs the op's record replaced per run_id (`measured_rev.measured_rev`) and the
+#: original run dead with its engine, so no concurrent duplicate; never widen `_COLD_REPLAY_SAFE` instead.
+_RESTART_RESEND_SAFE = frozenset({"dispatch.measured_rev"})
 
 #: Read-only CLI `(entrypoint basename, first positional argv)` pairs whose
 #: delivered-then-expired warm request may be re-run cold once. Mirrors
@@ -1785,10 +1789,12 @@ def _reconcile_or_indeterminate(
     pipe: str,
     token: str,
     waited_secs: Optional[float] = None,
+    resend: "Optional[Callable[[], Optional[dict]]]" = None,
 ) -> dict:
     """`_indeterminate_envelope`, unless `warm.request_status` (re-read while the op is still
     queued/executing, up to `RECONCILE_SETTLE_SECS`) or the dispatch journal reads a terminal
-    outcome for the keyed op: then that outcome is the reply. The op is never re-run."""
+    outcome for the keyed op: then that outcome is the reply. The op is never re-run, except an
+    op in `_RESTART_RESEND_SAFE` whose status is `unknowable/engine-restarted`: `resend` runs once."""
     envelope = _indeterminate_envelope(msg, detail, dispatch_key, waited_secs)
     error = envelope.get("error")
     data = error.get("data") if isinstance(error, dict) else None
@@ -1817,6 +1823,15 @@ def _reconcile_or_indeterminate(
             return {"jsonrpc": "2.0", "id": msg.get("id"), "result": landed["result"]}
         status = _reconcile_poll(pipe, token, dispatch_key, engine)
         reply = _reconciled_reply(msg, status)
+    if (
+        reply is None
+        and resend is not None
+        and _replay_op_name(msg) in _RESTART_RESEND_SAFE
+        and isinstance(status, dict)
+        and status.get("state") == dispatch_ack.STATE_UNKNOWABLE
+        and status.get("reason") == dispatch_ack.REASON_ENGINE_RESTARTED
+    ):
+        reply = resend()
     return reply if reply is not None else envelope
 
 
@@ -2366,6 +2381,42 @@ def _try_warm_dispatch_inner(
             json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n",
         )
 
+    def _resend_once() -> Optional[dict]:
+        """The one warm-pipe re-send of `_RESTART_RESEND_SAFE` op to the restarted engine under a
+        fresh dispatch key; None on any failure, so the indeterminate envelope stands."""
+        fresh = engine_token()
+        request["_engine_token"] = fresh
+        request["_dispatch_key"] = dispatch_ack.mint_key()
+        frame = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
+        resend_fh = None
+        try:
+            resend_fh = _open_pipe_waiting(_endpoint_name(fresh))
+            resend_fh.write(frame)
+            resend_fh.flush()
+            answer = _PendingRead(resend_fh).wait(_mutation_deadline_for(msg.get("method")))
+            if answer is _TIMED_OUT or not answer or not answer.strip():
+                return None
+            reply = json.loads(answer)
+        except Exception as exc:  # noqa: BLE001 -- a failed re-send leaves the indeterminate envelope
+            print(f"[warm-client] restart re-send failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return None
+        finally:
+            if resend_fh is not None:
+                try:
+                    resend_fh.close()
+                except OSError:
+                    pass
+        if not isinstance(reply, dict) or "jsonrpc" not in reply:
+            return None
+        reply_error = reply.get("error")
+        if isinstance(reply_error, dict) and reply_error.get("code") in (ENGINE_SKEW, WARM_DISPATCH_INDETERMINATE):
+            return None
+        resent_stderr = reply.pop("_stderr", None)
+        if isinstance(resent_stderr, str) and resent_stderr.strip():
+            print(resent_stderr, file=sys.stderr, flush=True)
+        _clear_unanswered()
+        return reply
+
     call_started = time.time()
     for attempt in range(2):
         if attempt:
@@ -2523,6 +2574,7 @@ def _try_warm_dispatch_inner(
                         pipe,
                         token,
                         waited_secs=time.monotonic() - delivered_at,
+                        resend=_resend_once,
                     )
                 if not line or not line.strip():
                     # Held past the probe, then closed silently: engaged, not
@@ -2534,6 +2586,7 @@ def _try_warm_dispatch_inner(
                         pipe,
                         token,
                         waited_secs=time.monotonic() - delivered_at,
+                        resend=_resend_once,
                     )
         except BrokenPipeError:
             if delivered and _op_may_mutate(_classified_op_name(msg)):
@@ -2544,6 +2597,7 @@ def _try_warm_dispatch_inner(
                     pipe,
                     token,
                     waited_secs=time.monotonic() - delivered_at,
+                    resend=_resend_once,
                 )
             if attempt == 0:
                 continue  # the table's one re-open
@@ -2564,7 +2618,7 @@ def _try_warm_dispatch_inner(
         def _cold_or_indeterminate(detail: str) -> Optional[dict]:
             global _last_cold_bucket
             if _op_may_mutate(_classified_op_name(msg)):
-                return _reconcile_or_indeterminate(msg, detail, dispatch_key, pipe, token)
+                return _reconcile_or_indeterminate(msg, detail, dispatch_key, pipe, token, resend=_resend_once)
             _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
             return None
 

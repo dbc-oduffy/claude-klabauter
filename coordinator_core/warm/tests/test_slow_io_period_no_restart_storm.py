@@ -22,16 +22,27 @@ pytestmark = pytest.mark.complete
 POOL = 4
 SPACING = 0.2
 HEAVY_METHOD = "review.reverify"
+RESULT_DEADLINE = 6.0
 
 
 class _Proc:
-    terminated = False
+    pid = None
+
+    def __init__(self) -> None:
+        self._dead = threading.Event()
+
+    @property
+    def terminated(self) -> bool:
+        return self._dead.is_set()
 
     def terminate(self) -> None:
-        self.terminated = True
+        self._dead.set()
+
+    def join(self, timeout=None) -> None:
+        self._dead.wait(timeout)
 
     def is_alive(self) -> bool:
-        return False
+        return not self._dead.is_set()
 
 
 class _HeldPool:
@@ -71,10 +82,12 @@ class _Recorder:
 def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", POOL)
     monkeypatch.setattr(server, "STALL_DUMP_SECS", 0.05)
-    monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 6.0)
+    monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", RESULT_DEADLINE)
     monkeypatch.setattr(server, "_IO_WAIT_MAX_SECS", 30.0)
     monkeypatch.setattr(server, "_POST_RECYCLE_ADMIT_SPACING_SECS", SPACING)
     monkeypatch.setattr(server, "_POST_RECYCLE_BACKOFF_SECS", 30.0)
+    monkeypatch.setattr(server, "_RETIRE_GRACE_SECS", 0.0)
+    monkeypatch.setattr(server, "_HOLDER_PROBE_TTL_SECS", 0.05)
     monkeypatch.setattr(server.breadcrumb, "svc_dir", lambda _root: tmp_path / "svc")
     monkeypatch.setattr(server, "_start_telemetry_drain", lambda _q: threading.Event())
     monkeypatch.setattr(server.concurrent.futures, "ProcessPoolExecutor", _InstantPool)
@@ -112,7 +125,15 @@ def _probe(monkeypatch, ms_by_root) -> None:
     monkeypatch.setattr(server, "_holder_drive_probe_ms", lambda root: ms_by_root[Path(root)])
 
 
-def _hold(ctx, pool, root, count, age: float = 1.0) -> list[str]:
+def _await_probe(ctx, root, expected: float) -> None:
+    """Block until the holder probe cache serves `expected` for `root` (its refresh is asynchronous)."""
+    deadline = time.monotonic() + 5.0
+    while ctx._holder_probe_cache.probe_ms(root) != expected and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert ctx._holder_probe_cache.probe_ms(root) == expected
+
+
+def _hold(ctx, pool, root, count, age: float = RESULT_DEADLINE + 1.0) -> list[str]:
     keys = []
     for _ in range(count):
         key = dispatch_ack.mint_key()
@@ -146,12 +167,15 @@ def _fire_worker_watchers(monkeypatch, tmp_path, stall_dir, root, count, stall_s
 
 
 def _is_recycled(ctx, old, keys):
+    for proc in old._processes.values():
+        proc._dead.wait(5.0)
     return (
         ctx._dispatch_pool is not old
         and old.shutdown_args == (False, True)
         and all(p.terminated for p in old._processes.values())
         and all(
-            server._ack_store.status(k) == {"state": "unknowable", "reason": "engine-restarted"}
+            {f: server._ack_store.status(k).get(f) for f in ("state", "reason")}
+            == {"state": "unknowable", "reason": "engine-restarted"}
             for k in keys
         )
     )
@@ -196,6 +220,7 @@ def test_b_a_holder_flipping_hung_with_three_hung_recycles(rig, monkeypatch: pyt
     assert ctx._dispatch_pool is old and old.shutdown_args is None
 
     ms[slow] = 1.0  # the one io-wait holder's drive answers: it reads hung
+    _await_probe(ctx, slow, 1.0)
     first = ctx._pool_dispatch(_msg())
     assert first["error"]["data"]["diagnosis"]["phase"] == "saturated"
     assert ctx._dispatch_pool is old
@@ -215,7 +240,7 @@ def test_b2_slow_drive_wedge_past_the_ceiling_recycles_and_workers_still_mark(
     root.mkdir()
     monkeypatch.setattr(server, "_IO_WAIT_MAX_SECS", 0.05)
     _probe(monkeypatch, {root: server._SLOW_DRIVE_PROBE_MS * 20})
-    keys = _hold(ctx, old, root, POOL, age=2.0)
+    keys = _hold(ctx, old, root, POOL)
 
     first = ctx._pool_dispatch(_msg())
     assert first["error"]["data"]["diagnosis"]["phase"] == "saturated"

@@ -6,13 +6,14 @@ landed blob. Pure Python, zero git spawns; blobs are read in process.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import List, Mapping, NamedTuple, Optional, Tuple, Union
 
 from coordinator_core.git import checkin_attrs
 from coordinator_core.git.git_dir import resolve_git_common_dir
-from coordinator_core.git.git_objects import read_object
+from coordinator_core.git.git_objects import PackReadDeadline, read_object
 from coordinator_core.git.own_delta_merge import apply_own_delta
 
 #: A tree entry as `(mode, blob sha)`; None = absent at that side.
@@ -42,6 +43,11 @@ def _blob(common: Path, entry: Entry) -> Optional[bytes]:
     return obj[1]
 
 
+def _blob_sha1(data: bytes) -> str:
+    """Git blob id of `data` under a sha1 object format; never equals a sha256 landed id."""
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
 def _read_ours(root: Path, rel: str) -> Optional[Tuple[Optional[bytes], bytes]]:
     """`(raw bytes or None when absent, check-in form)`; None for a shape this module does not hash."""
     from coordinator_core.git.commit import checkin_form
@@ -66,14 +72,16 @@ def _sync_one(
         return None
     if checkin_attrs.clean_filter_may_apply(root, rel) is not None:
         return None
-    base = _blob(common, parent)
-    theirs = _blob(common, landed)
-    if base is None or theirs is None:
-        return None
     seen = _read_ours(root, rel)
     if seen is None:
         return None
     data, ours = seen
+    if data is not None and landed is not None and _blob_sha1(ours) == landed[1]:
+        return "head_equal"
+    base = _blob(common, parent)
+    theirs = _blob(common, landed)
+    if base is None or theirs is None:
+        return None
     absent = data is None
     if landed is None:
         if absent:
@@ -148,7 +156,8 @@ def sync_landed_paths(
     INVARIANT: a path is written only when the merge is symmetric (landed hunks and worktree-only
     hunks both present) and the worktree bytes are unchanged between the read and the replace.
     Collision, symlink or submodule, clean filter, over `MAX_MERGE_LINES`, a CR-mixed worktree and
-    an unreadable blob are `refused` with the worktree byte-identical. A residual window remains
+    an unreadable blob are `refused` with the worktree byte-identical; a `PackReadDeadline` refuses
+    that path and every later one without another read. A residual window remains
     between the final re-read and `os.replace`; no lock covers peer editors of the worktree.
     """
     root = Path(repo)
@@ -156,9 +165,16 @@ def sync_landed_paths(
     head_equal: List[str] = []
     rebased: List[str] = []
     refused: List[str] = []
+    stalled = False
     for rel, (parent, landed) in plan.items():
+        if stalled:
+            refused.append(rel)
+            continue
         try:
             status = _sync_one(root, common, rel, parent, landed)
+        except PackReadDeadline:
+            stalled = True
+            status = None
         except OSError:
             status = None
         if status == "head_equal":

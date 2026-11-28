@@ -102,6 +102,18 @@ def test_measure_returns_the_documented_shape(tmp_path: Path) -> None:
     for variant in ("plain", "slow_fs"):
         for label, phase in result["unbounded_writes"][variant].items():
             assert phase["ops"] == 2 and phase["errors"] == [] and phase["write_landed"] is True, (variant, label)
+    for variant in ("plain", "slow_fs"):
+        frames = result["halted_landing"][variant]
+        assert set(frames) == {"run_token.note_halt_landing", "halted_withheld_index._persist", "op._write_staged_prompt"}
+        for label, phase in frames.items():
+            assert phase["ops"] == 2 and phase["errors"] == [] and phase["write_landed"] is True, (variant, label)
+    for label, phase in result["halted_landing"]["slow_fs"].items():
+        assert sum(phase["shim_hits"].values()) >= 1, label
+    cost = result["atomic_write_cost"]
+    for label in ("fresh_dir", "large_dir"):
+        assert {"is_file", "os_stat", "sweep_dead_temps", "mkstemp", "replace", "total_cold_sweep"} <= set(cost[label]["steps_wall_ms"])
+    calls = cost["fresh_dir"]["fs_calls_per_write"]
+    assert calls["cold_sweep"]["scandir"] >= 1 and calls["warm_sweep"]["scandir"] == 0
     raw = result["raw_latency"]
     assert raw["large_dir"]["entries"] >= 12 and raw["fresh_dir"]["entries"] <= 8
     assert result["dump_classification"]["dumps"] == 1

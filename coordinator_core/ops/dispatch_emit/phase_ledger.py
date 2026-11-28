@@ -55,6 +55,10 @@ HALT_PHASE = {
     "refusal_after_execute": "review",
     "orphaned_staged": "execute",
     "orphaned_planned": "plan_review",
+    # Synthetic, derived by `halt_refire.replan_halt_kind` from a halt's text and self-correction: the plan's
+    # frozen footprint cannot hold the fix, so only a replan (plan phase on) mints the rows that can.
+    "premise_widened": "plan",
+    "outside_footprint": "plan",
 }
 
 #: A revise-changed input -> the first phase that consumes it. An unlisted input invalidates every phase.

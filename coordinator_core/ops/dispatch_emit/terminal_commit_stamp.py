@@ -303,7 +303,7 @@ def _stamp_coded_commit(
         restore()
         detail = reply.get("error") if isinstance(reply, dict) else reply
         lead = "retry: ref moved; " if _cas_lost(reply) else ""
-        if overlap:
+        if overlap == ref_cas_retry.REFUSED_OVERLAP:
             lead = f"retry: ref moved onto a stamped path ({overlap}); "
         return {"coded_stamp_error": f"{lead}coded-stamp commit did not land: {detail!r}"}
     left_out = {str(p).replace("\\", "/") for p in reply.get("dropped_ignored") or ()}

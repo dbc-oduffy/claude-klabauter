@@ -106,7 +106,7 @@ def _build(root: Path, monkeypatch, chunk: ChunkCommit, report_text: str) -> Pat
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     return root
 

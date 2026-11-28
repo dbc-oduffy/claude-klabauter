@@ -70,6 +70,7 @@ def _no_spawn(monkeypatch):
 def test_gem_ids_and_home_path_resolve_to_the_home_inbox(env, monkeypatch):
     doe = env / "doe"
     (doe / "state" / "cross-repo").mkdir(parents=True)
+    (doe / ".git").mkdir()
     _registry(env, {"content_root": doe})
     _central(env, doe)
     home = _home(env)
@@ -112,7 +113,7 @@ def test_home_refused_inside_a_checkout_resolves_to_no_receiver(env):
 
 def test_ordinary_receivers_unchanged(env):
     repo = env / "other"
-    repo.mkdir()
+    (repo / ".git").mkdir(parents=True)
     _registry(env, {"other": repo})
     inbox, root, _ = resolve_receiver_inbox("other-em")
     assert root == repo

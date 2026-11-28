@@ -2273,23 +2273,30 @@ def _run_checks_memoized(script: str) -> list:
     return list(hit)
 
 
-def _write_staged_prompt(path: Path, data: bytes) -> None:
-    """Write one staged prompt: a plain exclusive create when the file is new (a fresh run's record dir: no
-    reader exists to see a partial file, and the temp-and-rename costs ~1ms per file x ~40 files), else
-    untouched when it already holds `data`, else atomic. Trap: a re-emit of a live run id overwrites files an
-    agent may be reading, which is why that case keeps the atomic replace."""
-    try:
-        with open(path, "xb") as fh:
-            fh.write(data)
-        return
-    except FileExistsError:
-        pass
-    try:
-        if path.read_bytes() == data:
-            return
-    except OSError:
-        pass
-    atomic_write_bytes(path, data)
+STAGED_WRITE_DEADLINE_MS = 150.0
+
+
+class StagedPromptWriteIndeterminate(Exception):
+    """A staged-prompt read or write outlived its deadline; the write may still land, so a refire is safe."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(f"staged-prompt-write-indeterminate: {path}")
+        self.reply = {
+            "ok": False,
+            "error": "staged-prompt-write-indeterminate",
+            "path": str(path),
+            "retry_safe": True,
+            "detail": f"dispatch.emit: staged prompt write stalled past {STAGED_WRITE_DEADLINE_MS:.0f}ms; refire",
+        }
+
+
+def _write_staged_prompt(path: Path, data: bytes, deadline_ms: float = STAGED_WRITE_DEADLINE_MS) -> None:
+    """Write one staged prompt atomically on one bounded worker; a write outliving `deadline_ms`
+    raises `StagedPromptWriteIndeterminate`."""
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as _hrr
+
+    if _hrr.bounded_write(path, data, max(deadline_ms, 1.0)) is _hrr.STALLED:
+        raise StagedPromptWriteIndeterminate(path)
 
 
 def _emit_script_file(
@@ -3655,7 +3662,7 @@ def _dispatch_emit_body(
                 shutil.rmtree(record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]), ignore_errors=True)
             from coordinator_core.ops.dispatch_emit.requirements_ledger import HandoverPending
 
-            if isinstance(exc, HandoverPending):
+            if isinstance(exc, (HandoverPending, StagedPromptWriteIndeterminate)):
                 return exc.reply
             raise
         ask_ctx["revisions_inherited"] = [

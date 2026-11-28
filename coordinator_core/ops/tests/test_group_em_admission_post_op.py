@@ -56,12 +56,23 @@ def test_dispatch_declared_peak_written_and_invalid_refused(tmp_path: Path, monk
     assert rec["declared_peak_mb"] == 4096.0
 
 
-def test_no_holder_fails_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_holder_spools_degraded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.setattr(nomination, "box_holder", lambda directory=None, now=None: None)
+    monkeypatch.setattr(nomination, "fleet_holder", lambda directory=None, now=None, local_id=None: None)
     out = op._groupem_admission_post({"phase": "END", "session_id": "s1", "pids": [1]})
-    assert out == {"posted": False, "reason": "no_box_holder"}
+    assert out["posted"] is False and out["delivered"] is False
+    assert out["spooled"] is True and out["degraded"] is True and out["reason"] == "no_box_holder"
     assert not admission_post.admission_path().exists()
+    assert len((tmp_path / "state" / "group-em" / "box" / "admission-spool.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_no_holder_request_keeps_plain_denial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    monkeypatch.setattr(nomination, "box_holder", lambda directory=None, now=None: None)
+    monkeypatch.setattr(nomination, "fleet_holder", lambda directory=None, now=None, local_id=None: None)
+    out = op._groupem_admission_post({"phase": "REQUEST", "session_id": "s1", "declared_peak_mb": 100})
+    assert out == {"posted": False, "reason": "no_box_holder"}
 
 
 def test_invalid_params_return_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -230,6 +230,32 @@ def test_subagent_destructive_action_denies_a_subagent_only(monkeypatch: pytest.
         assert _denies(mp.apply_guard_level("block-subagent-destructive-action", env)), level
 
 
+def test_clone_shaped_cruft_is_box_degrading_and_denies_a_subagent_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from coordinator_core.bash_guards import block_clone_shaped_cruft as guard
+    from coordinator_core.guard_messages.testing import envelope_of
+
+    assert dr.SUBAGENT_DENY_CLASS["block-clone-shaped-cruft"] == dr.BOX_DEGRADING
+    assert "block-clone-shaped-cruft" not in dr.GUARD_DENY_CLASS
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": f"cp -r {tmp_path / 'repo'} {tmp_path / 'copy'}"},
+        "session_id": "s1",
+        "cwd": str(tmp_path),
+        "agent_id": "deadbeef0123",
+        "agent_type": "coordinator:executor",
+    }
+    env = envelope_of(guard.check(payload))
+    assert _denies(env)
+    for level in ("strict", "warn", "off"):
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
+        mp.reset_cache()
+        assert mp.apply_guard_level("block-clone-shaped-cruft", env, subagent=True) is env, level
+        assert _denies(mp.apply_guard_level("block-clone-shaped-cruft", env)) is False, level
+    em = {k: v for k, v in payload.items() if k not in ("agent_id", "agent_type")}
+    assert not _denies(envelope_of(guard.check(em)))
+
+
 @pytest.mark.parametrize(
     "command",
     [

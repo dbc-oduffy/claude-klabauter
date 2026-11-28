@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core import publish_round
 from coordinator_core.bash_guards import _write_bump_applicability as applicability
 from coordinator_core.bash_guards import _write_bump_marker as marker
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
@@ -347,18 +348,25 @@ def test_narrowing_adds_no_expiry_identity_gating_or_fail_closed(tmp_path):
     assert getattr(guard, "BAND", None) is None
 
 
-def _write_publish_registry(reg_dir, mirror_path, owner: str = "claude-central-em") -> None:
+def _open_publish_mirror(monkeypatch, tmp_path, reg_dir, owner: str = "claude-central-em") -> Path:
+    """Open a live publish round (`<scratch>/publish-round-<pid>-ab12/mirror-testmirror`)
+    and declare the mirror's owner in the registry; returns the mirror clone."""
+    root = tmp_path / "scratch-root"
+    monkeypatch.setattr(publish_round, "round_root", lambda: root)
+    rnd = root / f"round.20261128T000000Z.{os.getpid()}"
+    rnd.mkdir(parents=True)
+    mirror = _init_repo(rnd, "mirror-testmirror")
     reg_dir.mkdir(parents=True, exist_ok=True)
-    escaped = str(mirror_path).replace("\\", "\\\\")
-    lines = ["[publish.mirrors.testmirror]", f'path = "{escaped}"', f'owner = "{owner}"']
-    (reg_dir / "registry.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (reg_dir / "registry.toml").write_text(
+        f'[publish.mirrors.testmirror]\nowner = "{owner}"\n', encoding="utf-8"
+    )
+    return mirror
 
 
 def test_ac3_publish_destination_write_renders_publish_class_copy_naming_owner(tmp_path, monkeypatch):
     own = _init_repo(tmp_path, "own-repo")
-    mirror = _init_repo(tmp_path, "mirror-target")
     reg_dir = tmp_path / "registry"
-    _write_publish_registry(reg_dir, str(mirror), owner="claude-central-em")
+    mirror = _open_publish_mirror(monkeypatch, tmp_path, reg_dir, owner="claude-central-em")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
     session_id = "sess-tool-publish"
@@ -2026,9 +2034,8 @@ def test_guard_level_never_lifts_the_bump_back_to_a_deny(tmp_path, monkeypatch, 
 
 def test_subagent_marker_does_not_clear_a_publish_destination(tmp_path, monkeypatch):
     own = _init_repo(tmp_path, "own-repo")
-    mirror = _init_repo(tmp_path, "mirror-target")
     reg_dir = tmp_path / "registry"
-    _write_publish_registry(reg_dir, str(mirror))
+    mirror = _open_publish_mirror(monkeypatch, tmp_path, reg_dir)
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
     session_id = "sess-sub-publish-marker"
     session_start.write_session_start_record(session_id, launch_cwd=str(own))

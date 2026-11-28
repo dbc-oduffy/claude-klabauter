@@ -597,7 +597,7 @@ def _prepare_bookkeeping(root: Path, params: dict, request, ask_run_dir: Optiona
     hosts no coordinator state: it gets no outcome file, no delivery note and no ledger trailer."""
     book = SimpleNamespace(extra_paths=[], receipts=[], resolves=None, review_land=[], ledger=None,
                            receipt_error=None, receipt_ids=[], local_receipt_ids=[], restore={},
-                           onboarded=onboarded)
+                           onboarded=onboarded, outcome_run=None)
     declared = set(paths)
     if request.plan_path and not incomplete:
         book.resolves = _resolving_sizing(root, request.plan_path)
@@ -618,7 +618,11 @@ def _prepare_bookkeeping(root: Path, params: dict, request, ask_run_dir: Optiona
             book.restore[outcome_rel] = (root / outcome_rel).read_bytes()
         except OSError:
             book.restore[outcome_rel] = None
-        outcome = run_artifacts.write_tracked_outcome(root, ask_run_dir.name, "landed")
+        outcome = run_artifacts.write_tracked_outcome(
+            root, ask_run_dir.name, "landed", ledger_verdict=params.get("ledger_verdict"),
+            cited_sizing=book.ledger.sizing_rel if book.ledger is not None else None,
+        )
+        book.outcome_run = ask_run_dir.name if outcome else None
         note = delivery_note_locate(root, ask_run_dir.name)
         book.extra_paths += [p for p in (outcome, note if (root / note).is_file() else None) if p]
     book.receipts, book.receipt_error, book.receipt_ids = _write_receipts(
@@ -779,7 +783,8 @@ def _append_resolution(root: Path, resolves: dict, sha: str) -> dict:
 
 def _write_register(root: Path, plan_path: str, inline_review: object, sha: str) -> dict:
     """RL-12: the judge's per-row verdicts written into the cited sizing's register at the landing sha,
-    in place under the file lock. `{register_sizing: rel}` on a write, `{}` when nothing applies,
+    in place under the file lock, every ledger-met open row stamped whoever claims it. `{register_sizing: rel}` on a write
+    (plus `register_unreconciled`: the rows still refusing a ship), `{}` when nothing applies,
     `{register_writeback_error}` when the result fails the sizing schema (the file is left as it was)."""
     criterion = inline_review.get("criterion") if isinstance(inline_review, dict) else None
     if not isinstance(criterion, dict):
@@ -804,10 +809,13 @@ def _write_register(root: Path, plan_path: str, inline_review: object, sha: str)
     schema = Path(__file__).resolve().parents[2] / "frontmatter" / "schemas" / "sizing-object.schema.json"
     now = datetime.now(timezone.utc)
 
+    owed: list = []
+
     def mutate(old: str) -> str:
         if rr.read_register(old) is None:
             raise MutateAbort("")
-        new = rr.apply_verdicts(old, judged, plan_path, sha, now, frozenset(claimed))
+        new, still = rr.reconcile_open_rows(old, judged, plan_path, sha, now, frozenset(claimed))
+        owed[:] = still
         if new == old:
             raise MutateAbort("")
         try:
@@ -825,7 +833,7 @@ def _write_register(root: Path, plan_path: str, inline_review: object, sha: str)
         return {"register_writeback_error": reason} if reason else {}
     except Exception as exc:  # noqa: BLE001 -- lock timeout or I/O: the landing stands
         return {"register_writeback_error": f"register write-back refused: {exc!r}"}
-    return {"register_sizing": sizing_rel}
+    return {"register_sizing": sizing_rel, **({"register_unreconciled": owed} if owed else {})}
 
 
 def _review_differs(root: Path, scans: dict, spine: dict, rel: str) -> bool:
@@ -866,9 +874,13 @@ def _after_landing(root: Path, params: dict, request, book: SimpleNamespace, by_
     if book.ledger is not None and book.ledger.sizing_rel and isinstance(verdict, dict):
         from coordinator_core.ops.dispatch_emit import requirements_ledger
 
+        demoted: list = []
         try:
-            requirements_ledger.apply_verdict(root, book.ledger.sizing_rel, verdict, run_id=run_id, sha=sha)
+            requirements_ledger.apply_verdict(
+                root, book.ledger.sizing_rel, verdict, run_id=run_id, sha=sha, wired_demoted=demoted)
             stamp_paths.append(book.ledger.sizing_rel)
+            if demoted:
+                out["wired_demoted"] = demoted
         except Exception as exc:  # noqa: BLE001 -- surfaced; the landing stands
             out["requirements_writeback_error"] = str(exc)
         owed = requirements_ledger.post_commit_owed(verdict, sha)
@@ -876,6 +888,17 @@ def _after_landing(root: Path, params: dict, request, book: SimpleNamespace, by_
             out["post_commit_owed"] = owed
     if book.resolves is not None:
         out.update(_append_resolution(root, book.resolves, sha))
+    if book.outcome_run:
+        from coordinator_core.ops.dispatch_emit.terminal_commit_closeout import _land_closure
+
+        closure, outcome_changed = _land_closure(
+            root, book.outcome_run, book.ledger.sizing_rel if book.ledger is not None else None, verdict)
+        if closure is not None:
+            out["closure"] = closure
+            if closure.get("verdict") == "partial":
+                out["closed_as"] = "partial"
+        if outcome_changed:
+            stamp_paths.append(outcome_changed)
     if book.onboarded:
         out.update(_coded_stamp(root, params, request, by_chunk, changed, chunk_ids, sha, run_id, stamp_paths))
     else:
@@ -1018,7 +1041,8 @@ def _land(root: Path, params: dict) -> dict:
     book.review_land = [p for p in book.review_land if p in live and _review_differs(root, scans, spine, p)]
     try:
         message = _message(root, params, request, chunk_ids, deleted, script_text, run_id, book)
-        reply = _commit(root, present, deleted, scans, spine, message, run_id, params)
+        reply = _commit(root, present, deleted, scans, spine, message, run_id, params,
+                        declared=frozenset(home), plan=getattr(request, "plan_path", None))
     except CommitRefused as exc:
         reply = _error(str(exc), refused=type(exc).__name__)
     except BaseException:
@@ -1100,10 +1124,35 @@ def _own_kept(root: Path, run_id: str, present: list, tracked: dict) -> dict:
     return out
 
 
+def _own_hunks(root: Path, run_id: str, plan: Optional[str], rels: list) -> tuple:
+    """`({rel: blob sha of HEAD plus only the run's own hunks}, {rels held whole})` for the modified tracked
+    `rels` the run declared. In a run whose manifest is readable, a path with no `write_baseline` blob and no
+    kept fingerprint has no measure of which hunks are the run's: it is held whole, never landed as worktree
+    bytes. A run with no manifest records nothing to attribute against: worktree bytes land. In process, no spawn."""
+    if not rels or not run_id:
+        return {}, set()
+    from coordinator_core.ops.dispatch_emit import hunk_provenance
+
+    inv = hunk_provenance.run_invariants(root, run_id)
+    try:
+        if not inv.manifest():
+            return {}, set()
+    except Exception:  # noqa: BLE001 -- an unreadable manifest withholds: worktree bytes are the unsafe default
+        return {}, set(rels)
+    settled: dict = {}
+    found = hunk_provenance.unproduced_hunks(
+        root, run_id, rels, own_plan=plan, advisories=[], settled=settled, invariants=inv,
+    )
+    return {p: s["blob"] for p, s in settled.items()}, {f.path for f in found}
+
+
 def _commit(root: Path, present: list, deleted: list, scans: dict, spine: dict, message: str,
-            run_id: str, params: dict, advise: bool = True) -> dict:
+            run_id: str, params: dict, advise: bool = True, declared: frozenset = frozenset(),
+            plan: Optional[str] = None) -> dict:
     """RL-01, RL-02, RL-05, RL-13, RL-14, RL-15, RL-16: read, hash and write the landing in process,
-    then move the ref by one compare-and-swap."""
+    then move the ref by one compare-and-swap. A `declared` path whose worktree bytes carry hunks outside
+    the run's `write_baseline` delta lands as HEAD plus the run's own hunks (never a worktree swap);
+    a path the split cannot attribute stays out of the commit and dirty, named in `foreign_excluded`."""
     from coordinator_core import dispatch_abandon
     from coordinator_core.git import commit as gc
     from coordinator_core.git import git_objects, git_state
@@ -1137,6 +1186,7 @@ def _commit(root: Path, present: list, deleted: list, scans: dict, spine: dict, 
         pending: dict = {}
         index_new: dict = {}
         buffers: dict = {}
+        foreign_excluded: list = []
         modified_tracked: list = []
         for d, names in by_dir.items():
             head_dir = spine.get(d, {})
@@ -1155,9 +1205,25 @@ def _commit(root: Path, present: list, deleted: list, scans: dict, spine: dict, 
                 _stage(rel, name, d, data, sha, st, head_entry, trees, pending, index_new, buffers, spine)
         if modified_tracked:
             peers = _peer_blobs(root, run_id, {r for r, _d, _h in modified_tracked})
+            own_blobs, held = _own_hunks(root, run_id, plan, [r for r, _d, _h in modified_tracked if r in declared])
             for rel, data, head_entry in modified_tracked:
                 d, _, name = rel.rpartition("/")
                 stat = scans[d][name].stat()
+                if rel in held:
+                    foreign_excluded.append(rel)
+                    continue
+                own_sha = own_blobs.get(rel)
+                if own_sha is not None:
+                    if own_sha == head_entry[1]:
+                        foreign_excluded.append(rel)
+                        continue
+                    stored_own = git_objects.read_object(common, own_sha)
+                    if stored_own is None or stored_own[0] != "blob":
+                        foreign_excluded.append(rel)
+                        continue
+                    data, stat = stored_own[1], _ZERO_STAT
+                    _stage(rel, name, d, data, own_sha, stat, head_entry, trees, pending, index_new, buffers, spine)
+                    continue
                 shas = peers.get(rel)
                 if shas:
                     stored = git_objects.read_object(common, head_entry[1])
@@ -1225,8 +1291,11 @@ def _commit(root: Path, present: list, deleted: list, scans: dict, spine: dict, 
         prepared.abort()
         raise
     prepared.publish()
-    reply = {"committed": True, "sha": commit_sha, "landed_paths": sorted([*present, *deleted]),
+    reply = {"committed": True, "sha": commit_sha,
+             "landed_paths": sorted([*(p for p in present if p not in foreign_excluded), *deleted]),
              "changed_paths": sorted([*buffers, *deleted])}
+    if foreign_excluded:
+        reply["foreign_excluded"] = sorted(foreign_excluded)
     if advisory:
         reply["leak_advisory"] = advisory
     return reply

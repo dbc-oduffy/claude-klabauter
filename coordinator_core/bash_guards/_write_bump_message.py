@@ -33,7 +33,7 @@ which already makes no audience-specific claim.
     registered publish mirror. EM-class is told to check with its PM;
     subagent-class is told to stop and report to its dispatching EM and
     write into its sandbox instead.
-  - `DESTINATION_PUBLISH` -- a registered `publish.mirrors.*.path` target.
+  - `DESTINATION_PUBLISH` -- a target inside an open publish round's mirror clone.
     Drafted around DURABILITY, not ownership (this plan's PM ruling):
     committing into a mirror is not FORBIDDEN, it is WORSE than the
     alternative, because a change made in the source repo percolates out

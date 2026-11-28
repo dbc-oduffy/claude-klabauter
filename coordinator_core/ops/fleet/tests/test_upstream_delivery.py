@@ -426,9 +426,27 @@ def test_a_path_already_in_the_base_tree_is_a_collision_with_no_record(receiver)
     assert pp.list_pending(receiver["sender"]) == []
 
 
-def test_no_resolvable_remote_is_reported_not_delivered(receiver) -> None:
+def test_no_resolvable_remote_lands_on_the_local_tip_with_no_pending_record(receiver) -> None:
     repo = receiver["repo"]
     _git(["remote", "remove", "origin"], repo)
+
+    out = ud.deliver_onto_upstream(repo, receiver["sender"], PATH, CONTENT, receiver["msg"])
+
+    assert out.ok, out.error
+    assert out.on_branch
+    assert out.parent_sha == receiver["local_tip"]
+    assert _git(["rev-parse", BRANCH], repo) == out.commit_sha
+    assert (repo / PATH).read_text(encoding="utf-8") == CONTENT
+    assert out.record_path is None
+    assert pp.list_pending(receiver["sender"]) == []
+    assert ud.verify_delivery(repo, out) is None
+
+
+def test_no_resolvable_remote_never_falls_back_to_an_object_only_delivery(receiver) -> None:
+    repo = receiver["repo"]
+    _git(["remote", "remove", "origin"], repo)
+    (repo / PATH).parent.mkdir(parents=True, exist_ok=True)
+    (repo / PATH).write_text("on disk\n", encoding="utf-8")
 
     out = ud.deliver_onto_upstream(repo, receiver["sender"], PATH, CONTENT, receiver["msg"])
 

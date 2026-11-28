@@ -86,6 +86,15 @@ def test_degraded_filter_drops_nothing(tmp_path: Path, monkeypatch: pytest.Monke
     assert "out/" in _marker_prefixes(script)
 
 
+def test_ignored_prefix_probe_needs_no_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.git import run as git_run
+
+    repo = _repo(tmp_path)
+    monkeypatch.setattr(git_run, "run_git", lambda *a, **kw: pytest.fail("git spawned"))
+    result = emit._gitignored_paths([emit._prefix_probe("out/"), emit._prefix_probe("state/audits/")], repo_root=repo)
+    assert result.matched == frozenset({emit._prefix_probe("out/")})
+
+
 def test_probe_normalises_terminators() -> None:
     assert emit._prefix_probe("a/b") == "a/b/.coordinator-ignore-probe"
     assert emit._prefix_probe("a/b//") == "a/b/.coordinator-ignore-probe"

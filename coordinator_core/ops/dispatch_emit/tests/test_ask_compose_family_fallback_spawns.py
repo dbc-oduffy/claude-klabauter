@@ -8,12 +8,12 @@ import subprocess
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import family_invoke_record, stage_family_binding
+from coordinator_core.ops.dispatch_emit import family_invoke_record
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _RUN = "run-1"
-_OPTED = {"stage_family_binding": stage_family_binding.BINDING_REF}
+_OPTED = {"stage_families": {"review": "codex"}}
 
 
 _NODE = shutil.which("node")

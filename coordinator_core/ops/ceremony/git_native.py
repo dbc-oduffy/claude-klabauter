@@ -4419,9 +4419,13 @@ def commit_scoped(
         return result
     # Mark only, never push; the `sys.modules` gate keeps a cold commit off the cadence import graph.
     cadence = sys.modules.get("coordinator_core.warm.push_cadence")
+    head = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
     if cadence is not None:
         cadence.note_commit(root)
-    head = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
+    else:
+        from coordinator_core.git.commit import mark_cold_commit
+
+        mark_cold_commit(root, head if len(head) == 40 else (_git_state_head_sha(root) or ""))
     if facts:
         try:
             from coordinator_core.cartography import atlas_freshness as af

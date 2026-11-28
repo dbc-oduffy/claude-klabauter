@@ -31,6 +31,7 @@ pinned), and the "reads never bump" carve-out.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from coordinator_core.session_hub_path import hub_for_common
@@ -38,6 +39,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core import publish_round
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
 from coordinator_core.bash_guards import _command_tokenizer
 from coordinator_core.bash_guards._dialect import Dialect
@@ -1295,16 +1297,22 @@ def test_ac6_cwd_drifted_to_a_foreign_repo_still_bumps_the_commit_there(repos, m
     assert result is not None
 
 
-def _write_publish_registry(reg_dir: Path, mirror_path: str, owner: str = "claude-central-em") -> None:
+def _open_publish_mirror(monkeypatch, tmp_path: Path, reg_dir: Path, owner: str = "claude-central-em") -> Path:
+    """Open a live publish round (`<scratch>/publish-round-<pid>-ab12/mirror-testmirror`)
+    and declare the mirror's owner in the registry; returns the mirror clone."""
+    root = tmp_path / "scratch-root"
+    monkeypatch.setattr(publish_round, "round_root", lambda: root)
+    mirror = _init_repo(root / f"round.20261128T000000Z.{os.getpid()}", "mirror-testmirror")
     reg_dir.mkdir(parents=True, exist_ok=True)
-    escaped = str(mirror_path).replace("\\", "\\\\")
-    lines = ["[publish.mirrors.testmirror]", f'path = "{escaped}"', f'owner = "{owner}"']
-    (reg_dir / "registry.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (reg_dir / "registry.toml").write_text(
+        f'[publish.mirrors.testmirror]\nowner = "{owner}"\n', encoding="utf-8"
+    )
+    return mirror
 
 
 def test_ac3_publish_destination_write_renders_publish_class_copy_naming_owner(repos, monkeypatch, tmp_path):
     reg_dir = tmp_path / "registry"
-    _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
+    repos["foreign"] = _open_publish_mirror(monkeypatch, tmp_path, reg_dir, owner="claude-central-em")
     _set_anchor(
         monkeypatch, repos, "sess-ac3-publish", extra={"MACHINE_LOCAL_REGISTRY_DIR": str(reg_dir)}
     )
@@ -1353,7 +1361,7 @@ def test_ac9_publish_destination_verdict_asserted_only_after_bump_applies(repos,
     from coordinator_core.bash_guards import _write_bump_applicability as applicability
 
     reg_dir = tmp_path / "registry"
-    _write_publish_registry(reg_dir, str(repos["foreign"]))
+    repos["foreign"] = _open_publish_mirror(monkeypatch, tmp_path, reg_dir)
     _set_anchor(
         monkeypatch, repos, "sess-ac9-publish", extra={"MACHINE_LOCAL_REGISTRY_DIR": str(reg_dir)}
     )
@@ -1369,7 +1377,7 @@ def test_one_command_publish_ac_unauthorized_push_into_publish_mirror_bumps(
     repos, monkeypatch, tmp_path
 ):
     reg_dir = tmp_path / "registry"
-    _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
+    repos["foreign"] = _open_publish_mirror(monkeypatch, tmp_path, reg_dir, owner="claude-central-em")
     _set_anchor(
         monkeypatch,
         repos,
@@ -1392,7 +1400,7 @@ def test_one_command_publish_ac_cd_into_publish_mirror_then_push_bumps(
     repos, monkeypatch, tmp_path
 ):
     reg_dir = tmp_path / "registry"
-    _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
+    repos["foreign"] = _open_publish_mirror(monkeypatch, tmp_path, reg_dir, owner="claude-central-em")
     _set_anchor(
         monkeypatch,
         repos,
@@ -1415,7 +1423,7 @@ def test_one_command_publish_ac_marker_clears_the_publish_mirror_push_bump(
     repos, monkeypatch, tmp_path
 ):
     reg_dir = tmp_path / "registry"
-    _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
+    repos["foreign"] = _open_publish_mirror(monkeypatch, tmp_path, reg_dir, owner="claude-central-em")
     _set_anchor(
         monkeypatch,
         repos,
@@ -1449,7 +1457,7 @@ def test_percolate_push_memo_git_push_into_publish_mirror_names_percolate_push(
     repos, monkeypatch, tmp_path
 ):
     reg_dir = tmp_path / "registry"
-    _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
+    repos["foreign"] = _open_publish_mirror(monkeypatch, tmp_path, reg_dir, owner="claude-central-em")
     _set_anchor(
         monkeypatch,
         repos,
@@ -1473,7 +1481,7 @@ def test_percolate_push_memo_content_authoring_write_still_cites_doctrine(
     repos, monkeypatch, tmp_path
 ):
     reg_dir = tmp_path / "registry"
-    _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
+    repos["foreign"] = _open_publish_mirror(monkeypatch, tmp_path, reg_dir, owner="claude-central-em")
     _set_anchor(
         monkeypatch,
         repos,

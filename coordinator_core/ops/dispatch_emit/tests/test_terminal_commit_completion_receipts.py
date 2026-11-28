@@ -58,7 +58,7 @@ def claims(monkeypatch: pytest.MonkeyPatch):
     claimed: list = []
     monkeypatch.setattr(
         "coordinator_core.session.claims.list_claims_by_session_checked",
-        lambda sid, cwd=None: ([("handoff", n) for n in claimed], []),
+        lambda sid, cwd=None, classes=None: ([("handoff", n) for n in claimed], []),
     )
     return claimed
 

@@ -327,9 +327,10 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/bug_blitz/worker_clone.py': ('git-internal', 'the base-sha marker <clone>/.git/blitz-base inside a throwaway shared clone under coordinator_temp_root(), never the source repo or state/: provision'),
     'coordinator_core/codex_status/hook.py': ('outside-repo', 'last-refresh outcome json under <settings-home>/state/codex-status, never the repo: record_result'),
     'coordinator_core/ops/dispatch_emit/interpreter_pin.py': ('outside-repo', 'per-box pytest-capability cache json under <settings-home>/cache, never the repo: _imports_pytest'),
-    'coordinator_core/jobs/job_record.py': ('outside-repo', 'job record json (tmp + os.replace) under <settings-home>/jobs, never the repo: write_record'),
+    'coordinator_core/ops/worker_cleanup.py': ('ignored-target', 'tombstone renames under scratch/.deleted and spawn records under scratch/spawn-records, both gitignored scratch, never state/: remove_scratch, _write_record'),
+    'coordinator_core/jobs/job_record.py': ('outside-repo','job record json (tmp + os.replace) under <settings-home>/jobs, never the repo: write_record'),
     'coordinator_core/percolate/bench_shadow_discard.py': ('outside-repo', 'bench file trees and stale shadow entries under coordinator_temp_root(), deleted before exit: main'),
-    'coordinator_core/percolate/shadow_store.py': ('outside-repo','materialized publish trees, COMPLETE markers and eviction renames under coordinator_temp_root()/publish-shadow-store, never a clone: ShadowStore'),
+    'coordinator_core/percolate/shadow_store.py': ('outside-repo', 'materialized publish trees, COMPLETE markers and eviction renames under coordinator_temp_root()/publish-shadow-store, never a clone: ShadowStore'),
     'coordinator_core/post_run/h1_normalize.py': ('in-repo-non-state', 'docs/wiki page rewrites normalising the H1, never state/: normalize'),
     'coordinator_core/post_run/linkfix.py': ('in-repo-non-state', 'docs/wiki and docs/decisions page rewrites repairing links, never state/: fix'),
     'coordinator_core/post_run/nav_index.py': ('in-repo-non-state', 'docs/wiki nav and _index page rewrites, never state/: rebuild'),
@@ -894,6 +895,10 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/session/claim_index.py': ('git-internal', 'claim-index BUILDING token and stream directories beside the sessions hub under .coordinator-local; _begin_index renames the previous directory aside with os.replace and the daemon _sweep_retired deletes it'),
     'coordinator_core/session/op_dispatch_nag.py': ('git-internal', "the DIY-nag window and check stamps (op-dispatch-nag.stamp, op-dispatch-nag.checked) beside xs-lane.json under .coordinator-local/coordinator-sessions/<sid>/, never committed: _mark"),
     'coordinator_core/gem_inbox_apply.py': ('to-fix', 'manifest-declared writes (batons under state/handoffs, memos, the commit ledger under .coordinator-local) via write_text and os.replace moves, with no claim declared: apply_manifest'),
+    'coordinator_core/bug_blitz/worker_clone.py': ('outside-repo', 'blitz-base marker inside the .git dir of a shared clone under coordinator_temp_root()/<clones dir>, never the source repo: provision'),
+    'coordinator_core/codex_status/hook.py': ('outside-repo', '<key>.last-refresh.json outcome file under <settings-home>/state/codex-status, never the repo: record_result'),
+    'coordinator_core/ops/dispatch_emit/interpreter_pin.py': ('outside-repo', 'interpreter-capability cache json under <settings-home>/cache, never the repo: _imports_pytest'),
+    'coordinator_core/ops/worker_cleanup.py': ('ignored-target', 'per-pid spawn record (tmp + os.replace) under the gitignored scratch/spawn-records/<root pid>-<create time>: _write_record'),
 }
 
 _TO_FIX_CEILING: FrozenSet[str] = frozenset({

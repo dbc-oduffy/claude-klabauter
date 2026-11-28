@@ -511,14 +511,14 @@ def test_pid_alive_windows_doubt_reads_alive_and_never_consults_psutil(monkeypat
     assert core.pid_alive(41712) is True
 
 
-def test_pid_alive_posix_eperm_reads_dead(monkeypatch):
-    monkeypatch.setattr(core, "_IS_WINDOWS", False)
+def test_pid_alive_posix_eperm_reads_alive(monkeypatch):
+    from coordinator_core.group_em import session_registry
 
     def denied(pid, sig):
         raise PermissionError(pid)
 
-    monkeypatch.setattr(core.os, "kill", denied)
-    assert core.pid_alive(4242) is False
+    monkeypatch.setattr(session_registry.os, "kill", denied)
+    assert session_registry._pid_alive_posix(4242) is True
 
 
 def test_pid_create_time_windows_converts_filetime(monkeypatch):

@@ -28,7 +28,6 @@ _CLI_PATH = re.compile(r"(?<![\w.\-])(?:[\w.\-]+/)*(?:bin|scripts)/[\w.\-]+\.(?:
 _BACKTICKED = re.compile(r"`([^`]+)`")
 _PYTEST = re.compile(r"\b(?:python3?\s+-m\s+)?pytest\b|\bpython3?\s+-m\s+pytest\b", re.IGNORECASE)
 _TEST_PATH = re.compile(r"(?<![\w.\-])(?:[\w.\-]+/)*(?:tests?/[\w.\-/]*|test_[\w.\-]+\.py)")
-_TESTS_PASS = re.compile(r"\btests?\b[^.;]*\bpass(?:es|ed)?\b", re.IGNORECASE)
 
 _TEMPLATE = (
     "name the entry point and the check, e.g. "
@@ -43,7 +42,7 @@ def _entry_point(text: str) -> bool:
 
 
 def _runnable_check(text: str) -> bool:
-    if _PYTEST.search(text) or _TEST_PATH.search(text) or _TESTS_PASS.search(text):
+    if _PYTEST.search(text) or _TEST_PATH.search(text):
         return True
     return any(len(m.group(1).split()) > 1 for m in _BACKTICKED.finditer(text))
 
@@ -52,7 +51,7 @@ def wiring_clause_refusal(statement: object) -> Optional[str]:
     """Refusal message when `statement` lacks a wiring path or a runnable check, else None.
 
     Entry point: `coordinator-invoke <op>`, a dotted op name, or a `bin/`/`scripts/` CLI path.
-    Check: a backticked multi-word command, a pytest invocation or test path, or "tests ... pass".
+    Check: a backticked multi-word command, or a pytest invocation or test path; the bare phrase "tests ... pass" names no command.
     The refusal shares `EXIT_CRITERION_REFUSAL_HEAD` / `REMEDIATION_MARKER` with the other
     exit-criterion refusals so remediable-wording consumers keep parsing it.
     """

@@ -65,8 +65,15 @@ def test_reply_leaving_only_the_test_leg_owed_is_booked_gate_owed_and_releases_d
     assert out["incomplete"] == []
 
 
-def test_blocked_reply_naming_the_denial_stays_held():
-    out = _go(f"BLOCKED: r.md\n{_DENIED}")
+def test_blocked_reply_whose_status_line_names_the_denial_is_booked_gate_owed():
+    out = _go(f"BLOCKED: {_DENIED}; edits complete, the test-runner leg is owed\nr.md")
+    assert out["calls"] == ["A", "B"]
+    assert list(out["owed"]) == ["A"] and out["owed"]["A"].startswith("gate-blocker: guard-denied:")
+    assert out["incomplete"] == []
+
+
+def test_blocked_reply_naming_the_denial_below_another_blocker_stays_held():
+    out = _go(f"BLOCKED: the spec contradicts the plan\n{_DENIED}")
     assert out["calls"] == ["A"]
     assert out["owed"] == {} and out["incomplete"] == ["A"]
 

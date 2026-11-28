@@ -36,7 +36,7 @@ Negative-spec (faithfully reproduced from the bash oracle -- do NOT "fix" mid-po
     - The publish-target denylist fallback only checks the REGISTRY KEYS
       `repos.coordinator_claude` / `repos.deep_research_claude`. These keys were
       retired by the 2026-06-30-registry-publish-vs-working-targets.md migration in
-      favor of `publish.mirrors.<name>.path` -- the oracle's own co-located test
+      favor of the `publish.mirrors.<name>` path key -- the oracle's own co-located test
       (T4, now `coordinator/tests/test_learn_lessons_roots.py`) resolves via the
       migrated key precisely BECAUSE it knows this denylist fallback no longer does.
       Kept verbatim here for byte-for-byte parity; a follow-up port is a separate item.

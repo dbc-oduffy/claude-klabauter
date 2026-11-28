@@ -119,7 +119,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
     monkeypatch.setenv("LESSON_PROMOTE_OUTBOX_ROOT", str(outbox))
     monkeypatch.setenv("COORDINATOR_SESSION_ID", bench.SESSION_ID)
     monkeypatch.setattr(terminal_commit_closeout, "CLOSE_JOB_SCRIPT", str(noop))
-    monkeypatch.setattr(claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], []))
+    monkeypatch.setattr(claims, "list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([("handoff", "b.md")], []))
     repo, _ = bench.build_fixture(parent)
     launches: list = []
     monkeypatch.setattr(close_background, "_launch_close_review", lambda ctx: launches.append(ctx) or True)

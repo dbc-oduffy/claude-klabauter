@@ -59,8 +59,7 @@ then makes a bare local clone (the disposable "origin") and a working clone
 of THAT bare clone -- two hops, so nothing this harness runs ever has the
 live mirror as a git remote at all, not even one it merely doesn't push to.
 A generated `MACHINE_LOCAL_BIN` shim (`_write_machine_local_shim`) redirects
-exactly the two registry keys (`repos.claude_klabauter`,
-`publish.mirrors.claude_klabauter.path`) that resolve the publish
+exactly the registry key (`repos.claude_klabauter`) that resolves the
 destination to the disposable working clone; every other key passes through
 the real `machine-local dump` unchanged. `_assert_dest_is_scratch` re-resolves
 the destination through that same shim BEFORE the round runs and raises if it
@@ -196,11 +195,9 @@ _REAL_ROUND_TIMEOUT_S = 1800
 just the dry-run subset. Generous but bounded: a hang must fail loud, not
 wedge the harness or the box indefinitely."""
 
-_MACHINE_LOCAL_KEYS_TO_REDIRECT = ("repos.claude_klabauter", "publish.mirrors.claude_klabauter.path")
-"""The exact two `machine-local dump` keys that resolve the klabauter
-publish destination (verified against a real `machine-local dump` on this
-box before this module was written -- both keys carried the identical live
-path). Every other key the shim sees passes through unmodified."""
+_MACHINE_LOCAL_KEYS_TO_REDIRECT = ("repos.claude_klabauter",)
+"""The `machine-local dump` key that resolves the klabauter engine
+destination. Every other key the shim sees passes through unmodified."""
 
 _MACHINE_LOCAL_DUMP_TIMEOUT_S = 30
 

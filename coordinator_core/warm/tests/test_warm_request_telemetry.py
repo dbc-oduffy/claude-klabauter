@@ -83,6 +83,54 @@ def test_flush_appends_once_and_drains(tmp_path: Path) -> None:
     assert len(telemetry.request_telemetry_path(tmp_path).read_text().splitlines()) == 2
 
 
+_SPANS = [{"name": "git_read", "wall_ms": 1.0}] * 8
+
+
+def _flushed(tmp_path: Path) -> list:
+    telemetry.flush_requests(tmp_path)
+    return [json.loads(x) for x in telemetry.request_telemetry_path(tmp_path).read_text().splitlines()]
+
+
+def test_fast_ok_row_is_persisted_without_diagnostic_payload(tmp_path: Path) -> None:
+    telemetry.record_request(
+        op="hooks.preuse_bash_dispatch", enqueue_ts=1.0, start_ts=1.1, end_ts=1.2, outcome="ok",
+        dispatch_key="k", slow_phase="p", spans=_SPANS, cpu_ms=3.0,
+    )
+    (row,) = _flushed(tmp_path)
+    assert row["op"] == "hooks.preuse_bash_dispatch" and row["cpu_ms"] == 3.0
+    assert not {"spans", "dispatch_key", "slow_phase"} & set(row)
+
+
+def test_slow_failed_or_faulted_rows_keep_diagnostic_payload(tmp_path: Path) -> None:
+    slow_end = 1.0 + telemetry.SLOW_REQUEST_SECS + 1
+    telemetry.record_request(op="slow", enqueue_ts=1.0, end_ts=slow_end, outcome="ok", spans=_SPANS)
+    telemetry.record_request(op="failed", enqueue_ts=1.0, end_ts=1.1, outcome="error", spans=_SPANS)
+    telemetry.record_request(op="faulted", enqueue_ts=1.0, end_ts=1.1, outcome="ok", spans=_SPANS, drive_fault="drive_stall")
+    telemetry.record_request(op="untimed", outcome="ok", spans=_SPANS)
+    assert all(r["spans"] == _SPANS for r in _flushed(tmp_path))
+
+
+def test_ring_keeps_full_row_after_compaction(tmp_path: Path) -> None:
+    telemetry.record_request(op="a", enqueue_ts=1.0, end_ts=1.1, outcome="ok", spans=_SPANS)
+    telemetry._compact_row(telemetry.request_samples()[0])
+    assert telemetry.request_samples()[0]["spans"] == _SPANS
+
+
+def test_worker_pool_depth_writes_on_change_not_every_tick(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(telemetry, "_LAST_DEPTH_WRITE", {})
+    for depth in (30, 30, 30, 29, 29, 30):
+        telemetry.record_worker_pool_depth(depth=depth, pid=5, engine_root=tmp_path)
+    assert [r["depth"] for r in telemetry.worker_pool_depth_samples(tmp_path)] == [30, 29, 30]
+
+
+def test_worker_pool_depth_heartbeat_rewrites_unchanged_depth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(telemetry, "_LAST_DEPTH_WRITE", {})
+    monkeypatch.setattr(telemetry, "WORKER_POOL_DEPTH_HEARTBEAT_SECS", 0.0)
+    for _ in range(3):
+        telemetry.record_worker_pool_depth(depth=30, pid=5, engine_root=tmp_path)
+    assert len(telemetry.worker_pool_depth_samples(tmp_path)) == 3
+
+
 def test_record_and_flush_never_raise(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     telemetry.record_request(op="a")
 

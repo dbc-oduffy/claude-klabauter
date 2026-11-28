@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import plistlib
 import subprocess
+import tempfile
 from pathlib import Path
 from unittest import mock
 
@@ -31,6 +33,15 @@ def _completed(returncode, stdout="", stderr=""):
     return subprocess.CompletedProcess(args=["schtasks.exe"], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+def _can_symlink() -> bool:
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            os.symlink(Path(d) / "t", Path(d) / "l")
+        except (OSError, NotImplementedError):
+            return False
+    return True
+
+
 class TestFileBased:
     def test_darwin_plist_runs_runner_module_without_spawning(self, fake_home, tmp_path):
         with mock.patch.object(ps, "_IS_WINDOWS", False), mock.patch.object(ps.sys, "platform", "darwin"), \
@@ -42,6 +53,34 @@ class TestFileBased:
         assert data["StartInterval"] == ps._INTERVAL_MINUTES * 60
         assert data["WorkingDirectory"] == str(tmp_path)
 
+    def test_darwin_plist_logs_to_the_settings_home_pruner_log(self, fake_home, tmp_path):
+        with mock.patch.object(ps, "_IS_WINDOWS", False), mock.patch.object(ps.sys, "platform", "darwin"):
+            assert ps.register_pruner_task(tmp_path, python_exe="/x/py") is True
+        data = plistlib.loads((fake_home / "Library/LaunchAgents/com.coordinator.pruner.plist").read_bytes())
+        log = fake_home / ".coordinator-claude-settings" / "logs" / "pruner.log"
+        assert data["StandardOutPath"] == data["StandardErrorPath"] == str(log)
+        assert log.parent.is_dir()
+
+    def test_darwin_install_rewrites_an_existing_keyless_plist(self, fake_home, tmp_path):
+        target = fake_home / "Library/LaunchAgents/com.coordinator.pruner.plist"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(plistlib.dumps({"Label": ps.PLIST_LABEL, "RunAtLoad": True}))
+        with mock.patch.object(ps, "_IS_WINDOWS", False), mock.patch.object(ps.sys, "platform", "darwin"):
+            assert ps.register_pruner_task(tmp_path, python_exe="/x/py") is True
+        data = plistlib.loads(target.read_bytes())
+        assert data["StandardOutPath"] and data["StandardErrorPath"] == data["StandardOutPath"]
+
+    def test_linux_service_appends_stdout_and_stderr_to_the_same_log(self, fake_home, tmp_path):
+        with mock.patch.object(ps, "_IS_WINDOWS", False), mock.patch.object(ps.sys, "platform", "linux"):
+            ps.register_pruner_task(tmp_path, python_exe="/x/py")  # return value depends on symlink privilege
+        text = (fake_home / ".config/systemd/user/coordinator-pruner.service").read_text()
+        log = fake_home / ".coordinator-claude-settings" / "logs" / "pruner.log"
+        assert f"StandardOutput=append:{log}\n" in text and f"StandardError=append:{log}\n" in text
+
+    def test_log_honours_the_settings_home_override(self, fake_home, tmp_path, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
+        assert ps._log_path() == tmp_path / "sh" / "logs" / "pruner.log"
+
     def test_darwin_idempotent(self, fake_home, tmp_path):
         target = fake_home / "Library/LaunchAgents/com.coordinator.pruner.plist"
         with mock.patch.object(ps, "_IS_WINDOWS", False), mock.patch.object(ps.sys, "platform", "darwin"):
@@ -50,6 +89,7 @@ class TestFileBased:
             assert ps.register_pruner_task(tmp_path, python_exe="/x/py") is True
         assert target.read_bytes() == first
 
+    @pytest.mark.skipif(not _can_symlink(), reason="host cannot create symlinks (no privilege)")
     def test_linux_units_and_enable_symlink(self, fake_home, tmp_path):
         with mock.patch.object(ps, "_IS_WINDOWS", False), mock.patch.object(ps.sys, "platform", "linux"):
             assert ps.register_pruner_task(tmp_path, python_exe="/x/py") is True

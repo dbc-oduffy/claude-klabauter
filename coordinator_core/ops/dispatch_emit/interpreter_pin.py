@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import functools
 import os
-import sys
 import re
 import shlex
 import shutil
+import sys
 from pathlib import Path
 from typing import NamedTuple, Optional, Union
 
@@ -42,6 +42,7 @@ REMEDY = (
     "declare `targeted_test_python: machine-local:<key>` in coordinator.local.md "
     "(set <key> to a Python that imports the repo's packages on each box)"
 )
+CONFIG_FILE = "coordinator.local.md"
 SOURCE_FAST_CMD = "fast_test_cmd"
 SOURCE_PROVISIONED = "provisioned"
 SOURCE_NONE = "none"
@@ -53,6 +54,16 @@ class TargetedPython(NamedTuple):
     command: Optional[str]
     source: str
     defect: Optional[str]
+
+
+def config_path(repo_root: Union[str, Path]) -> str:
+    """Absolute path of the file `repo_root`'s pin is read from (the file need not exist yet)."""
+    return str(Path(os.path.abspath(str(repo_root))) / CONFIG_FILE)
+
+
+def remedy_for(repo_root: Union[str, Path]) -> str:
+    """`REMEDY` naming the absolute config file to edit for `repo_root`; every printer of the remedy uses this."""
+    return f"{REMEDY}; config file: {config_path(repo_root)}"
 
 
 def _leading_interpreter(fast_test_cmd: str) -> Optional[str]:

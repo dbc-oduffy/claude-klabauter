@@ -7,10 +7,12 @@ slice and the write-once parent record, and returns the frozen reply plus the re
 calls. Contract: docs/reference/multi-ask-submission-contract.md.
 
 Three arms:
-  - asks:   {asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, em_context?, context?, label?, repo?, writes?, after?, stop_after?}],
+  - asks:   {asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, em_context?, context?, label?, repo?, writes?, after?, after_run?, stop_after?}],
             sender?, confirm_split?} -- the parent register is one row
             (R1..Rn) per ask, each slice claims its own. An entry's `after` (earlier sibling labels or
-            0-based indices) makes those siblings its predecessors; one naming none is refused. An entry key outside ASKS_ITEM_KEYS is
+            0-based indices) makes those siblings its predecessors; one naming none is refused. Each
+            predecessor, and an entry's `after_run` ({run_id, kind: run_end|run_landed}, a known run;
+            else refused), lands as `em_analysis.stage_blockers` and the staged run parks on it. An entry key outside ASKS_ITEM_KEYS is
             refused by name. An entry's `repo` must be an absolute path resolving to this fan-out's root (never forwarded). An entry's `em_context` and prose `context` land on its slice sizing as
             `em_analysis.em_brief`, its path-shaped `context` as `em_analysis.em_context_paths`
             (one string, one path per line); the ask, intent and pm_verbatims are never touched.
@@ -59,7 +61,7 @@ import time
 import uuid
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 import yaml
 
@@ -128,6 +130,19 @@ def _writes(value: Any, where: str) -> Optional[tuple[str, ...]]:
     return tuple(w.strip() for w in value)
 
 
+def _run_known(root: Path, run_id: str) -> bool:
+    """True when `run_id` holds a live or retired run token or a run record directory under `root`."""
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    if not run_token._RUN_ID_RE.match(run_id):
+        return False
+    try:
+        return run_token.is_live(root, run_id) or run_token._present(root, run_id, retired=True) or record_dir(root, run_id).is_dir()
+    except (OSError, ValueError):
+        return False
+
+
 def _read_slices(
     params: Mapping, fan_out: bool = False, root: Optional[Path] = None
 ) -> tuple[list[contract.AskSlice], Optional[str]]:
@@ -182,6 +197,15 @@ def _read_slices(
                 )
             except ValueError as exc:
                 raise _Refused(str(exc)) from exc
+        after_run: tuple[tuple[str, str], ...] = ()
+        if asks is not None and item.get(contract.AFTER_RUN_KEY) is not None:
+            try:
+                kind, blocker_run = contract.parse_after_run(where, item[contract.AFTER_RUN_KEY])
+            except ValueError as exc:
+                raise _Refused(str(exc)) from exc
+            if root is not None and not _run_known(root, blocker_run):
+                raise _Refused(f"{where}.{contract.AFTER_RUN_KEY}: run {blocker_run!r} is not a known run of this repo")
+            after_run = ((kind, blocker_run),)
         estimate = criterion = None
         if fan_out and label != contract.SEAM_PASS_LABEL:
             estimate, criterion = item.get("estimate"), item.get("exit_criterion")
@@ -195,7 +219,7 @@ def _read_slices(
             criterion = criterion.strip()
         out.append(contract.AskSlice(
             label, ask.strip(), rows, _writes(item.get("writes"), where), source=source,
-            estimate=estimate, exit_criterion=criterion, after=pending_after,
+            estimate=estimate, exit_criterion=criterion, after=pending_after, after_run=after_run,
         ))
     parent_sizing = None
     if slices is not None:
@@ -479,6 +503,7 @@ def _slice_record(
     stop_after: Optional[str] = None,
     sized: Optional[Mapping] = None, deliverable_id: Optional[str] = None,
     repo_root: Optional[Path] = None, family: str = "",
+    blockers: Sequence[tuple[str, str]] = (),
 ) -> dict:
     """A slice sizing; a non-empty `family` is set as its top-level `family` key.
 
@@ -515,6 +540,8 @@ def _slice_record(
         record["em_analysis"].update(to_em_analysis(route_pref))
     if stop_after:
         record["em_analysis"][STOP_AFTER_KEY] = stop_after
+    if blockers:
+        record["em_analysis"][contract.STAGE_BLOCKERS_KEY] = contract.encode_stage_blockers(blockers)
     if sl.writes and sized is None:
         from coordinator_core.ops.dispatch_emit.sizing_fire import SLICE_WRITES_KEY
 
@@ -1034,6 +1061,7 @@ def _fanout(
             sized=sized, deliverable_id=deliverable_id if sized and sl.label == contract.SEAM_PASS_LABEL else None,
             repo_root=root,
             family=families[i] or named_family(worktree, [sl.ask, relay[i][1] or "", contexts[i][0] or ""])[0],
+            blockers=(*(("run_end", run_ids[j]) for j in edges[i]), *sl.after_run),
         )
         errors = validate_frontmatter(record, _SIZING_SCHEMA_PATH)
         if errors:

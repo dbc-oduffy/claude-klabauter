@@ -373,21 +373,43 @@ def irrelevant(root: Path, record: Path, marker: Optional[dict]) -> bool:
     )
 
 
+def _irrelevant_by_row(root: Path, run_id: str) -> bool:
+    """`irrelevant` for a run whose valid claim row says halted, answered without opening its marker (the row
+    carries the withheld set `irrelevant` reads) or resolving its record dir (only its name and root are read).
+    False when no row validates: the caller reads the marker."""
+    state = _SCOPE.get()
+    if state is None or not state.get("interest"):
+        return False
+    from coordinator_core.ops.dispatch_emit import sibling_claims
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    record = root / RECORD_DIR_ROOT / run_id
+    standin = sibling_claims._indexed_halt_marker(record)
+    return standin is not None and irrelevant(root, record, standin)
+
+
 def _irrelevant(root: Path, record: Path, marker: dict, interest) -> bool:
     try:
         from coordinator_core.ops import warp_run_deliverable as wrd
-        from coordinator_core.ops.dispatch_emit import halted_run, run_ownership, sibling_claims
+        from coordinator_core.ops.dispatch_emit import halted_run, halted_withheld_index, run_ownership, sibling_claims
 
         if any(run_ownership._covers(w, c) for w in halted_run._withheld_of(marker) for c in interest):
             return False
         run_id = record.name
-        paths, prefixes, unreadable = wrd._manifest_declared(run_id, Path(root))
+        row = halted_withheld_index.claim_footprint(root, run_id)
+        if row is not None:
+            paths, prefixes, unreadable, extras = row["p"], row["x"], row["u"], frozenset(row["e"])
+        else:
+            paths, prefixes, unreadable = wrd._manifest_declared(run_id, Path(root))
+            extras = None
         if unreadable or not (paths or prefixes):
             return False
         declared = set(paths)
         if any(c in declared or any(c == p or c.startswith(p + "/") for p in prefixes) for c in interest):
             return False
-        return not (sibling_claims._extra_declared(Path(root), run_id) & interest)
+        if extras is None:
+            extras = sibling_claims._extra_declared(Path(root), run_id)
+        return not (extras & interest)
     except Exception:  # noqa: BLE001 -- unknown: the run is weighed
         return False
 
@@ -859,6 +881,8 @@ def _held_paths_scoped(
     try:
         from coordinator_core.ops import warp_run_deliverable as wrd
 
+        if _irrelevant_by_row(Path(root), halted_run_id):
+            return frozenset(wrd.halted_withheld_paths(Path(root), halted_run_id))
         record = _record(Path(root), halted_run_id)
         if irrelevant(Path(root), record, _halted_marker(record)):  # claims none of the scope's interest: skip the weighing
             return frozenset(wrd.halted_withheld_paths(Path(root), halted_run_id))
@@ -1344,6 +1368,8 @@ def prefetch_kept_at_head(root: Path, run_ids) -> None:
 
         specs: list = []
         for run_id in run_ids:
+            if _irrelevant_by_row(Path(root), run_id):
+                continue
             record = _record(Path(root), run_id)
             marker = _halted_marker(record)
             if not marker or marker.get("status") != halted_run.STATUS_HALTED or irrelevant(Path(root), record, marker):

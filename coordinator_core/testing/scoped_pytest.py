@@ -169,11 +169,44 @@ def per_run_dirs(repo_root: Any, slug: str) -> tuple:
     return holder, bt, tmp
 
 
+def _same_dir(a: str, b: Path) -> bool:
+    return os.path.normcase(os.path.abspath(a.strip())) == os.path.normcase(os.path.abspath(str(b)))
+
+
+def without_engine_site(env: dict) -> dict:
+    """`env` (mutated, returned) with the engine-site dir dropped from PYTHONPATH.
+
+    Trap: engine-site ships the engine's third-party versions; on a consumer pytest's path it shadows
+    the consumer's own (tree-sitter cotenant conflict). When a drop happened and COORDINATOR_ENGINE_ROOT
+    is set, that root is kept importable so the leg runner still finds `coordinator_core`."""
+    raw = env.get("PYTHONPATH")
+    if not raw:
+        return env
+    from coordinator_core.install.engine_interpreter import engine_site_dir
+
+    try:
+        site = engine_site_dir()
+    except Exception:  # noqa: BLE001 -- no resolvable settings home means no engine-site to drop
+        return env
+    parts = [p for p in raw.split(os.pathsep) if p]
+    kept = [p for p in parts if not _same_dir(p, site)]
+    if len(kept) == len(parts):
+        return env
+    root = env.get("COORDINATOR_ENGINE_ROOT", "")
+    if root and not any(_same_dir(p, Path(root)) for p in kept):
+        kept.append(root)
+    if kept:
+        env["PYTHONPATH"] = os.pathsep.join(kept)
+    else:
+        env.pop("PYTHONPATH")
+    return env
+
+
 def tmp_env(base_env: Any, tmp: Path) -> dict:
-    """Copy of `base_env` with TEMP, TMP and TMPDIR pointing at `tmp`."""
+    """Copy of `base_env` with TEMP, TMP and TMPDIR pointing at `tmp` and no engine-site on PYTHONPATH."""
     env = dict(base_env)
     env.update(TEMP=str(tmp), TMP=str(tmp), TMPDIR=str(tmp))
-    return env
+    return without_engine_site(env)
 
 
 def with_per_run_basetemp(pytest_args: Sequence[str]) -> list:

@@ -147,6 +147,173 @@ def test_agy_family_stage_argv_is_unrestricted_and_reviewer_argv_stays_sandboxed
     assert "--sandbox" in review and "--dangerously-skip-permissions" not in review
 
 
+@pytest.fixture
+def agy_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGY_BRAIN_DIR", str(tmp_path / "ag" / "brain"))
+    return tmp_path
+
+
+def _hold_presence(tmp_path: Path, conv: str):
+    path = tmp_path / "ag" / "presence" / f"{conv}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "a+b")
+    assert agy_mod._try_lock(fh)
+    return fh
+
+
+def _drop(fh) -> None:
+    agy_mod._unlock(fh)
+    fh.close()
+
+
+def _spool_lines(tmp_path: Path, conv: str) -> list[dict]:
+    path = tmp_path / "home" / "unimatrix" / "agy-legs" / f"{conv}.queue.jsonl"
+    return [json.loads(x) for x in path.read_text().splitlines()] if path.exists() else []
+
+
+def test_presence_probe_reads_a_held_lock_and_a_free_one(agy_home: Path) -> None:
+    assert not agy_mod.presence_held("c1")
+    fh = _hold_presence(agy_home, "c1")
+    try:
+        assert agy_mod.presence_held("c1")
+        assert not agy_mod.presence_held("c2")
+    finally:
+        _drop(fh)
+    assert not agy_mod.presence_held("c1")
+
+
+def test_claim_with_presence_held_spools_one_unimatrix_line_and_returns_no_lease(agy_home: Path) -> None:
+    fh = _hold_presence(agy_home, "c1")
+    try:
+        assert agy_mod.claim_resume("c1", "hello", "g-em", wait_s=0) is None
+    finally:
+        _drop(fh)
+    [line] = _spool_lines(agy_home, "c1")
+    assert set(line) == {"id", "text", "from"} and line["text"] == "hello" and line["from"] == "g-em"
+    record = json.loads((agy_home / "home" / "unimatrix" / "agy-legs" / "c1.json").read_text())
+    assert record == {"conversation": "c1", "mode": "pending", "spooled": True}
+
+
+def test_free_conversation_gets_a_lease_and_spools_nothing(agy_home: Path) -> None:
+    lease = agy_mod.claim_resume("c1", "hello", "g-em", wait_s=0)
+    assert lease is not None
+    lease.release()
+    assert _spool_lines(agy_home, "c1") == []
+
+
+def test_second_claim_on_a_running_resume_spools_then_a_released_slot_is_free_again(agy_home: Path) -> None:
+    first = agy_mod.claim_resume("c1", "one", "s", wait_s=0)
+    assert first is not None
+    assert agy_mod.claim_resume("c1", "two", "s", wait_s=0) is None
+    assert [x["text"] for x in _spool_lines(agy_home, "c1")] == ["two"]
+    other = agy_mod.claim_resume("other", "x", "s", wait_s=0)
+    assert other is not None
+    other.release()
+    first.release()
+    first.release()
+    again = agy_mod.claim_resume("c1", "three", "s", wait_s=0)
+    assert again is not None
+    again.release()
+
+
+def test_presence_taken_while_the_slot_was_held_spools_instead_of_spawning(agy_home: Path) -> None:
+    lease = agy_mod.claim_resume("c1", "one", "s", wait_s=0)
+    assert lease is not None
+    fh = _hold_presence(agy_home, "c1")
+    try:
+        lease.release()
+        assert agy_mod.claim_resume("c1", "two", "s", wait_s=0) is None
+    finally:
+        _drop(fh)
+    assert [x["text"] for x in _spool_lines(agy_home, "c1")] == ["two"]
+
+
+def test_concurrent_claims_never_overlap(agy_home: Path) -> None:
+    import threading
+    import time
+
+    live = [0]
+    peak = [0]
+    guard = threading.Lock()
+    done = []
+
+    def worker() -> None:
+        lease = agy_mod.claim_resume("c1", "m", "s", wait_s=20)
+        assert lease is not None
+        with guard:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+        time.sleep(0.03)
+        with guard:
+            live[0] -= 1
+        lease.release()
+        done.append(1)
+
+    threads = [threading.Thread(target=worker) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert len(done) == 6 and peak[0] == 1
+    assert _spool_lines(agy_home, "c1") == []
+
+
+def test_full_spool_and_unsafe_id_refuse_but_an_unsafe_id_still_resumes(agy_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    spool = agy_home / "home" / "unimatrix" / "agy-legs"
+    spool.mkdir(parents=True)
+    (spool / "c1.queue.jsonl").write_bytes(b"x" * 20)
+    monkeypatch.setattr(agy_mod, "SPOOL_MAX_BYTES", 10)
+    with pytest.raises(agy_mod.SpoolRefused):
+        agy_mod.spool_text("c1", "y", "s")
+    with pytest.raises(agy_mod.SpoolRefused):
+        agy_mod.spool_text("../evil", "x", "s")
+    lease = agy_mod.claim_resume("a/b", "x", "s", wait_s=0)
+    assert lease is not None
+    lease.release()
+
+
+def test_take_spool_claims_texts_once_and_leaves_a_held_presence_alone(agy_home: Path) -> None:
+    agy_mod.spool_text("c1", "a", "s")
+    agy_mod.spool_text("c1", "b", "s")
+    fh = _hold_presence(agy_home, "c1")
+    try:
+        assert agy_mod.take_spool("c1") == []
+    finally:
+        _drop(fh)
+    assert agy_mod.take_spool("c1") == ["a", "b"]
+    assert agy_mod.take_spool("c1") == []
+    assert _spool_lines(agy_home, "c1") == []
+
+
+def test_presence_open_denied_counts_as_held(agy_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+
+    real = builtins.open
+
+    def denied(path, *a, **kw):
+        if str(path).endswith("c1.lock"):
+            raise PermissionError(13, "denied")
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", denied)
+    assert agy_mod.presence_held("c1")
+    assert not agy_mod.presence_held("c2")
+
+
+def test_default_resume_wait_is_inside_the_op_budget() -> None:
+    assert agy_mod.RESUME_WAIT_S <= 0.5
+
+
+def test_claim_without_text_spools_nothing_when_presence_held(agy_home: Path) -> None:
+    fh = _hold_presence(agy_home, "c1")
+    try:
+        assert agy_mod.claim_resume("c1", "", "s", wait_s=0) is None
+    finally:
+        _drop(fh)
+    assert _spool_lines(agy_home, "c1") == []
+
+
 _FAKE_STAGE_AGY = '''
 import json, subprocess, sys
 sys.stdin.read()

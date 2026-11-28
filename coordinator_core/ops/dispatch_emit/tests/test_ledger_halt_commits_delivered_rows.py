@@ -85,7 +85,7 @@ def repo(tmp_path, monkeypatch):
     rl.revise(root, RUN, verbatim="nice to have: a changelog line")
     monkeypatch.setattr(cr, "_actual_loe", lambda r, s: "S")
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     return root
 
@@ -100,7 +100,7 @@ def _call(repo: Path, verdict: dict) -> dict:
 
 def _verdict(r3: dict) -> dict:
     return {"items": [
-        {"id": "R1", "status": "met", "met_by": "a.py", "wired": True},
+        {"id": "R1", "status": "met", "wired": True, "evidence": "verified"},
         {"id": "R2", "status": "not_met", "withheld_by": "C9"},
         {"id": "R3", "status": "not_met", **r3},
     ]}

@@ -232,6 +232,44 @@ def test_a_blocked_fix_spends_no_more_attempts(monkeypatch: pytest.MonkeyPatch) 
     assert f'"{RECOVERY_WITHHELD_PARAM}":["C1"]' in _commit_prompt(out)
 
 
+_PIN = "pkg/a_pin.json"
+
+
+def _needs(*paths: str) -> dict:
+    return {"status": "BLOCKED", "paths": [], "reason": "needs a path outside the footprint", "needs_paths": list(paths)}
+
+
+def test_a_fix_blocked_on_a_path_beside_the_row_writes_is_retried_with_it_admitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    done = {"status": "DONE", "paths": ["pkg/a.py", _PIN], "reason": "pin moved to JSON"}
+    out = _run(
+        _script(monkeypatch), items=[_NAMED],
+        replies={"ledger-fix:C1": [_needs(_PIN), done], LEDGER_REVERIFY_LABEL: {"items": [_MET]}},
+    )
+    labels = _labels(out)
+    assert _fix_labels(out) == ["ledger-fix:C1"] * 2 and labels.count(LEDGER_REVERIFY_LABEL) == 1
+    first, second = (c["prompt"] for c in out["calls"] if c["label"] == "ledger-fix:C1")
+    assert _PIN not in first.split("The ONLY paths you may edit:", 1)[1].split(".", 1)[0]
+    assert _PIN in second.split("The ONLY paths you may edit:", 1)[1].split("Reproduce", 1)[0]
+    rec = _record(out)["chunks"]["C1"]
+    assert rec["status"] == "fixed" and rec["attempts"] == 2 and rec["widened"] == [_PIN]
+    assert rec["paths"] == [] and _PIN in rec["footprint"]
+
+
+@pytest.mark.parametrize("needed", ["other/x.json", "pkg/b.py", "pkg/CLAUDE.md", "state/x.json", "../a_pin.json"])
+def test_a_fix_blocked_on_any_other_path_still_spends_no_more_attempts(monkeypatch: pytest.MonkeyPatch, needed: str) -> None:
+    out = _run(_script(monkeypatch), items=[_NAMED], replies={"ledger-fix:C1": _needs(needed)})
+    assert _fix_labels(out) == ["ledger-fix:C1"] and LEDGER_REVERIFY_LABEL not in _labels(out)
+    rec = _record(out)["chunks"]["C1"]
+    assert rec["status"] == "blocked" and rec["attempts"] == 1 and rec["paths"] == [needed]
+    assert "widened" not in rec
+
+
+def test_a_blocked_fix_that_needs_an_adjacent_path_and_a_distant_one_is_not_admitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    out = _run(_script(monkeypatch), items=[_NAMED], replies={"ledger-fix:C1": _needs(_PIN, "other/x.json")})
+    assert _fix_labels(out) == ["ledger-fix:C1"]
+    assert _record(out)["chunks"]["C1"]["status"] == "blocked"
+
+
 def test_a_path_outside_the_footprint_blocks_the_chunk_and_is_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
     stray = {"status": "DONE", "paths": ["pkg/a.py", "pkg/_substrate.py"], "reason": "fixed"}
     out = _run(_script(monkeypatch), items=[_NAMED], replies={"ledger-fix:C1": stray})

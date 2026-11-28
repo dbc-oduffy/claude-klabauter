@@ -83,6 +83,61 @@ def test_staged_prompt_is_absent_until_whole_and_never_partial(repo, monkeypatch
     assert not [p for p in _prompts_dir(result, repo).iterdir() if p.suffix != ".md"]
 
 
+def test_stalled_staged_write_returns_typed_reply_within_bar(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+
+    from coordinator_core.ops.dispatch_emit import halt_resume_record, op
+
+    release = threading.Event()
+    real = halt_resume_record.atomic_write_bytes
+
+    def stuck(path, data, *a, **k):
+        if Path(path).parent.name == PROMPTS_DIR:
+            release.wait(10)
+        return real(path, data, *a, **k)
+
+    monkeypatch.setattr(halt_resume_record, "atomic_write_bytes", stuck)
+    started = time.monotonic()
+    try:
+        result = _emit(repo)
+    finally:
+        release.set()
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    assert result["error"] == "staged-prompt-write-indeterminate", result
+    assert result["retry_safe"] is True
+    assert elapsed_ms < op.STAGED_WRITE_DEADLINE_MS + 400.0
+
+
+def test_stalled_write_prompt_helper_raises_within_caller_bar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+
+    from coordinator_core.benchmarks.warm_write_stall_probe import CALLER_WAIT_BAR_MS
+    from coordinator_core.ops.dispatch_emit import halt_resume_record, op
+
+    assert op.STAGED_WRITE_DEADLINE_MS <= CALLER_WAIT_BAR_MS
+    release = threading.Event()
+    real = halt_resume_record.atomic_write_bytes
+    monkeypatch.setattr(halt_resume_record, "atomic_write_bytes", lambda p, d, *a, **k: (release.wait(10), real(p, d, *a, **k))[1])
+    target = tmp_path / "p.md"
+    started = time.monotonic()
+    try:
+        with pytest.raises(op.StagedPromptWriteIndeterminate) as caught:
+            op._write_staged_prompt(target, b"x")
+    finally:
+        release.set()
+    assert (time.monotonic() - started) * 1000.0 < CALLER_WAIT_BAR_MS
+    assert caught.value.reply["error"] == "staged-prompt-write-indeterminate"
+    assert caught.value.reply["retry_safe"] is True
+
+
+def test_unstalled_staged_write_still_lands(repo) -> None:
+    result = _emit(repo)
+    assert result.get("error") != "staged-prompt-write-indeterminate", result
+    assert sorted(_prompts_dir(result, repo).glob("*.md"))
+
+
 def test_failed_write_leaves_no_partial_prompt(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     real = atomic_replace._replace_with_retry
 
@@ -98,3 +153,20 @@ def test_failed_write_leaves_no_partial_prompt(repo, monkeypatch: pytest.MonkeyP
         pass
     leftovers = [p for d in (repo / "state" / "warp").glob("*/" + PROMPTS_DIR) for p in d.iterdir()]
     assert leftovers == [], f"a failed staged write left {leftovers}"
+
+
+def test_staged_budget_is_per_file_not_cumulative(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    from coordinator_core.ops.dispatch_emit import halt_resume_record, op
+
+    real = halt_resume_record.atomic_write_bytes
+
+    def slow(path, data, *a, **k):
+        time.sleep(op.STAGED_WRITE_DEADLINE_MS * 0.6 / 1000.0)
+        return real(path, data, *a, **k)
+
+    monkeypatch.setattr(halt_resume_record, "atomic_write_bytes", slow)
+    for i in range(3):
+        op._write_staged_prompt(tmp_path / f"p{i}.md", b"x")
+    assert sorted(p.name for p in tmp_path.glob("*.md")) == ["p0.md", "p1.md", "p2.md"]

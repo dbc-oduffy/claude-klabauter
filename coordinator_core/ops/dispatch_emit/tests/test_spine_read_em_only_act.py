@@ -110,3 +110,10 @@ def test_row_blocked_on_the_workflow_tool_is_excluded_em_performed(tmp_path):
     (entry,) = exclusions
     assert (entry["id"], entry["reason"]) == ("W1", "em-performed")
     assert "Workflow tool" in entry["detail"]
+
+
+def test_forbidden_sole_act_row_naming_a_family_stays_excluded_em_performed(tmp_path):
+    exclusions: list = []
+    rows = read_spine(_plan(tmp_path, _b1(writes="  writes: []\n  family: codex\n").replace("  agent_type: coordinator:executor\n", "")), exclusions=exclusions)
+    assert rows == []
+    assert [(e["id"], e["reason"]) for e in exclusions] == [("B1", "em-performed")]

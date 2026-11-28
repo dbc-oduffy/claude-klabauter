@@ -105,10 +105,10 @@ def test_live_run_with_a_citing_note_stays_live_and_unwidened(run):
     assert _plan_writes(run) == [MOD]
 
 
-def test_another_runs_live_token_for_the_sizing_still_counts_on_a_halted_run(run, monkeypatch):
+def test_another_runs_live_token_for_the_sizing_does_not_count_on_a_halted_run(run, monkeypatch):
     _halt(run)
     monkeypatch.setattr(
         run_token, "live_records", lambda *_a, **_k: [{"run_id": "ask-other-000000", "sizing_rel": REL}]
     )
     monkeypatch.setattr(rl, "_token_not_a_runner", lambda *_a, **_k: False)
-    assert rl._handler({"run_id": RUN, "note": NOTE}, repo_root=run)["run_live"] is True
+    assert rl._handler({"run_id": RUN, "note": NOTE}, repo_root=run)["run_live"] is False

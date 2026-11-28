@@ -13,12 +13,13 @@ unit containing a git-tracked path is kept.
 Also prunes the fleet root and the repo's coordinator root (`temp_layout`) by mtime
 age, plus a top-level pass over the system Temp dir for legacy coordinator names and
 empty `.tmpXXXXXX` dirs. All passes share a process-time budget; a pass that stops on
-it leaves its stamp unwritten so the next run resumes. `--drain` ignores budget and
-throttle.
+it leaves its stamp unwritten and records a `.prune-cursor` the next run resumes after.
+`--drain` ignores budget and throttle.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import stat
@@ -26,9 +27,10 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from coordinator_core.temp_layout import (
+    FLEET_DIRNAME,
     coordinator_temp_root,
     fleet_temp_root,
     is_legacy_top_level,
@@ -39,14 +41,23 @@ GENERATES = []
 RETENTION_DAYS = 7
 THROTTLE_SECONDS = 24 * 3600
 STAMP_NAME = ".prune-stamp"
+CURSOR_NAME = ".prune-cursor"
 _SHARE_SPACE = ".coordinator-local/subagent-share"
-REPO_SPACES = ("scratch", "tasks", _SHARE_SPACE)
+_SIDECAR_SPACE = ".coordinator-local/workflow-sidecars"
+REPO_SPACES = (_SHARE_SPACE, _SIDECAR_SPACE, "scratch", "tasks")  # owner-keyed first: scratch alone can spend the shared budget
+#: Owner-keyed repo spaces -> whether an unmarked unit is named for its owning session. Their units
+#: are deleted when the owner is provably gone and idle past `OWNER_FLOOR_HOURS`; a unit with no
+#: determinable owner keeps the `RETENTION_DAYS` age bar.
+OWNER_SPACES = {_SHARE_SPACE: True, _SIDECAR_SPACE: False}
+OWNER_FLOOR_HOURS = 24
+STALL_DUMPS_DIRNAME = "stall-dumps"
 BUDGET_SECONDS = 0.3
 _REPARSE_POINT = 0x400
 _EXT_PREFIX = "\\\\?\\"
 _EMPTY_TMP_RE = re.compile(r"^\.tmp[A-Za-z0-9]{6}$")
 _AUTONOMOUS_PREFIX = "autonomous-run-"
 _PYTEST_CHILD = "pytest"
+_TOP_LEVEL_BUDGET_SECONDS = 0.05
 KEY_SCRATCH_GIB = "scratch_budget.per_session_gib"
 DEFAULT_SCRATCH_GIB = 5
 GIB = 1024 ** 3
@@ -66,6 +77,36 @@ class _Budget:
         if self.limit is not None and time.process_time() - self._start >= self.limit:
             self.stopped = True
         return self.stopped
+
+
+class _Resume:
+    """Level-0 resume point (`after`), last name handled (`last`), scan reached its end (`done`)."""
+
+    def __init__(self, after: str = "") -> None:
+        self.after = after
+        self.last: "Optional[str]" = None
+        self.done = False
+
+
+def _read_cursor(root: Path) -> str:
+    try:
+        return (root / CURSOR_NAME).read_text(encoding="utf-8").rstrip("\r\n")
+    except (OSError, UnicodeError):
+        return ""
+
+
+def _write_cursor(root: Path, name: str) -> None:
+    try:
+        (root / CURSOR_NAME).write_text(name, encoding="utf-8")
+    except (OSError, UnicodeError):
+        pass
+
+
+def _clear_cursor(root: Path) -> None:
+    try:
+        (root / CURSOR_NAME).unlink()
+    except OSError:
+        pass
 
 
 def claude_temp_root() -> Path:
@@ -99,14 +140,26 @@ def _is_link(path: str) -> bool:
 
 
 def _gitignored(repo_root: str, space: str) -> bool:
-    """True when .gitignore has a line naming the space or its top-level dir."""
+    """True when the last .gitignore line matching the space or one of its ancestor dirs ignores it.
+
+    TRAP: a glob line (`.coordinator-local/*`) names no ancestor literally; a literal-name match
+    left every `.coordinator-local` space unlisted, so its prune never ran."""
     try:
         text = Path(repo_root, ".gitignore").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
-    top = space.split("/")[0]
-    names = {top, top + "/", "/" + top, "/" + top + "/", space, space + "/", "/" + space, "/" + space + "/"}
-    return any(line.strip() in names for line in text.splitlines())
+    parts = space.split("/")
+    candidates = ["/".join(parts[: i + 1]) for i in range(len(parts))]
+    ignored = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        negated = line.startswith("!")
+        pattern = (line[1:] if negated else line).strip().strip("/")
+        if pattern and any(fnmatch.fnmatchcase(c, pattern) for c in candidates):
+            ignored = not negated
+    return ignored
 
 
 def find_repo_root(cwd: str) -> str:
@@ -238,6 +291,30 @@ def _share_session_live(session_id: str, repo_root: str) -> bool:
     return bool(liveness.session_live(session_id, cwd=repo_root))
 
 
+_ALIVE = "alive"
+_DEAD = "dead"
+_UNOWNED = "unowned"
+
+
+def _unit_owner_state(path: str, name: str, repo_root: str, session_units: bool) -> str:
+    """`alive` (keep), `dead` (owner provably gone) or `unowned` (no determinable owner) for a unit dir.
+
+    An `.owner.json` mark decides through `owner_mark.owner_alive` (unknown keeps) and its ttl floor;
+    an unmarked session-named unit asks the per-session liveness decision."""
+    from coordinator_core import owner_mark
+
+    if owner_mark.is_kept(path):
+        return _ALIVE
+    mark = owner_mark.read_mark(path)
+    if mark is not None:
+        if owner_mark.owner_alive(mark) is not False or owner_mark.past_ttl(mark) is False:
+            return _ALIVE
+        return _DEAD
+    if session_units and _is_session_unit(name):
+        return _ALIVE if _share_session_live(name, repo_root) else _DEAD
+    return _UNOWNED
+
+
 def _tombstone_sidecars(repo_root: str, session_id: str, unit_path: str) -> None:
     from coordinator_core.review_trail.sweep_tombstone import record_swept
     from coordinator_core.sidecar_reap import _md_files
@@ -257,23 +334,40 @@ def _prune_level(
     keep: "frozenset[str]" = frozenset(),
     leaf_keep: "frozenset[str]" = frozenset(),
     share_repo: str = "",
+    session_units: bool = True,
+    legacy_cutoff: float = 0.0,
+    resume: "Optional[_Resume]" = None,
 ) -> int:
     """Delete stale units at `depth` below the root; rmdir emptied intermediates.
 
     `keep` names level-0 children never touched; `leaf_keep` names units (deepest
-    level) never touched. `share_repo`, set for a repo's subagent-share root, keeps a
-    live session's unit and tombstones a dead session's `*.md` sidecars before the
-    delete. At least one child is examined before the budget can stop the scan."""
+    level) never touched. `share_repo`, set for an owner-keyed repo space, makes `cutoff` the
+    age floor under which nothing is touched and `_unit_owner_state` the verdict: a live or
+    unknown owner's unit is kept, a dead owner's unit is deleted (a session unit's `*.md`
+    sidecars tombstoned first), an unowned unit waits for `legacy_cutoff`. Intermediates of
+    such a space are never rmdir'd. At least one child is examined before the budget can stop the scan.
+    `resume` (level 0 only) orders children by name, skips those at or before `resume.after` and
+    records the last child fully handled."""
     removed = 0
     try:
         children = list(os.scandir(_scan_path(path)))
     except OSError:
         return 0
+    if resume is not None:
+        children = sorted(
+            (c for c in children if c.name > resume.after and c.name != CURSOR_NAME), key=lambda c: c.name
+        )
+    broke = False
+    incomplete = False
     for child in children:
         if budget is not None and budget.stopped:
+            broke = True
             break
         if level == 0 and child.name in keep:
+            if resume is not None:
+                resume.last = child.name
             continue
+        incomplete = False
         try:
             # TRAP: DirEntry.is_dir(follow_symlinks=False) is True for a Windows
             # junction, so without this skip an intermediate junction is recursed
@@ -284,12 +378,15 @@ def _prune_level(
             if is_dir and level < depth - 1:
                 removed += _prune_level(
                     child.path, level + 1, depth, cutoff, session_id, tracked, budget,
-                    leaf_keep=leaf_keep,
+                    leaf_keep=leaf_keep, share_repo=share_repo, session_units=session_units,
+                    legacy_cutoff=legacy_cutoff,
                 )
-                try:
-                    os.rmdir(child.path)  # succeeds only when empty
-                except OSError:
-                    pass
+                incomplete = budget is not None and budget.stopped
+                if not share_repo:
+                    try:
+                        os.rmdir(child.path)  # succeeds only when empty
+                    except OSError:
+                        pass
                 continue
             if session_id and child.name == session_id:
                 continue
@@ -303,10 +400,16 @@ def _prune_level(
                     continue
             if _has_fresh_entry(child.path, cutoff):
                 continue
-            if share_repo and is_dir and _is_session_unit(child.name):
-                if _share_session_live(child.name, share_repo):
+            if share_repo and is_dir:
+                state = _unit_owner_state(child.path, child.name, share_repo, session_units)
+                if state == _ALIVE:
                     continue
-                _tombstone_sidecars(share_repo, child.name, child.path)
+                if state == _UNOWNED and _has_fresh_entry(child.path, legacy_cutoff):
+                    continue
+                if state == _DEAD and session_units and _is_session_unit(child.name):
+                    _tombstone_sidecars(share_repo, child.name, child.path)
+            elif share_repo and _has_fresh_entry(child.path, legacy_cutoff):
+                continue
             if is_dir:
                 _rmtree_tolerant(child.path)
             else:
@@ -317,6 +420,10 @@ def _prune_level(
         finally:
             if budget is not None:
                 budget.check()
+            if resume is not None and not incomplete:
+                resume.last = child.name
+    if resume is not None:
+        resume.done = not broke and not incomplete
     return removed
 
 
@@ -470,11 +577,18 @@ def default_roots(repo_root: str = "") -> "list[tuple[Path, int, float]]":
 
     Repo spaces are listed only when they are real directories that .gitignore
     names (read as text; no git spawn). The fleet root and the repo's coordinator
-    root are pruned at depth 1."""
+    root are pruned at depth 1, as is the warm service's stall-dumps dir; the
+    workflow-sidecars space holds its units two levels down."""
     roots = [
         (claude_temp_root(), 2, _claude_retention_days()),
         (fleet_temp_root(), 1, RETENTION_DAYS),
     ]
+    try:
+        from coordinator_core.warm.breadcrumb import svc_dir
+
+        roots.append((svc_dir() / STALL_DUMPS_DIRNAME, 1, RETENTION_DAYS))
+    except Exception:  # noqa: BLE001 -- an unresolvable svc dir leaves the root unlisted
+        pass
     if repo_root:
         try:
             roots.append((coordinator_temp_root(repo_root), 1, RETENTION_DAYS))
@@ -483,7 +597,7 @@ def default_roots(repo_root: str = "") -> "list[tuple[Path, int, float]]":
         for space in REPO_SPACES:
             p = Path(repo_root, *space.split("/"))
             if p.is_dir() and not _is_link(str(p)) and _gitignored(repo_root, space):
-                roots.append((p, 1, RETENTION_DAYS))
+                roots.append((p, 2 if space == _SIDECAR_SPACE else 1, RETENTION_DAYS))
     return roots
 
 
@@ -568,7 +682,8 @@ def _pytest_backlog(now: Optional[float] = None) -> bool:
 
 
 def roots_due(
-    roots: "Optional[list[tuple[Path, int, float]]]" = None, repo_root: str = ""
+    roots: "Optional[list[tuple[Path, int, float]]]" = None,
+    repo_root: str = "",
 ) -> bool:
     if roots is None and _pytest_backlog():
         return True
@@ -592,7 +707,9 @@ def prune(
 ) -> int:
     """Prune stale units under each due root; returns the number removed.
 
-    The top-level Temp pass runs only when `roots` is None (the default set). A pass
+    The pytest leg (dead-pid run dirs tombstoned, `.reap` drained, own sub-budget, no stamp) and the
+    top-level Temp pass run only when `roots` is None (the default set); the top-level stamp waits
+    until the pytest backlog is empty. A pass
     stamps only when it finished inside the budget. `drain` ignores budget and
     throttle. `autonomous-run-<sid>` in the fleet root is kept for the current and
     any `live_session_ids` session. The claude temp root deletes a session dir only
@@ -622,14 +739,13 @@ def prune(
         removed += drain_tombstones(roots=leg_roots, check=pytest_budget.check)
         pytest_pending = _pytest_backlog(now)
     index = None
-    if repo_root and roots is None:
-        try:
-            from coordinator_core.benchmarks.clone_orphan_sweep import sweep as _sweep_clone_orphans
-
-            _sweep_clone_orphans(repo_root)
-        except Exception:  # noqa: BLE001 -- housekeeping never fails loud
-            pass
-    for root, depth, retention_days in default_roots(repo_root) if roots is None else roots:
+    # The claude root is the costly pass (live-session scratch walks); it runs last so it cannot
+    # exhaust the shared budget ahead of the cheap repo spaces, which then never got reached.
+    ordered = sorted(
+        default_roots(repo_root) if roots is None else roots,
+        key=lambda r: Path(r[0]) == claude_temp_root(),
+    )
+    for root, depth, retention_days in ordered:
         if budget.stopped:
             break
         root = Path(root)
@@ -659,24 +775,49 @@ def prune(
 
             keep = frozenset({TOMBSTONE_DIRNAME})
             removed += _reap_tombstones(str(root / TOMBSTONE_DIRNAME), budget)
+        owner_space = next(
+            (s for s in OWNER_SPACES if repo_root and root == Path(repo_root, *s.split("/"))), ""
+        )
+        legacy_cutoff = now - retention_days * 86400
+        resume = _Resume("" if drain else _read_cursor(root))
         removed += _prune_level(
-            str(root), 0, depth, now - retention_days * 86400, session_id, tracked, budget, keep,
-            leaf_keep, repo_root if repo_root and root == Path(repo_root, *_SHARE_SPACE.split("/")) else "",
+            str(root), 0, depth,
+            now - OWNER_FLOOR_HOURS * 3600 if owner_space else legacy_cutoff,
+            session_id, tracked, budget, keep, leaf_keep,
+            repo_root if owner_space else "",
+            OWNER_SPACES.get(owner_space, True), legacy_cutoff,
+            resume,
         )
         if leaf_keep:
             removed += _prune_live_children(root, leaf_keep, now - retention_days * 86400, budget)
         if root == claude_temp_root() and not budget.stopped:
             removed += _enforce_scratch_budget(root, scratch_budget_bytes(), now, budget)
         if not budget.stopped:
+            _clear_cursor(root)
             try:
                 (root / STAMP_NAME).touch()
             except OSError:
                 pass
+        elif resume.done:
+            _clear_cursor(root)
+        elif resume.last is not None:
+            _write_cursor(root, resume.last)
+    if repo_root and roots is None and not budget.stopped:
+        # Runs after the stamped roots: its cost came out of their shared budget and starved the repo spaces.
+        try:
+            from coordinator_core.benchmarks.clone_orphan_sweep import sweep as _sweep_clone_orphans
+
+            _sweep_clone_orphans(repo_root)
+        except Exception:  # noqa: BLE001 -- housekeeping never fails loud
+            pass
     if roots is None and not budget.stopped and not pytest_pending:
         stamp_root = _top_level_stamp_root()
         if drain or not stamp_is_fresh(stamp_root, now):
-            removed += _prune_top_level(now - RETENTION_DAYS * 86400, budget, keep_live)
-            if not budget.stopped:
+            top_budget = _Budget(
+                None if drain else min(_TOP_LEVEL_BUDGET_SECONDS, budget_seconds if budget_seconds is not None else _TOP_LEVEL_BUDGET_SECONDS)
+            )
+            removed += _prune_top_level(now - RETENTION_DAYS * 86400, top_budget, keep_live)
+            if not top_budget.stopped:
                 try:
                     stamp_root.mkdir(parents=True, exist_ok=True)
                     (stamp_root / STAMP_NAME).touch()

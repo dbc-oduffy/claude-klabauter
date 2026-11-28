@@ -411,6 +411,17 @@ def test_plumbing_runs_without_the_capped_job_and_a_pytest_run_keeps_it(tmp_path
     assert jobs == [["read-tree"]]
 
 
+def test_seed_data_takes_non_python_files_beside_a_seed_and_a_root_seeds_root_files_only(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import test_reach
+
+    tracked = ["a/t.py", "a/data.json", "a/sub/x.txt", "b/other.json", "root.cfg", "top.py", "a2/data.json"]
+    monkeypatch.setattr(test_reach, "_tracked", lambda root: tracked)
+
+    assert cov._seed_data(None, ["a/t.py"]) == {"a/data.json", "a/sub/x.txt"}
+    assert cov._seed_data(None, ["top.py"]) == {"root.cfg"}
+    assert cov._seed_data(None, []) == frozenset()
+
+
 def test_a_bare_word_in_argv_is_not_a_path_and_a_directory_and_a_node_id_are(tmp_path):
     root = _repo(tmp_path)
 

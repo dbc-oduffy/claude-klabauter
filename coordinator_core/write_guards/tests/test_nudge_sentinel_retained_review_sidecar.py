@@ -10,6 +10,10 @@ Spec backlink: cross-repo memo
 
 from __future__ import annotations
 
+import builtins
+import os
+import time
+
 import pytest
 
 from coordinator_core.ops.review_findings_ledger import _stamp_frontmatter_key
@@ -298,6 +302,83 @@ class TestRosterKeyedInScope:
             agent_type="coordinator:staff-eng",
             body=_sentinel_retained_filled_body(),
         )
+        _silent(_payload(tmp_path))
+
+
+class TestCostIndependentOfShareDirSize:
+    """The per-call cost is bounded however many sidecars the dir holds."""
+
+    _UNRELATED = 5000
+
+    def _seed_unrelated(self, tmp_path: Path, count: int, base_mtime: float) -> Path:
+        share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-abc"
+        share.mkdir(parents=True, exist_ok=True)
+        text = _FINDINGS_FRONTMATTER + _sentinel_retained_filled_body(mentions_target=False)
+        for i in range(count):
+            p = share / f"unrelated-{i:05d}.md"
+            p.write_text(text, encoding="utf-8")
+            os.utime(p, (base_mtime - 1000 - i, base_mtime - 1000 - i))
+        return share
+
+    def _count_reads(self, monkeypatch: pytest.MonkeyPatch) -> list:
+        opened: list = []
+        real_read_text = Path.read_text
+
+        def counting_read_text(self, *a, **k):
+            opened.append(str(self))
+            return real_read_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", counting_read_text)
+        real_open = builtins.open
+
+        def counting_open(*a, **k):
+            opened.append(str(a[0]) if a else "")
+            return real_open(*a, **k)
+
+        monkeypatch.setattr(builtins, "open", counting_open)
+        return opened
+
+    def test_5000_unrelated_sidecars_bounded_files_and_time(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now = time.time()
+        share = self._seed_unrelated(tmp_path, self._UNRELATED, now)
+        covering = share / "codereview-sliceA.md"
+        covering.write_text(
+            _FINDINGS_FRONTMATTER + _sentinel_retained_filled_body(), encoding="utf-8"
+        )
+        os.utime(covering, (now, now))
+
+        opened = self._count_reads(monkeypatch)
+        start = time.process_time()
+        result = guard.check(_payload(tmp_path))
+        elapsed_ms = (time.process_time() - start) * 1000
+        monkeypatch.undo()
+
+        assert result is not None, "covering sidecar must still be flagged"
+        assert "codereview-sliceA.md" in result["hookSpecificOutput"]["additionalContext"]
+        assert len(opened) <= guard._MAX_CANDIDATES_READ
+        assert len(opened) < self._UNRELATED // 10
+        assert elapsed_ms <= 500, f"check() took {elapsed_ms:.1f}ms process time"
+
+    def test_silent_check_over_5000_sidecars_opens_constant_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._seed_unrelated(tmp_path, self._UNRELATED, time.time())
+        opened = self._count_reads(monkeypatch)
+        result = guard.check(_payload(tmp_path))
+        monkeypatch.undo()
+        assert result is None
+        assert len(opened) == guard._MAX_CANDIDATES_READ
+
+    def test_sidecar_older_than_the_window_is_not_read(self, tmp_path: Path) -> None:
+        now = time.time()
+        share = self._seed_unrelated(tmp_path, guard._MAX_CANDIDATES_READ + 5, now)
+        old = share / "codereview-ancient.md"
+        old.write_text(
+            _FINDINGS_FRONTMATTER + _sentinel_retained_filled_body(), encoding="utf-8"
+        )
+        os.utime(old, (now - 10_000, now - 10_000))
         _silent(_payload(tmp_path))
 
 

@@ -76,6 +76,69 @@ def test_full_stall_record_names_the_blocked_worker_and_its_frame(tmp_path: Path
     future.result(timeout=30)
 
 
+def _holding_the_gil_in_a_c_call(pid_file: str, stop_file: str) -> None:
+    """Module-level so the spawned worker can unpickle it; `PyDLL` keeps the GIL through the call."""
+    import ctypes
+    import os
+
+    Path(pid_file).write_text(str(os.getpid()))
+    ctypes.PyDLL("kernel32").Sleep(12000)
+
+
+def test_answered_stack_names_the_worker_once(tmp_path: Path) -> None:
+    stall_dir = tmp_path / "stall-dumps"
+    pid_file, stop_file = tmp_path / "pid", tmp_path / "stop"
+    pool = concurrent.futures.ProcessPoolExecutor(
+        max_workers=1,
+        mp_context=multiprocessing.get_context(),
+        initializer=server._worker_process_init,
+        initargs=(str(tmp_path / "stderr"), str(stall_dir)),
+    )
+    try:
+        pool.submit(_blocked_in_stand_in_op, str(pid_file), str(stop_file))
+        worker_pid = int(_wait_for(pid_file))
+        server._register_stack_pool(pool)
+        block = server._collect_worker_stacks(stall_dir, wait=5.0)
+        assert block.count(f"worker-pid: {worker_pid}") == 1
+        assert "_blocked_in_stand_in_op" in block
+    finally:
+        stop_file.write_text("stop")
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
+@pytest.mark.skipif(not hasattr(__import__("ctypes"), "WinDLL"), reason="Windows watchdog path")
+def test_worker_holding_the_gil_yields_a_gil_free_watchdog_dump(tmp_path: Path) -> None:
+    stall_dir = tmp_path / "stall-dumps"
+    pid_file, stop_file = tmp_path / "pid", tmp_path / "stop"
+    pool = concurrent.futures.ProcessPoolExecutor(
+        max_workers=1,
+        mp_context=multiprocessing.get_context(),
+        initializer=server._worker_process_init,
+        initargs=(str(tmp_path / "stderr"), str(stall_dir)),
+    )
+    try:
+        pool.submit(_holding_the_gil_in_a_c_call, str(pid_file), str(stop_file))
+        worker_pid = int(_wait_for(pid_file))
+        server._register_stack_pool(pool)
+
+        deadline = time.monotonic() + 9.0
+        block = ""
+        while time.monotonic() < deadline:
+            block = server._collect_worker_stacks(stall_dir, wait=0.2)
+            if "_holding_the_gil_in_a_c_call" in block:
+                break
+            time.sleep(0.5)
+
+        assert f"worker-pid: {worker_pid}" in block
+        assert "no answer within 0.20s" in block
+        assert "_holding_the_gil_in_a_c_call" in block
+    finally:
+        procs = list((pool._processes or {}).values())
+        pool.shutdown(wait=False, cancel_futures=True)
+        for proc in procs:
+            proc.terminate()
+
+
 def test_stub_record_pulls_no_worker_stacks(tmp_path: Path) -> None:
     stall_dir = tmp_path / "stall-dumps"
     record = server._write_stall_record(stall_dir, None, key="stub", full=False, sample_box=False)

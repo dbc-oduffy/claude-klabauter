@@ -218,10 +218,31 @@ def test_scout_rows_seed_the_register_and_a_paraphrase_is_dropped(repo, capsys):
     assert "R2" in capsys.readouterr().err
 
 
-def test_scout_unrelated_turn_is_waived_not_minted(repo):
+def test_scout_unrelated_turn_without_backing_is_minted_as_a_row(repo):
     path = _sizing(repo)
     scout = {"register_rows": [], "verbatim_accounting": {"4": "unrelated — small talk"}}
     _write(repo, [_v(3, "ship it"), _v(4, "back after a nap")], scout_register=scout)
     reg = _load(path)["requirement_register"]
+    assert [r["id"] for r in reg["rows"]] == ["T3", "T4"]
+    assert "unrelated_turns" not in reg
+
+
+def test_scout_unrelated_turn_with_rule_out_backing_is_waived(repo):
+    path = _sizing(repo)
+    reason = 'unrelated — "back after a nap" rule-out:T3'
+    scout = {"register_rows": [], "verbatim_accounting": {"4": reason}}
+    _write(repo, [_v(3, "ship it"), _v(4, "back after a nap")], scout_register=scout)
+    reg = _load(path)["requirement_register"]
     assert [r["id"] for r in reg["rows"]] == ["T3"]
-    assert reg["unrelated_turns"] == [{"turn": 4, "reason": "small talk"}]
+    assert reg["unrelated_turns"] == [{"turn": 4, "reason": '"back after a nap" rule-out:T3'}]
+    assert validate_frontmatter(_load(path), SCHEMA) == []
+
+
+def test_scout_unrelated_turn_with_unknown_ruling_is_minted_as_a_row(repo):
+    path = _sizing(repo)
+    reason = 'unrelated — "back after a nap" ruling:no-such-ruling'
+    scout = {"register_rows": [], "verbatim_accounting": {"4": reason}}
+    _write(repo, [_v(3, "ship it"), _v(4, "back after a nap")], scout_register=scout)
+    reg = _load(path)["requirement_register"]
+    assert [r["id"] for r in reg["rows"]] == ["T3", "T4"]
+    assert "unrelated_turns" not in reg

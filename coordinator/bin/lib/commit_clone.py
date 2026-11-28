@@ -106,6 +106,8 @@ def default_cache_root() -> Path:
     path = Path(__file__).resolve().parents[3] / "coordinator_core" / "temp_layout.py"
     spec = importlib.util.spec_from_file_location("_commit_clone_temp_layout", path)
     module = importlib.util.module_from_spec(spec)
+    # trap: a by-path module must be in sys.modules before exec, or its dataclasses fail to resolve string annotations.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module.managed_tempdir() / _CACHE_DIRNAME
 

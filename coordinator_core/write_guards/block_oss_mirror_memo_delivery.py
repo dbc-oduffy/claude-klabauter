@@ -28,10 +28,9 @@ target path is equal to, or a descendant of, EITHER
 ``<mirror-root>/cross-repo`` (legacy) OR ``<mirror-root>/state/cross-repo``
 (current, part of `_CROSS_REPO_RELDIRS = ("cross-repo", "state/cross-repo")`) for ANY publish-mirror
 root this machine's registry currently resolves — where ``<mirror-root>``
-comes from ``publish.mirrors.<key>.path`` (the SAME registry table the
-``cross-repo-memo`` CLI already trusts for publish-target detection, read
-here via ``coordinator_core.ops.fleet._memo_resolver.
-read_publish_mirrors()`` rather than re-parsing TOML a second time). Both
+is each open publish round's ``mirror-<key>`` clone, read via
+``coordinator_core.publish_round.live_round_mirrors()`` (one scandir, no
+spawn; a mirror exists only inside a round). Both
 literals are guarded unconditionally — this guard has no authority over the
 FOREIGN root it polices, so it does not consult `memo_corpus_root`/
 `receiver_inbox_root` to pick one; a resolver probe would select a single
@@ -59,7 +58,7 @@ against ``block_home_dir_memo_delivery``: the distinction now lives inside
 ``operator_override_note`` (audience), not in which guards opt in.
 
 Registry resolution failure (no ``registry.toml``/``registry.local.toml``,
-unparseable file, no mirror declares a ``.path``) is FAIL-OPEN (allow) —
+unset ``paths.scratch_root``, no open round) is FAIL-OPEN (allow) —
 mirrors ``block_home_dir_memo_delivery``'s posture on every unresolvable
 input. A guard that hard-denies when it cannot resolve config would break
 ordinary work on a fresh clone with no registry provisioned yet.
@@ -69,11 +68,8 @@ Negative-spec:
     ownership/redirect logic (``reroute_owner``) — this guard
     is a narrower, independent safety net over the hand-written-``Write``
     leg only; the CLI path is already closed.
-  - Does NOT hand-roll TOML parsing — mirror paths come from
-    ``coordinator_core.ops.fleet._memo_resolver.read_publish_mirrors()``,
-    the ONE TOML-merge authority the CLI's own claude-klabauter-side registry reader
-    already uses (``registry.toml`` baseline + ``registry.local.toml``
-    per-machine override, ``[publish.mirrors.<key>]`` nested tables).
+  - Does NOT read ``publish.mirrors.<key>.path`` — mirror trees come from
+    ``publish_round.live_round_mirrors()``.
   - Does NOT hand-roll the symlink/``..``-resolution — containment
     delegates directly to ``coordinator_core.ops._path_guard.contained_path``
     (fidelity rule 8: reuse shared helpers, don't reinvent).
@@ -93,7 +89,7 @@ from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.fleet._memo_resolver import read_publish_mirrors
+from coordinator_core import publish_round
 from coordinator_core.write_guards._case_fold_path import casefold_path as _casefold_path
 
 CLASS = "hard-deny"
@@ -114,16 +110,13 @@ def _guarded_roots() -> "list[Path]":
     roots: "list[Path]" = []
     seen: "set[Path]" = set()
     try:
-        mirrors = read_publish_mirrors()
+        mirrors = publish_round.live_round_mirrors()
     except Exception:
         return []
-    for entry in mirrors.values():
-        path = entry.get("path") if isinstance(entry, dict) else None
-        if not path or not isinstance(path, str):
-            continue
+    for mirror in mirrors:
         for reldir in _CROSS_REPO_RELDIRS:
             try:
-                root = Path(_casefold_path(str(Path(path) / reldir)))
+                root = Path(_casefold_path(str(mirror / reldir)))
             except Exception:
                 continue
             if root not in seen:

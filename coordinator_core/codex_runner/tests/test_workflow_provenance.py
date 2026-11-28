@@ -499,11 +499,13 @@ def test_grok_narration_then_trailing_json_object_is_the_result(tmp_path: Path, 
     assert _run(tmp_path, 'grok') == {'a': 3}
 
 
-def test_grok_narration_without_trailing_json_or_with_trailing_prose_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    for text in ('only narration', '{"a": 3}\nand then more prose'):
+def test_grok_narration_without_schema_object_fails_and_trailing_prose_after_valid_object_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for text in ('only narration', '{"a": "x"}\nand then more prose'):
         _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': text}))
         with pytest.raises(workflow.AgentFailed, match='no schema-valid result'):
             _run(tmp_path, 'grok')
+    _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': '{"a": 3}\nand then more prose'}))
+    assert _run(tmp_path, 'grok') == {'a': 3}
 
 
 def test_agy_stage_spawns_resolved_binary_and_parses_result_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

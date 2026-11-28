@@ -650,6 +650,27 @@ static int runtime_base_candidates(char out[][PATH_MAX], int max) {
         
     }
 
+    /* Rung 2: settings-home machine-local/.coordinator-warm-runtime-base
+     * (breadcrumb.RUNTIME_BASE_KEY_FILE); an absolute path only. */
+    char key_home[PATH_MAX];
+    char key_path[PATH_MAX];
+    if (settings_home_path(key_home, sizeof(key_home)) &&
+        snprintf(key_path, sizeof(key_path), "%s/machine-local/.coordinator-warm-runtime-base",
+                 key_home) < (int)sizeof(key_path)) {
+        size_t klen = 0;
+        int kwhy = 0;
+        char *kroot = read_trimmed_file(key_path, &klen, &kwhy);
+        if (kroot) {
+            char *kstripped = strip_ascii_whitespace(kroot);
+            if (kstripped[0] == '/') {
+                ADD_BASE("%s", kstripped);
+                free(kroot);
+                return count;
+            }
+            free(kroot);
+        }
+    }
+
     const char *local = getenv("LOCALAPPDATA");
     if (local && local[0] != '\0') {
         ADD_BASE("%s", local);
@@ -750,9 +771,13 @@ static int path_parent(const char *path, char *out, size_t out_size) {
  * door is single-threaded start to finish, so a static carries the one bit
  * those tests' pinned call site has no room to grow a parameter for. */
 static int g_connect_no_server = 0;
+/* 1 iff connect failed immediately for a reason that is neither no-server nor a full backlog:
+ * an engine present but not answering. Reset with g_connect_no_server. */
+static int g_connect_wedged = 0;
 
 static int connect_socket(const char *path) {
     g_connect_no_server = 0;
+    g_connect_wedged = 0;
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
@@ -786,6 +811,8 @@ static int connect_socket(const char *path) {
         if (errno != EINPROGRESS && errno != EALREADY) {
             if (errno == ENOENT || errno == ECONNREFUSED) {
                 g_connect_no_server = 1;
+            } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                g_connect_wedged = 1;
             }
             close(fd);
             return -1;
@@ -1068,6 +1095,31 @@ static void door_log_fail_open(const char *cause) {
     close(fd);
 }
 
+static char g_svc_dir[PATH_MAX];
+
+/* Appends one `hook_timeout` row to <svc dir>/degrade.jsonl per cold-leg kill, in the shape of
+ * telemetry.py :: record_degrade; read back by telemetry.py :: door_cold_leg_kill_rows.
+ * The svc dir is the connect-leg's private socket dir, so it already exists when set.
+ * Twin of door.c's; every failure is silent -- the row never changes the verdict or a spawn. */
+static void door_log_cold_leg_kill(int irreversible_shaped) {
+    if (!g_svc_dir[0]) return;
+    char path[PATH_MAX + 32];
+    if (snprintf(path, sizeof path, "%s/degrade.jsonl", g_svc_dir) >= (int)sizeof path) return;
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+    if (fd < 0) return;
+    time_t now = time(NULL);
+    struct tm tmv;
+    char ts[32] = "-";
+    if (gmtime_r(&now, &tmv)) strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%SZ", &tmv);
+    char line[192];
+    int n = snprintf(line, sizeof line,
+                     "{\"ts\": \"%s\", \"kind\": \"hook_timeout\", "
+                     "\"cause\": \"door.cold_leg_kill: irreversible_shaped=%s\"}\n",
+                     ts, irreversible_shaped ? "true" : "false");
+    if (n > 0 && (size_t)n < sizeof line) write_all_fd(fd, line, (size_t)n);
+    close(fd);
+}
+
 /* An engine-ask submission the engine could not take is kept on disk, no engine call.
  * 1 = spooled (id in `id`), 0 = not an ask or the write failed. */
 static int spool_submit_ask(const char *reason, char id[17]) {
@@ -1138,6 +1190,20 @@ static int emit_hook_pass_loudly(const char *reason) {
     write_all_fd(STDOUT_FILENO, out.data, out.len);
     free(out.data);
     return 0;
+}
+
+static int emit_hook_deny(const char *reason);
+
+/* An irreversible-shaped payload no verdict covered: denied, naming detail and command.
+ * Callers log the engine-friction row. */
+static int emit_hook_irreversible_unchecked(const char *detail) {
+    char command[240], reason[640];
+    door_payload_irreversible_command(g_hook_payload, g_hook_payload_len, command, sizeof command);
+    snprintf(reason, sizeof reason,
+             "coordinator-door: irreversible-shaped command DENIED, no engine verdict (%s): %s; retry once the engine answers",
+             (detail && *detail) ? detail : "no detail",
+             command[0] ? command : "(command not captured)");
+    return emit_hook_deny(reason);
 }
 
 
@@ -1242,9 +1308,8 @@ static int emit_post_delivery_failure(const char *detail, int argc, char **argv,
     door_log_fail_open(detail);
     if (g_door_hook_mode && g_hook_payload &&
         door_payload_is_irreversible(g_hook_payload, g_hook_payload_len)) {
-        char reason[640];
-        door_irreversible_deny_reason(reason, sizeof reason, detail);
-        return emit_hook_deny(reason);
+        door_log_cold_leg_kill(1);
+        return emit_hook_irreversible_unchecked(detail);
     }
     if (g_precheck_armed && emit_precheck_if_matched()) return 0;
     if (g_door_hook_mode && door_hook_op_reverdicts_cold(g_hook_op)) {
@@ -1425,15 +1490,33 @@ static int door_drain_publish_hold(const char *svc_dir) {
     }
 }
 
+static int door_claim_spawn_stamp(const char *svc_dir, int spawn_if_unstampable);
+static void door_spawn_detached_python(const char *engine_root, const char *script,
+                                       const char *extra_arg, int new_session);
+
 static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir) {
-    if (door_publish_marker_held(svc_dir)) return;
+    if (!door_claim_spawn_stamp(svc_dir, 1)) return;
+    char server_script[PATH_MAX];
+    if (snprintf(server_script, sizeof(server_script),
+                 "%s/coordinator_core/warm/server.py", engine_root) < 0) {
+        return;
+    }
+    door_spawn_detached_python(engine_root, server_script, NULL, 0);
+}
+
+/* 1 iff this call claimed the boot stamp: no publish hold and no stamp younger than the debounce.
+ * One stamp serves the server spawn and the restart spawn, so one of them is in flight per root.
+ * A stamp that cannot be written (svc dir or lock file unavailable) returns spawn_if_unstampable: the
+ * server spawn goes ahead unstamped, since a dead engine left dead is worse than a debounce miss. */
+static int door_claim_spawn_stamp(const char *svc_dir, int spawn_if_unstampable) {
+    if (door_publish_marker_held(svc_dir)) return 0;
     char lock_path[PATH_MAX];
     if (snprintf(lock_path, sizeof(lock_path), "%s/warm.json.boot.lock", svc_dir) < 0) {
-        return;
+        return 0;
     }
 
     int fd = open(lock_path, O_CREAT | O_RDWR, 0600);
-    if (fd < 0) return; 
+    if (fd < 0) return spawn_if_unstampable;
 
     /* Stamp lives at byte offset 1, matching `breadcrumb.py ::
      * _CLAIM_STAMP_OFFSET` (byte 0 is a lock byte this door never takes) --
@@ -1456,9 +1539,9 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
     if (got > 0) stamp = strtod(stamp_buf, NULL);
     double age = now - stamp;
     if (stamp > 0.0 && age > -DOOR_SPAWN_DEBOUNCE_SECS && age < DOOR_SPAWN_DEBOUNCE_SECS) {
-        
+
         close(fd);
-        return;
+        return 0;
     }
 
     char new_stamp[32];
@@ -1468,12 +1551,13 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
         (void)wrote;
     }
     close(fd);
+    return 1;
+}
 
-    char server_script[PATH_MAX];
-    if (snprintf(server_script, sizeof(server_script),
-                 "%s/coordinator_core/warm/server.py", engine_root) < 0) {
-        return;
-    }
+/* Spawns `PYTHON_BIN <script> [extra_arg]` with stdio on /dev/null and PYTHONPATH=<engine_root>
+ * prepended; `new_session` also detaches it (new session, or process group where SETSID is absent). Never waits. */
+static void door_spawn_detached_python(const char *engine_root, const char *script,
+                                       const char *extra_arg, int new_session) {
 
     /* PYTHONPATH=<engine_root>, PREPENDED ahead of this process's own
      * environment -- mirrors `ops/ceremony/detached_spawn.py ::
@@ -1501,10 +1585,23 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
         }
     }
 
-    char *spawn_argv[3];
+    char *spawn_argv[4];
     spawn_argv[0] = (char *)PYTHON_BIN;
-    spawn_argv[1] = server_script;
-    spawn_argv[2] = NULL;
+    spawn_argv[1] = (char *)script;
+    spawn_argv[2] = (char *)extra_arg;
+    spawn_argv[3] = NULL;
+
+    posix_spawnattr_t sattr;
+    int sattr_ok = 0;
+    if (new_session && posix_spawnattr_init(&sattr) == 0) {
+#ifdef POSIX_SPAWN_SETSID
+        sattr_ok = posix_spawnattr_setflags(&sattr, POSIX_SPAWN_SETSID) == 0;
+#else
+        sattr_ok = posix_spawnattr_setpgroup(&sattr, 0) == 0 &&
+                   posix_spawnattr_setflags(&sattr, POSIX_SPAWN_SETPGROUP) == 0;
+#endif
+        if (!sattr_ok) posix_spawnattr_destroy(&sattr);
+    }
 
     posix_spawn_file_actions_t actions;
     int actions_ok = posix_spawn_file_actions_init(&actions) == 0;
@@ -1520,12 +1617,27 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
     }
 
     pid_t pid = 0;
-    posix_spawnp(&pid, PYTHON_BIN, actions_ok ? &actions : NULL, NULL,
+    posix_spawnp(&pid, PYTHON_BIN, actions_ok ? &actions : NULL, sattr_ok ? &sattr : NULL,
                  spawn_argv, child_env ? child_env : environ);
     if (actions_ok) posix_spawn_file_actions_destroy(&actions);
-    
+    if (sattr_ok) posix_spawnattr_destroy(&sattr);
+
     free(pythonpath_entry);
     free(child_env);
+}
+
+/* Make-before-break restart (`warm-engine-stop.py --restart`) of a dead or wedged engine, in a new
+ * session. An engine root without the script spawns nothing. */
+static void door_restart_engine_async(const char *engine_root) {
+    if (!engine_root || !g_svc_dir[0]) return;
+    char script[PATH_MAX];
+    if (snprintf(script, sizeof script, "%s/coordinator/bin/warm-engine-stop.py", engine_root) >=
+        (int)sizeof script) {
+        return;
+    }
+    if (access(script, F_OK) != 0) return;
+    if (!door_claim_spawn_stamp(g_svc_dir, 0)) return;
+    door_spawn_detached_python(engine_root, script, "--restart", 1);
 }
 
 /* `budget_ms` bounds the cold child's run. `post_detail` is NULL on the
@@ -1535,10 +1647,18 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
  * every no-verdict exit reports the post-delivery cause instead. */
 static int hook_fall_through(int argc, char **argv, const char *engine_root,
                              int budget_ms, const char *post_detail) {
+    if (!post_detail && g_hook_payload) {
+        char native_reason[640];
+        if (door_native_guard_verdict(g_hook_payload, g_hook_payload_len, native_reason,
+                                      sizeof native_reason)) {
+            return emit_hook_deny(native_reason);
+        }
+    }
     if (emit_precheck_if_matched()) return 0;
 
     (void)argc;
     int advisory = g_door_advisory;
+    if (budget_ms > door_hook_read_deadline_ms()) budget_ms = door_hook_read_deadline_ms();
 
     char script_path[PATH_MAX];
     if (resolve_fallback_script(engine_root, script_path) != 0) {
@@ -1630,11 +1750,13 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root,
         while (waitpid(pid, &status, 0) < 0) {
             if (errno != EINTR) break;
         }
-        if (g_hook_payload && door_payload_is_irreversible(g_hook_payload, g_hook_payload_len)) {
-            char reason[640];
-            door_log_fail_open("cold guard gave no verdict within the hook deadline; irreversible denied");
-            door_irreversible_deny_reason(reason, sizeof reason, "cold guard gave no verdict within the hook deadline");
-            return emit_hook_deny(reason);
+        int irreversible = g_hook_payload &&
+                           door_payload_is_irreversible(g_hook_payload, g_hook_payload_len);
+        door_log_cold_leg_kill(irreversible);
+        door_restart_engine_async(engine_root);
+        if (irreversible) {
+            door_log_fail_open("cold guard gave no verdict within the hook deadline");
+            return emit_hook_irreversible_unchecked("cold guard gave no verdict within the hook deadline");
         }
         if (post_detail) return emit_hook_post_delivery(post_detail);
         if (advisory) { door_log_fail_open("cold guard gave no verdict within the hook deadline"); return 0; }
@@ -2035,6 +2157,7 @@ int main(int argc, char **argv) {
         door_drain_publish_hold(chosen_dir)) {
         fd = connect_socket(chosen_sock);
     }
+    snprintf(g_svc_dir, sizeof g_svc_dir, "%s", chosen_dir);
     if (fd < 0) {
         /* RESPAWN ON MISS -- the no-server branch only. `g_connect_no_server`
          * is set only for `ENOENT`/`ECONNREFUSED` (`connect_socket`'s own
@@ -2046,6 +2169,9 @@ int main(int argc, char **argv) {
          * exit code. */
         if (g_connect_no_server && chosen_dir[0] != '\0') {
             door_maybe_spawn_server(engine_root, chosen_dir);
+        } else if (g_door_hook_mode && g_connect_wedged && chosen_dir[0] != '\0') {
+            /* Engine present but not answering; a full backlog never restarts. */
+            door_restart_engine_async(engine_root);
         }
         /* No usable service directory (`chosen_dir` empty) is also a
          * no-server fall-through: no engine to wait for. */

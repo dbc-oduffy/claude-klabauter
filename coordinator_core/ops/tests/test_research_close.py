@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import os
 import shutil
 import subprocess
@@ -1235,3 +1236,180 @@ def test_carry_a_basis_without_a_carry_file_still_closes_on_the_fresh_report(rep
     _report(scratch, _GOOD)
     out = _close(repo, scratch, "scouts")
     assert out["exit_code"] == 0, out
+
+
+_RAG_RUN = "pipeline-research-ragrun"
+_RAG_SESSION = "sess-rag"
+
+
+def _tool_use(msg_id: str, name: str) -> str:
+    import json
+
+    return json.dumps({"requestId": f"r-{msg_id}", "message": {
+        "id": msg_id, "model": "claude-sonnet-5-5", "role": "assistant",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+        "content": [{"type": "tool_use", "id": f"t-{msg_id}", "name": name, "input": {}}]}})
+
+
+@pytest.fixture
+def rag_env(tmp_path: Path, monkeypatch):
+    """A example-retrieval-repo-served repo plus a session whose Workflow workers' transcripts name `_RAG_RUN`; `add(n_calls)` adds one worker."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import rag_use
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setattr(rag_use, "rag_installed", lambda _root: True)
+    monkeypatch.setattr(rag_use, "rag_tier", lambda _root, **_kw: rag_use.TIER_RAG)
+    monkeypatch.setattr("coordinator_core.bash_guards._rag_serving.serves_repo", lambda _cwd=None: True)
+    wf = tmp_path / "cfg" / "projects" / "slug" / _RAG_SESSION / "subagents" / "workflows" / "wf_one"
+    wf.mkdir(parents=True)
+    agents: list[tuple[str, str]] = []
+
+    def add(n_calls: int) -> None:
+        agent_id = f"a{len(agents) + 1}"
+        agents.append((agent_id, f"scout-{agent_id}"))
+        (wf / "journal.jsonl").write_text(
+            "\n".join(json.dumps({"type": "started", "agentId": a, "label": l}) for a, l in agents) + "\n",
+            encoding="utf-8")
+        lines = [f"scratch/warp/{_RAG_RUN}"]
+        lines += [_tool_use(f"{agent_id}-{i}", "mcp__project-rag__project_symbol") for i in range(n_calls)]
+        lines.append(_tool_use(f"{agent_id}-r", "Read"))
+        (wf / f"agent-{agent_id}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        (wf / f"agent-{agent_id}.meta.json").write_text(json.dumps({"agentType": "coordinator:scout"}), encoding="utf-8")
+
+    return add
+
+
+def _rag_close(repo, scratch) -> dict:
+    return _close(repo, scratch, "scouts", run_id=_RAG_RUN, session_id=_RAG_SESSION)
+
+
+def _head(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout.strip()
+
+
+def test_no_rag_halts_before_commit(repo, scratch, rag_env):
+    rag_env(0)
+    rag_env(0)
+    before, head = _count(repo), _head(repo)
+    out = _rag_close(repo, scratch)
+    assert out["exit_code"] == 0 and out["committed"] is False
+    assert _count(repo) == before and _head(repo) == head
+    assert out["halted"] == "example_retrieval_repo_unused" == out["halted_by"]["halted"]
+    assert [a["rag_calls"] for a in out["halted_by"]["agents"]] == [0, 0]
+    assert out["rag_use"]["verdict"] == "rag_not_used" and len(out["rag_use"]["per_worker"]) == 2
+    assert _RAG_RUN in out["next_action"]
+
+
+def test_tier_none_closes_and_commits_with_no_rag_use(repo, scratch, rag_env, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import rag_use
+
+    rag_env(0)
+    monkeypatch.setattr(rag_use, "rag_tier", lambda _root, **_kw: rag_use.TIER_NONE)
+    before = _count(repo)
+    out = _rag_close(repo, scratch)
+    assert out["committed"] is True and _count(repo) == before + 1
+    assert "rag_use" not in out and "halted" not in out
+
+
+def test_close_with_a_worker_that_used_example_retrieval_repo_reports_ok_and_no_next_action(repo, scratch, rag_env):
+    rag_env(1)
+    rag_env(2)
+    out = _rag_close(repo, scratch)
+    assert out["committed"] is True and out["rag_use"]["verdict"] == "ok"
+    assert "next_action" not in out
+
+
+def test_close_with_no_readable_worker_transcript_is_unreadable_never_zero(repo, scratch, rag_env):
+    out = _rag_close(repo, scratch)
+    assert out["committed"] is True and out["rag_use"]["verdict"] == "transcript_unreadable"
+    assert "next_action" not in out and "halted" not in out
+
+
+def test_halted_close_writes_rag_use_into_the_runs_existing_stage_record(repo, scratch, rag_env):
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    rag_env(0)
+    ask_contract.write_run_stage(repo, _RAG_RUN, "staged")
+    out = _rag_close(repo, scratch)
+    record = ask_contract.read_run_stage(repo, _RAG_RUN)
+    assert out["committed"] is False
+    assert record["stage"] == "staged" and record["rag_use"] == out["rag_use"]
+    assert record["rag_use"]["verdict"] == "rag_not_used"
+
+
+def test_committed_close_writes_ok_rag_use_into_the_stage_record(repo, scratch, rag_env):
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    rag_env(2)
+    ask_contract.write_run_stage(repo, _RAG_RUN, "staged")
+    out = _rag_close(repo, scratch)
+    assert out["committed"] is True
+    assert ask_contract.read_run_stage(repo, _RAG_RUN)["rag_use"] == out["rag_use"]
+
+
+def test_close_creates_no_stage_record_for_a_run_that_has_none(repo, scratch, rag_env):
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    rag_env(0)
+    _rag_close(repo, scratch)
+    assert ask_contract.read_run_stage(repo, _RAG_RUN) is None
+
+
+_ASK_SIZING = "state/sizings/x.yaml"
+
+
+def _minted_ask(repo: Path, ask_id: str, sizing: str | None = _ASK_SIZING, stage: str = "minted") -> None:
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    rd = ask_contract.record_dir(repo, ask_id)
+    rd.mkdir(parents=True, exist_ok=True)
+    if sizing:
+        (rd / "run.json").write_text(json.dumps({"sizing_rel": sizing}), encoding="utf-8")
+    ask_contract.write_run_stage_at(rd, stage)
+    script = repo / ask_contract.RUN_DIR_ROOT / f"{ask_id}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("// script", encoding="utf-8")
+
+
+def test_a_research_close_settles_a_minted_ask_so_the_never_launched_sweep_skips_it(repo, scratch, tmp_path, monkeypatch):
+    from coordinator_core.ask_spool import drain
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+    ask = "ask-20261124T145236-b8a33e"
+    other = "ask-20261124T145300-aaaaaa"
+    staged = "ask-20261124T145400-bbbbbb"
+    _write_sizing(repo)
+    _minted_ask(repo, ask)
+    _minted_ask(repo, other, sizing="state/sizings/other.yaml")
+    _minted_ask(repo, staged, stage="staged")
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], sizing=_ASK_SIZING)
+    assert out["exit_code"] == 0 and out["committed"] is True, out
+    assert ask_contract.read_run_stage(repo, ask)["stage"] == "landed"
+    assert ask_contract.read_run_stage(repo, other)["stage"] == "minted"
+    assert ask_contract.read_run_stage(repo, staged)["stage"] == "staged"
+    fired: list = []
+
+    def fire(root, run_id):
+        fired.append(run_id)
+        return {"fire_id": "f", "state": "running"}
+
+    counts = drain.run(str(repo), now=time.time() + 2 * drain.NEVER_LAUNCHED_SECONDS, fire=fire)
+    assert fired == [other] and counts["never_launched"] == 1
+    assert ask not in fired
+
+
+def test_a_research_close_whose_run_id_is_the_ask_id_settles_it(repo, scratch):
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    ask = "ask-20261124T145236-b8a33e"
+    _minted_ask(repo, ask, sizing=None)
+    out = _close(repo, scratch, "scouts", run_id=ask)
+    assert out["exit_code"] == 0 and out["committed"] is True, out
+    assert ask_contract.read_run_stage(repo, ask)["stage"] == "landed"
+    assert not (ask_contract.record_dir(repo, ask) / "run-outcome.json").exists()

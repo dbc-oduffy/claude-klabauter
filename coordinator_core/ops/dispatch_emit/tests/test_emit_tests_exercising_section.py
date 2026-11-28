@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import dispatch_row_lint
+from coordinator_core.ops.dispatch_emit import dispatch_row_lint, test_import_table
 from coordinator_core.ops.dispatch_emit.emit import emit_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from pathlib import Path
@@ -48,6 +48,7 @@ def _repo(tmp_path, files, rows):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
     _git(repo, "add", ".")
+    test_import_table.rebuild(repo)
     return repo
 
 

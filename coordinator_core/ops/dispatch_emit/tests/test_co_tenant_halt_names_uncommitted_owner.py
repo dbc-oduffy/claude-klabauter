@@ -77,19 +77,20 @@ def _exc() -> SimpleNamespace:
     return SimpleNamespace(importer="land_run.py", peer=PEER, symbol="EMPTY_STAGE_RESUME_FIELD", module="", missing="symbol")
 
 
-def test_halt_names_the_parked_run_holding_the_uncommitted_hunk_not_the_landed_chain(tmp_path, monkeypatch) -> None:
+def test_halt_names_the_parked_run_holding_the_uncommitted_hunk_as_a_peer_not_an_owner(tmp_path, monkeypatch) -> None:
     root = _world(tmp_path, monkeypatch)
     assert co_tenant_owner.work_landed_at_head(root, LANDED) is True
-    assert co_tenant_owner.owner_of(root, PEER, exclude_run_id=WAITER) == {"run_id": PARKED, "state": "halted"}
+    assert co_tenant_owner.owner_of(root, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
     out = co_tenant_owner.resolve(root, WAITER, _exc())
-    assert out["cause"] == "co_tenant_dependency_on_halted_run" and out["owner"] == PARKED
+    assert out["cause"] == "co_tenant_dependency" and out["owner"] is None and PARKED in out["peer_runs"]
     assert out["symbol"] == "EMPTY_STAGE_RESUME_FIELD"
 
 
-def test_halted_run_withholding_the_dirty_path_is_not_landed_and_stays_the_owner(tmp_path, monkeypatch) -> None:
+def test_halted_run_withholding_the_dirty_path_is_not_landed_and_is_still_no_owner(tmp_path, monkeypatch) -> None:
     root = _world(tmp_path, monkeypatch, landed_withholds_peer=True, parked=False)
     assert co_tenant_owner.work_landed_at_head(root, LANDED) is False
-    assert co_tenant_owner.owner_of(root, PEER, exclude_run_id=WAITER)["state"] == "halted"
+    assert co_tenant_owner.owner_of(root, PEER, exclude_run_id=WAITER)["state"] is None
+    assert LANDED in co_tenant_owner.peer_hunk_runs(root, PEER, exclude_run_id=WAITER)
 
 
 def test_with_no_other_holder_the_landed_chain_leaves_the_typed_unowned_cause(tmp_path, monkeypatch) -> None:

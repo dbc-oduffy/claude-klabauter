@@ -21,10 +21,6 @@ from coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_prod
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _evidenced(verdict: dict) -> dict:
-    return {"items": [{**i, "evidence": "verified"} for i in verdict["items"]]}
-
-
 def _carrier(root) -> str:
     """The pre-halt checkpoint commit that carries `a.py` and names the plan."""
     return _git(root, "log", "-1", "--format=%H", "--", "a.py").strip()
@@ -35,7 +31,7 @@ def test_product_landed_before_the_halt_answers_already_landed(halted):  # noqa:
     refire = _refire(halted, edit=False)
     head = _git(halted, "rev-parse", "HEAD")
 
-    out = _terminal(halted, refire["token"], resume, _evidenced(_verdict([])))
+    out = _terminal(halted, refire["token"], resume, _verdict([]))
 
     assert out["committed"] is True and out[land_run.ALREADY_LANDED_KEY] is True, out
     assert out["sha"] == _carrier(halted) and out.get("refused") is None and out.get("error") is None, out

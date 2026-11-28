@@ -178,7 +178,7 @@ def build_fixture(workdir: Path, run_dirs: int, withheld_paths: int = 0) -> tupl
 def _own_dirt(root: Path, run_id: str) -> None:
     """`OWN_PY_PATHS`: tracked `.py` the run's session touched and edited past HEAD, which no chunk
     declares and whose manifest baseline is HEAD, so the halt parks each in its record through
-    `halt_tree_evict.evict` (an untracked or baseline-less path is refused before the live-write guard)."""
+    `halt_tree_evict.evict`, which records the path's tree bytes and writes nothing to the tree."""
     from coordinator_core.git import git_objects
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT

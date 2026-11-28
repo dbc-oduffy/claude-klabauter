@@ -303,7 +303,7 @@ def kept_post_checkpoint(root: Path, record_dir: Path) -> tuple[dict, list]:
 
 
 def shared_drift(root: Path, drifted: Iterable[str], run_id: str, kin: Iterable[str] = ()) -> dict[str, str]:
-    """``{rel: owner_run}`` for each drifted recorded path another run (live, or halted holding it) claims,
+    """``{rel: owner_run}`` for each drifted recorded path another live run claims (a halted run holds nothing),
     so its moved bytes are that run's edit, not this run's. ``run_id`` and ``kin`` (the resumed kept run)
     never count as the other run. A path no other run claims is this run's own. Spawn-free."""
     from coordinator_core.ops.dispatch_emit import co_tenant_owner

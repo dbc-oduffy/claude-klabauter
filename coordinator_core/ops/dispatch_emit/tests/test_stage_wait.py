@@ -162,6 +162,81 @@ def test_concurrent_blocker_ends_in_separate_processes_still_wake_the_waiter(rep
         assert stage_wait.read(repo, waiter)["started"] is True
 
 
+def test_typed_blockers_and_record_level_actions_round_trip(repo) -> None:
+    rec = stage_wait.park(
+        repo, "waiter", [{"kind": "file_state", "ref": "a/b.txt", "want": "exists"}, "b1"], [],
+        resume_action="notify", on_blocker_dead="proceed",
+    )
+    assert [(b["kind"], b["ref"]) for b in rec["typed_blockers"]] == [("file_state", "a/b.txt"), ("run_end", "b1")]
+    assert rec["typed_blockers"][0]["want"] == "exists"
+    assert rec["blockers"] == ["a/b.txt", "b1"]
+    assert (rec["resume_action"], rec["on_blocker_dead"]) == ("notify", "proceed")
+    again = stage_wait.park(repo, "waiter", ["b1"], [])
+    assert (again["resume_action"], again["on_blocker_dead"]) == ("notify", "proceed")
+    plain = stage_wait.park(repo, "w2", ["b1"], [])
+    assert (plain["resume_action"], plain["on_blocker_dead"]) == ("refire", "surface")
+
+
+def test_park_refuses_unknown_kind_and_action(repo) -> None:
+    with pytest.raises(ValueError):
+        stage_wait.park(repo, "waiter", [{"kind": "bogus", "ref": "x"}], [])
+    with pytest.raises(ValueError):
+        stage_wait.park(repo, "waiter", ["b1"], [], resume_action="bogus")
+    with pytest.raises(ValueError):
+        stage_wait.park(repo, "waiter", ["b1"], [], on_blocker_dead="bogus")
+    assert stage_wait.read(repo, "waiter") is None
+
+
+def test_legacy_string_record_reads_as_run_end_blockers(repo) -> None:
+    import json
+
+    stage_wait.park(repo, "waiter", ["b1"], [], session_id="s1")
+    path = stage_wait._path(repo, "waiter")
+    legacy = json.loads(path.read_text(encoding="utf-8"))
+    for key in ("typed_blockers", "resume_action", "on_blocker_dead"):
+        legacy.pop(key)
+    legacy["blockers"] = ["b1", "b2"]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    assert stage_wait.read(repo, "waiter")["typed_blockers"] == [
+        {"kind": "run_end", "ref": "b1"}, {"kind": "run_end", "ref": "b2"},
+    ]
+    assert stage_wait.wake_on_end(repo, "b1") == []
+    assert [w["run_id"] for w in stage_wait.wake_on_end(repo, "b2")] == ["waiter"]
+
+
+def test_end_event_matches_ref_and_ignores_non_run_kinds(repo) -> None:
+    stage_wait.park(repo, "waiter", [{"kind": "file_state", "ref": "b1"}, "b2"], [], session_id="s1")
+    assert stage_wait.wake_on_end(repo, "b1") == []
+    assert stage_wait.wake_on_end(repo, "b2") == []
+    rec = stage_wait.read(repo, "waiter")
+    assert rec["started"] is False
+    assert [b["kind"] for b in rec["typed_blockers"]] == ["file_state"]
+
+
+def test_run_landed_blocker_is_not_cleared_by_end_alone(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    stage_wait.park(repo, "waiter", [{"kind": "run_landed", "ref": "b1"}], [], session_id="s1", resume_action="close_landed")
+    monkeypatch.setattr(stage_wait, "_landed_cleared", lambda root, ref: False)
+    assert stage_wait.wake_on_end(repo, "b1") == []
+    rec = stage_wait.read(repo, "waiter")
+    assert rec["started"] is False and rec["blockers"] == ["b1"]
+    assert _notices(repo, "s1") == []
+    monkeypatch.setattr(stage_wait, "_landed_cleared", lambda root, ref: True)
+    assert [w["run_id"] for w in stage_wait.wake_on_end(repo, "b1")] == ["waiter"]
+    assert stage_wait.read(repo, "waiter")["started"] is True
+
+
+def test_run_landed_without_evaluator_stays_parked(repo) -> None:
+    stage_wait.park(repo, "waiter", [{"kind": "run_landed", "ref": "b1"}], [])
+    assert stage_wait._landed_cleared(repo, "b1") is False
+    assert stage_wait.wake_on_end(repo, "b1") == []
+
+
+def test_kind_and_action_constants_are_exported() -> None:
+    assert stage_wait.BLOCKER_KINDS == ("run_end", "run_landed", "file_state", "oracle_check", "remote_run")
+    assert stage_wait.RESUME_ACTIONS == ("refire", "close_landed", "notify")
+    assert stage_wait.ON_BLOCKER_DEAD == ("surface", "proceed")
+
+
 def test_stale_record_lock_is_stolen_and_fresh_one_is_not_left_behind(repo) -> None:
     import os
 

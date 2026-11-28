@@ -4,8 +4,18 @@ Params: ``run_id`` (string, required: the halted run), ``sha`` (string: one comm
 (list of strings: further commit shas, unioned with ``sha``; at least one of the two is required),
 ``met_by`` (object, optional: ``{blocking row id: sha}``; each sha an ancestor-or-equal of HEAD and equal to or after the
 halt commit, else the op refuses naming the row; recorded on the landed marker and echoed in the reply),
+``pending_oracle`` (object, optional: ``{blocking row id: {owner, closing_check: {command: argv list, expect},
+requester_citation}}``; a row held open for an external oracle: stamped on the halt marker, one PM flag per new
+entry, a row also in ``met_by`` refused, ``accepted_partial`` refused; each stamped row's closing check runs once per
+call before the gate, and a pass stamps ``met_by_oracle`` and credits the row like ``met_by``; any row still pending
+refuses ``pending external oracle`` with ``{ok: false, error, pending_oracle_rows, refire: {resume_run_id}}`` and the
+marker stays ``halted`` and refirable, never landed; each such refusal spools the ``resume_run_id`` refire when the run names a
+sizing, at most ``pending_oracle.MAX_AUTO_REFIRES`` times, and sets ``refire.spooled``),
 a marker whose ``blocking`` rows lack a ``met_by`` credit refuses ``halt reason stands``, and a marker whose
 reason starts ``completion gate:`` refuses unless the run-outcome ``inline_review`` leaves ``completion_blockers`` empty,
+``keep_open`` (bool, optional: with ``met_by``, credit those rows on a ``halted`` run's marker, merged into
+its existing credits, and leave it halted; no sha or landing is needed; a running, landed or marker-less run
+refuses; reply ``{ok, run_id, written: false, kept_open: true, met_by}`` with the merged credits),
 ``session_id`` (string, optional uuid: the calling session, used to find the run's review sidecar),
 ``in_run`` (bool, optional: close the calling run itself as already delivered; admits a ``running``
 sibling status or a solo run with no halt marker, and refuses unless every manifest
@@ -42,7 +52,8 @@ abbreviation resolution are at most two batched git spawns; the close legs (``CL
 queued in a close-job record paid by one detached launch (``_launch``), never inline. The record is written only when the marker names a ``plan`` and no
 close-job record exists yet.
 Reply: ``{ok, run_id, sha, written, shas?, covers?, siblings?, recorded?, close, blocking_rows}`` or
-``{ok: false, error}``; ``blocking_rows`` is the marker's ``blocking`` register-row ids (not paths; the
+``{ok: false, error, pending_oracle_rows?, refire?}``; a landing that credited rows through their closing check
+also carries ``met_by_oracle``; ``blocking_rows`` is the marker's ``blocking`` register-row ids (not paths; the
 withheld paths each sha carried are under ``covers``). When ``written``,
 ``shas`` is every verified full sha (``sha`` plus ``shas`` params, deduplicated) and ``covers`` maps
 each to the withheld paths it changed (``{}`` when the run withholds nothing); ``sha`` is the newest.
@@ -59,12 +70,15 @@ name; ``covers`` keeps the marker's spelling. A set records its newest sha.
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
+from coordinator_core.ops.dispatch_emit.rebind_contract import KEEP_OPEN
 
 OP_NAME = "dispatch.record_halted_run_landed"
 
@@ -72,6 +86,12 @@ _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _SHA_PREFIX = re.compile(r"[0-9a-f]{4,40}")
 #: Param, reply key and halt-marker key: ``{blocking row id: full sha of the commit at or after the halt that met it}``.
 MET_BY_FIELD = "met_by"
+#: Param and halt-marker key: ``{blocking row id: {owner, closing_check, requester_citation}}``, a row held open pending an external oracle.
+PENDING_ORACLE_FIELD = "pending_oracle"
+#: Halt-marker key: ``{row id: {owner}}`` for each pending row whose closing check has passed.
+MET_BY_ORACLE_FIELD = "met_by_oracle"
+#: Halt-marker key: automatic refires spooled so far for the run's still-pending rows.
+ORACLE_REFIRES_FIELD = "oracle_refires"
 
 
 #: Close detail for a landing recorded on a run that never halted (stalled or staged): no marker exists to flip.
@@ -307,12 +327,98 @@ def _close_landed(
         if halted_run.mark_landed(record_dir, sha, without_verdict=without_verdict):
             out["recorded"] = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
             out.update(_commit_records(root, run_id, record_dir, sha, verified, claims=claims))
+    out.update(_release_stage_waiters(root, run_id))
     if marker is None:
         return {**out, "close": {"status": "not-applicable", "detail": _NEVER_HALTED.format(sha=sha[:12])}, "blocking_rows": []}
     stem = run_close.resolve_close_job_stem(root, run_id)
     if stem is not None:
         return {**out, **_existing_close(root, run_id, stem, marker)}
     return {**out, **_queue_close(root, run_id, sha, marker, session_id)}
+
+
+def _blocked_waiters(root: Path, run_id: str) -> list:
+    """Wait records of the stage-wait siblings still blocked on *run_id*: one directory listing, no spawn."""
+    from coordinator_core.ops.dispatch_emit import stage_wait
+
+    directory = stage_wait._wait_dir(root)
+    if directory is None:
+        return []
+    try:
+        names = sorted(n for n in os.listdir(directory) if n.endswith(".json"))
+    except OSError:
+        return []
+    waiters = []
+    for name in names:
+        record = stage_wait.read(root, name[: -len(".json")])
+        if record and not record.get("started") and run_id in (record.get("blockers") or ()):
+            waiters.append(record)
+    return waiters
+
+
+def _newer_run_of_sizing(root: Path, waiter: dict, record_names: list) -> Optional[str]:
+    """The run id of a non-shell record dir for the waiter's sizing minted after the waiter, else None.
+
+    A resubmission of the same work mints a ``warp-<sizing stem>-<stamp>`` run; releasing the held
+    waiter beside it would run the work twice.
+    """
+    from pathlib import PurePosixPath
+
+    from coordinator_core.ops.dispatch_emit import halted_run, run_token, stopped_runs
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    sizing = waiter.get("sizing_rel") or (run_token._read_rec(root, waiter["run_id"]) or {}).get("sizing_rel")
+    held_at = stopped_runs._stamp_epoch(waiter["run_id"])
+    if not (isinstance(sizing, str) and sizing) or held_at is None:
+        return None
+    prefix = f"warp-{PurePosixPath(halted_run._norm(sizing)).stem}-"
+    for name in record_names:
+        if not name.startswith(prefix) or not halted_run._STAMP.fullmatch(name[len(prefix):]):
+            continue
+        stamp = stopped_runs._stamp_epoch(name)
+        if stamp is not None and stamp > held_at and not halted_run._is_shell(root / RECORD_DIR_ROOT / name):
+            return name
+    return None
+
+
+def _release_stage_waiters(root: Path, run_id: str) -> dict:
+    """Retire *run_id*'s run token and wake the stage-wait siblings parked behind it (``run_token.discard``).
+
+    A waiter superseded (a ``superseded`` marker, or a newer run of its sizing) is never woken: its wait
+    record is cleared and the reply names it under ``stage_waiters.skipped``. ``{}`` when nothing waited
+    and no token was live. Never raises: a release failure leaves the landed write standing.
+    """
+    import logging
+
+    from coordinator_core.ops.dispatch_emit import run_token, stage_wait
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    try:
+        waiters = _blocked_waiters(root, run_id)
+        if not waiters and not run_token.is_live(root, run_id):
+            return {}
+        try:
+            record_names = sorted(os.listdir(root / RECORD_DIR_ROOT)) if waiters else []
+        except OSError:
+            record_names = []
+        released, skipped = [], []
+        for waiter in waiters:
+            by = contract.read_superseded_by(root, waiter["run_id"]) or _newer_run_of_sizing(root, waiter, record_names)
+            if by:
+                stage_wait.clear(root, waiter["run_id"])
+                skipped.append({"run_id": waiter["run_id"], "superseded_by": by})
+            else:
+                released.append(waiter["run_id"])
+        run_token.discard(root, run_id)
+        reply: dict = {}
+        if released:
+            reply["released"] = released
+        if skipped:
+            reply["skipped"] = skipped
+        return {"stage_waiters": reply} if reply else {}
+    except Exception:  # noqa: BLE001 -- the landed write stands
+        logging.getLogger(__name__).warning("stage-waiter release after %s landed failed", run_id, exc_info=True)
+        return {}
 
 
 def _existing_close(root: Path, run_id: str, stem: str, marker: dict) -> dict:
@@ -421,6 +527,22 @@ def _launcher_gone(root: Path, run_id: str) -> bool:
     if _terminal(record_dir) and not halted_run._is_shell(record_dir):
         return True
     return marker is not None and marker.get("status") == halted_run.STATUS_HALTED
+
+
+def _hand_landed(root: Path, run_id: str, shas: list) -> bool:
+    """True when *shas* changed every ``review_declared_paths`` entry of the run's manifest: its work landed by hand while its status still reads running.
+
+    An unreadable manifest or an empty declared set is not evidence. One git spawn.
+    """
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    try:
+        doc = json.loads((ask_contract.record_dir(root, run_id) / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    declared = doc.get("review_declared_paths") if isinstance(doc, dict) else None
+    paths = {p.replace("\\", "/").casefold() for p in declared if isinstance(p, str) and p} if isinstance(declared, list) else set()
+    return bool(paths and shas) and paths <= _carried_paths(root, shas)
 
 
 _REPO_QUALIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]+:(?=[^/\\])")
@@ -1339,6 +1461,169 @@ def _stamp_met_by(root: Path, run_id: str, met_by: dict) -> None:
         halted_run._write(record_dir, {**marker, MET_BY_FIELD: met_by})
 
 
+def _merge_met_by(root: Path, run_id: str, met_by: dict) -> Optional[dict]:
+    """Merge *met_by* into the halted marker's ``met_by`` under the marker's lock; the merged map, or None when the marker is no longer ``halted``."""
+    from coordinator_core.locked_write import held_lock
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+
+    record_dir = ask_contract.record_dir(root, run_id)
+    with held_lock(record_dir / halted_run.HALTED_FILE, anchor_root=root):
+        marker = halted_run._read(record_dir)
+        if marker is None or marker.get("status") != halted_run.STATUS_HALTED:
+            return None
+        prior = marker.get(MET_BY_FIELD)
+        merged = {**(prior if isinstance(prior, dict) else {}), **met_by}
+        halted_run._write(record_dir, {**marker, MET_BY_FIELD: merged})
+    return merged
+
+
+def _keep_open(root: Path, run_id: str, met_by: dict) -> dict:
+    """Credit the *met_by* rows on a ``halted`` run's marker and leave the run halted; a landing sha is not needed.
+
+    Verifies the shas as ``_verify`` does for ``met_by`` (prefix resolve, ancestry of HEAD,
+    ``_met_by_problem``), then merges them into the marker's existing credits.
+    """
+    from coordinator_core import git_ancestry
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+
+    if not met_by:
+        return _refuse(f"{OP_NAME} keep_open requires met_by naming the rows to credit")
+    try:
+        marker = halted_run.read_strict_run(ask_contract.record_dir(root, run_id))
+    except ValueError as exc:
+        return _refuse(str(exc))
+    if marker is None:
+        return _refuse(f"{run_id} has no halt record; keep_open credits a halted run")
+    if marker.get("status") != halted_run.STATUS_HALTED:
+        return _refuse(f"{run_id} is {marker.get('status')}, not halted; keep_open credits only a halted run")
+    common = resolve_git_common_dir(root)
+    for sha in met_by.values():
+        if _FULL_SHA.fullmatch(sha) and commit_meta(common, sha) is None:
+            return _refuse(f"{sha} is not a commit in this repo; pass the commit that met the row")
+    head = head_sha(root)
+    if not head:
+        return _refuse("HEAD is unreadable; retry")
+    abbreviated = [s for s in met_by.values() if not _FULL_SHA.fullmatch(s)]
+    resolved, problem = git_ancestry.resolve_commit_prefixes(abbreviated, cwd=str(root))
+    if problem:
+        return _refuse(problem)
+    full_met = {row: resolved.get(s, s) for row, s in met_by.items()}
+    read_ok, reached = git_ancestry.ancestors_of(list(dict.fromkeys(full_met.values())), head, cwd=str(root))
+    if not read_ok:
+        return _refuse("ancestry of the met_by shas could not be read; retry")
+    problem = _met_by_problem(root, run_id, full_met, reached)
+    if problem:
+        return _refuse(problem)
+    merged = _merge_met_by(root, run_id, full_met)
+    if merged is None:
+        return _refuse(f"{run_id} halt marker changed under the write; retry")
+    return {"ok": True, "run_id": run_id, "written": False, "kept_open": True, MET_BY_FIELD: merged}
+
+
+def _pending_oracle_param(params: dict, met_by: dict) -> tuple[dict, Optional[str]]:
+    """``({row_id: entry}, None)`` from the optional ``pending_oracle`` param, else ``({}, refusal)``.
+
+    A row also named in *met_by* is refused: a row is credited or pending, never both.
+    """
+    from coordinator_core.ops.dispatch_emit import pending_oracle
+
+    raw = params.get(PENDING_ORACLE_FIELD)
+    if raw is None:
+        return {}, None
+    problem = pending_oracle.validate(raw)
+    if problem:
+        return {}, problem
+    both = sorted(set(raw) & set(met_by))
+    if both:
+        return {}, f"row {', '.join(both)} is in both met_by and pending_oracle; a row is credited or pending, never both"
+    return dict(raw), None
+
+
+def _oracle_gate(
+    root: Path, run_id: str, entries: dict, met_by: dict,
+) -> tuple[dict, Optional[dict]]:
+    """``(oracle_credited, refusal)`` for the run's pending external-oracle rows, run before ``_standing_halt_problem``.
+
+    Stamps new *entries* on the halt marker, writes one PM flag per new entry, then runs each stamped
+    pending row's closing check once (a row *met_by* credits this call is skipped). A passing check stamps
+    ``met_by_oracle`` on the marker; the credited rows (this and earlier calls) are returned for the gate.
+    A row whose check does not pass yields a refusal that leaves the marker ``halted`` and the run refirable.
+    """
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run, pending_oracle
+
+    record_dir = ask_contract.record_dir(root, run_id)
+    marker = halted_run._read(record_dir)
+    if marker is None:
+        return {}, _refuse(f"{PENDING_ORACLE_FIELD} needs {run_id}'s halt record; none is readable") if entries else None
+    stamped = marker.get(PENDING_ORACLE_FIELD)
+    stamped = dict(stamped) if isinstance(stamped, dict) else {}
+    credited = marker.get(MET_BY_ORACLE_FIELD)
+    credited = dict(credited) if isinstance(credited, dict) else {}
+    if not entries and not stamped:
+        return {}, None
+    blocking = _blocking_rows(marker)
+    for row in entries:
+        if row not in blocking:
+            return {}, _refuse(f"{PENDING_ORACLE_FIELD} row {row} is not a blocking row of {run_id}")
+    new = {row: e for row, e in entries.items() if stamped.get(row) != e}
+    stamped.update(new)
+    for row, entry in new.items():
+        pending_oracle.write_pm_flag(root, run_id, row, entry)
+    open_rows: list = []
+    deadline = time.monotonic() + pending_oracle.CLOSING_CHECK_TIMEOUT_S
+    for row, entry in stamped.items():
+        if row in met_by or row in credited:
+            continue
+        if pending_oracle.closing_check_passes(root, entry["closing_check"], deadline - time.monotonic()):
+            credited[row] = {"owner": entry.get("owner")}
+        else:
+            open_rows.append(row)
+    refires = marker.get(ORACLE_REFIRES_FIELD)
+    refires = refires if isinstance(refires, int) and refires >= 0 else 0
+    spooled = False
+    if open_rows and refires < pending_oracle.MAX_AUTO_REFIRES:
+        sizing = _resume_sizing(root, run_id, marker)
+        if sizing and pending_oracle.spool_refire(root, run_id, sizing, refires):
+            spooled = True
+            refires += 1
+    if new or spooled or credited != marker.get(MET_BY_ORACLE_FIELD, {}):
+        halted_run._write(
+            record_dir,
+            {**marker, PENDING_ORACLE_FIELD: stamped, MET_BY_ORACLE_FIELD: credited, ORACLE_REFIRES_FIELD: refires},
+        )
+    if not open_rows:
+        return credited, None
+    owners = ", ".join(f"{r} owned by {stamped[r].get('owner')}" for r in open_rows)
+    refire: dict = {"resume_run_id": run_id}
+    if spooled:
+        refire["spooled"] = True
+    return credited, {
+        "ok": False,
+        "error": f"pending external oracle: {owners}; run stays halted and refirable (resume_run_id: {run_id})",
+        "pending_oracle_rows": open_rows,
+        "refire": refire,
+    }
+
+
+def _resume_sizing(root: Path, run_id: str, marker: dict) -> Optional[str]:
+    """The sizing a refire of *run_id* names: the marker's ``sizing_rel``, else the run's ``run.json``, else None."""
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    sizing = marker.get("sizing_rel")
+    if not isinstance(sizing, str) or not sizing:
+        try:
+            run = json.loads((ask_contract.record_dir(root, run_id) / "run.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        sizing = run.get("sizing_rel") if isinstance(run, dict) else None
+    if not isinstance(sizing, str) or not sizing or sizing.startswith("/") or ".." in sizing.split("/"):
+        return None
+    return sizing
+
+
 def _manifest_write_set(doc: object) -> list:
     """Every path the run declares: ``review_declared_paths`` plus each row's ``writes``, in order, deduplicated.
 
@@ -1562,7 +1847,7 @@ def _name_halt(out: dict, halt: dict) -> dict:
 def _record_solo(
     root: Path, run_id: str, shas: list, session_id: Optional[str] = None, in_run: bool = False,
     met_by: Optional[dict] = None, landed_under: Optional[str] = None, foreign: frozenset = frozenset(),
-    dropped: frozenset = frozenset(),
+    dropped: frozenset = frozenset(), pending: Optional[dict] = None,
 ) -> dict:
     """Solo run (no sibling status): record landed on its halt marker; the caller commits ``recorded``.
 
@@ -1625,7 +1910,7 @@ def _record_solo(
             return _refuse(problem)
         if not halted_run.record_unrecorded_halt(record_dir, halt):
             return _refuse(f"{run_id}: the halt marker could not be written")
-        return _name_halt(_record_solo(root, run_id, shas, session_id, in_run, met_by, landed_under, foreign, dropped), halt)
+        return _name_halt(_record_solo(root, run_id, shas, session_id, in_run, met_by, landed_under, foreign, dropped, pending), halt)
     status = marker.get("status")
     if status == halted_run.STATUS_LANDED:
         landed = marker.get("sha")
@@ -1642,9 +1927,16 @@ def _record_solo(
     elif status != halted_run.STATUS_HALTED:
         return _refuse(f"{run_id} is {status}; only a halted or resumed run is recorded landed")
     sha, problem, echo = _verify(root, run_id, shas, met_by, foreign, dropped)
-    problem = problem or _standing_halt_problem(root, run_id, echo.get(MET_BY_FIELD, {}))
     if problem:
         return _refuse(problem)
+    oracle, refusal = _oracle_gate(root, run_id, pending or {}, met_by)
+    if refusal:
+        return refusal
+    problem = _standing_halt_problem(root, run_id, {**echo.get(MET_BY_FIELD, {}), **oracle})
+    if problem:
+        return _refuse(problem)
+    if oracle:
+        echo = {**echo, MET_BY_ORACLE_FIELD: oracle}
     if met_by:
         _stamp_met_by(root, run_id, echo[MET_BY_FIELD])
     without_verdict = _landed_without_verdict(root, run_id, session_id)
@@ -1672,11 +1964,22 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     run_id = params.get("run_id")
     if not isinstance(run_id, str) or not run_id or not safe_id(run_id):
         return _refuse(f"{OP_NAME} requires a safe string run_id")
+    if KEEP_OPEN in params:
+        if not isinstance(params[KEEP_OPEN], bool):
+            return _refuse(f"{OP_NAME} requires {KEEP_OPEN} to be a boolean")
+        if params[KEEP_OPEN]:
+            met_by, problem = _met_by_param(params)
+            if problem:
+                return _refuse(problem)
+            return _keep_open(main_worktree_root(Path(repo_root)), run_id, met_by)
     derive = params.get("in_run") is True and params.get("sha") is None and params.get("shas") is None
     shas, problem = ([], None) if derive else _shas_param(params)
     if problem:
         return _refuse(problem)
     met_by, problem = _met_by_param(params)
+    if problem:
+        return _refuse(problem)
+    pending, problem = _pending_oracle_param(params, met_by)
     if problem:
         return _refuse(problem)
     foreign, problem = _foreign_param(params)
@@ -1705,7 +2008,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         prior = json.loads((root / contract.status_rel(run_id)).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return _record_solo(root, run_id, shas, session_id, bool(in_run), met_by, landed_under, foreign, dropped)
+        return _record_solo(root, run_id, shas, session_id, bool(in_run), met_by, landed_under, foreign, dropped, pending)
     except (OSError, ValueError):
         return _refuse(f"{run_id} sibling status is unreadable")
     status = prior.get("status") if isinstance(prior, dict) else None
@@ -1718,15 +2021,22 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             }
         return _refuse(f"{run_id} already landed at {prior.get('sha')}; nothing to record")
     admitted = status == contract.STATUS_HALTED or (
-        status == contract.STATUS_RUNNING and (in_run or _launcher_gone(Path(root), run_id))
+        status == contract.STATUS_RUNNING and (in_run or _launcher_gone(Path(root), run_id) or _hand_landed(root, run_id, shas))
     )
     if not admitted:
         return _refuse(f"{run_id} is {status}, not halted; only a halted run is recorded landed")
 
     sha, problem, echo = _verify(root, run_id, shas, met_by, foreign, dropped)
-    problem = problem or _standing_halt_problem(root, run_id, echo.get(MET_BY_FIELD, {}))
     if problem:
         return _refuse(problem)
+    oracle, refusal = _oracle_gate(root, run_id, pending, met_by)
+    if refusal:
+        return refusal
+    problem = _standing_halt_problem(root, run_id, {**echo.get(MET_BY_FIELD, {}), **oracle})
+    if problem:
+        return _refuse(problem)
+    if oracle:
+        echo = {**echo, MET_BY_ORACLE_FIELD: oracle}
     if in_run:
         problem = _in_run_unclean(root, run_id)
         if problem:

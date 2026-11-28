@@ -31,7 +31,7 @@ PLAN = "docs/plans/p.md"
 REPORT = "reports/X1.md"
 TARGET = "pkg/shared.py"
 SEED = "".join(f"line{i}\n" for i in range(1, 13))
-VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 
 
 def _git(root: Path, *args: str) -> str:
@@ -86,7 +86,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     session_core.init(SELF, cwd=str(root))
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     return root

@@ -208,10 +208,8 @@ def test_every_written_file_is_declared_small(tmp_path):
 
 
 def test_every_written_file_is_declared_over_the_default_touch_bound(tmp_path):
-    from coordinator_core import ipc
-
-    result = _declared_equals_written(tmp_path, ipc._MAX_DECLARED_TOUCH_PATHS + 2, 3)
-    assert len(result.written) > ipc._MAX_DECLARED_TOUCH_PATHS
+    result = _declared_equals_written(tmp_path, 18, 3)
+    assert len(result.written) > 16
 
 
 def test_record_of_exactly_the_ceiling_is_written_whole(tmp_path):
@@ -241,9 +239,3 @@ def test_record_one_over_leaves_a_prior_record_whole(tmp_path):
     before = _snapshot(out)
     _refusal(_lifted(tmp_path, {f"project/f{i}": b"x" for i in range(model.MAX_RECORD_FILES - 2)}, []), out, model.RECORD_TOO_LARGE)
     assert _snapshot(out) == before
-
-
-def test_ceiling_is_within_the_recorder_ceiling():
-    from coordinator_core import ipc
-
-    assert model.MAX_RECORD_FILES <= ipc._DECLARED_TOUCH_BOUND_CEILING

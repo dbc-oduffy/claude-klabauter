@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.conftest import MANAGED_TEMP_AFTER_LAST_TEST, MANAGED_TEMP_LEFT_BY_PREFIX
+from coordinator_core.conftest import (
+    MANAGED_TEMP_AFTER_LAST_TEST,
+    MANAGED_TEMP_LEFT_BY_PREFIX,
+    MANAGED_TEMP_ROOT_LEFT_PREFIX,
+)
 from coordinator_core.temp_layout import RUN_TEMP_DIRNAME
 
 pytest_plugins = ["pytester"]
@@ -184,6 +188,149 @@ def test_entry_appearing_after_the_last_test_is_charged_to_the_file(pytester, mo
     err = result.stderr.str()
     assert f"{MANAGED_TEMP_LEFT_BY_PREFIX}test_late.py{MANAGED_TEMP_AFTER_LAST_TEST}: leaked-after-last-test" in err
     assert "test_late.py::test_ok: leaked-after-last-test" not in err
+
+
+_DEFAULT_RUN_CONFTEST = """
+import pytest
+
+from coordinator_core.conftest import managed_temp_session_finish, managed_temp_session_start
+
+pytest_plugins = ["coordinator_core.testing.fs_containment"]
+
+
+def pytest_sessionstart(session):
+    managed_temp_session_start(session)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus):
+    managed_temp_session_finish(session, exitstatus)
+"""
+
+_MINTING_OFF_CONFTEST = _DEFAULT_RUN_CONFTEST.replace(
+    'pytest_plugins = ["coordinator_core.testing.fs_containment"]\n', ""
+)
+
+
+def _default_run(pytester, conftest, body):
+    from coordinator_core import temp_layout
+
+    pytester.makeconftest(conftest)
+    pytester.makepyfile(test_inner=body)
+    pytester.makeini("[pytest]\n")
+    repo_root = str(Path(temp_layout.__file__).resolve().parents[1])
+    pytester._monkeypatch.setenv("PYTHONPATH", repo_root)
+    root = temp_layout.pytest_basetemp_root(pytester.path)
+    before = set(os.listdir(root)) if root.is_dir() else set()
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    after = set(os.listdir(root)) if root.is_dir() else set()
+    return result, root, after - before
+
+
+def _cleanup(root, gained):
+    import shutil
+
+    for name in gained:
+        shutil.rmtree(root / name, ignore_errors=True)
+
+
+@pytest.mark.parametrize("conftest", [_DEFAULT_RUN_CONFTEST, _MINTING_OFF_CONFTEST], ids=["minted", "layout-default"])
+def test_finished_default_run_leaves_no_basetemp(pytester, conftest):
+    result, root, gained = _default_run(pytester, conftest, "def test_ok(tmp_path):\n    (tmp_path / 'f').write_text('x')\n")
+    try:
+        result.assert_outcomes(passed=1)
+        assert result.ret == 0
+        assert gained == set()
+    finally:
+        _cleanup(root, gained)
+
+
+@pytest.mark.parametrize("conftest", [_DEFAULT_RUN_CONFTEST, _MINTING_OFF_CONFTEST], ids=["minted", "layout-default"])
+def test_failing_default_run_leaves_at_most_the_kept_cap(pytester, conftest):
+    from coordinator_core.testing import fs_containment
+
+    result, root, gained = _default_run(pytester, conftest, "def test_bad():\n    assert False\n")
+    try:
+        result.assert_outcomes(failed=1)
+        assert len(gained) <= fs_containment._KEEP_FAILING
+    finally:
+        _cleanup(root, gained)
+
+
+_ROOT_BASE_ENV = "SEAM_ROOT_BASE"
+
+
+def _root_run_temp(base: str) -> Path:
+    return Path(base) / "coordinator" / "seam-probe-repo" / RUN_TEMP_DIRNAME
+
+
+def test_run_temp_dir_left_under_the_coordinator_root_fails_the_session_naming_it(pytester, monkeypatch):
+    monkeypatch.setenv(_ROOT_BASE_ENV, tempfile.gettempdir())
+    pytester.makeconftest(_SEAM_CONFTEST)
+    pytester.makepyfile(
+        test_root_leak=f"""
+        import os
+        from pathlib import Path
+
+        def test_leaks_into_the_root():
+            run_temp = Path(os.environ["{_ROOT_BASE_ENV}"]) / "coordinator" / "seam-probe-repo" / "{RUN_TEMP_DIRNAME}"
+            (run_temp / f"{{os.getpid()}}-abc123-root-leak-probe").mkdir(parents=True)
+        """
+    )
+    result = _run(pytester)
+    result.assert_outcomes(passed=1)
+    assert result.ret != 0
+    err = result.stderr.str()
+    assert MANAGED_TEMP_ROOT_LEFT_PREFIX in err
+    assert f"{os.getpid()}-abc123-root-leak-probe" in err
+    assert not any(_root_run_temp(tempfile.gettempdir()).glob("*root-leak-probe"))
+
+
+def test_stranded_entries_beyond_the_print_cap_are_all_removed(pytester, monkeypatch):
+    monkeypatch.setenv(_ROOT_BASE_ENV, tempfile.gettempdir())
+    pytester.makeconftest(_SEAM_CONFTEST)
+    pytester.makepyfile(
+        test_root_flood=f"""
+        import os
+        from pathlib import Path
+
+        def test_strands_many():
+            run_temp = Path(os.environ["{_ROOT_BASE_ENV}"]) / "coordinator" / "seam-probe-repo" / "{RUN_TEMP_DIRNAME}"
+            run_temp.mkdir(parents=True, exist_ok=True)
+            for i in range(25):
+                (run_temp / f"{{os.getpid()}}-abc123-flood-probe-{{i:02d}}").mkdir()
+        """
+    )
+    result = _run(pytester)
+    assert result.ret != 0
+    err = result.stderr.str()
+    assert err.count(MANAGED_TEMP_ROOT_LEFT_PREFIX) == 20
+    assert not any(_root_run_temp(tempfile.gettempdir()).glob("*flood-probe-*"))
+
+
+def test_dir_removed_by_its_writer_and_preexisting_own_pid_dir_pass(pytester, monkeypatch):
+    base = tempfile.gettempdir()
+    monkeypatch.setenv(_ROOT_BASE_ENV, base)
+    preexisting = _root_run_temp(base) / f"{os.getpid()}-def456-preexisting"
+    preexisting.mkdir(parents=True)
+    pytester.makeconftest(_SEAM_CONFTEST)
+    pytester.makepyfile(
+        test_root_clean=f"""
+        import os, shutil
+        from pathlib import Path
+
+        def test_creates_and_removes():
+            run_temp = Path(os.environ["{_ROOT_BASE_ENV}"]) / "coordinator" / "seam-probe-repo" / "{RUN_TEMP_DIRNAME}"
+            mine = run_temp / f"{{os.getpid()}}-abc123-root-clean-probe"
+            mine.mkdir()
+            shutil.rmtree(mine)
+        """
+    )
+    result = _run(pytester)
+    result.assert_outcomes(passed=1)
+    assert result.ret == 0
+    assert MANAGED_TEMP_ROOT_LEFT_PREFIX not in result.stderr.str()
+    assert preexisting.is_dir()
 
 
 def test_clean_attributing_session_prints_no_left_by_line(pytester):

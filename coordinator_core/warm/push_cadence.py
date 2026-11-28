@@ -126,6 +126,7 @@ import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Union
 
+from coordinator_core.git.commit import PUSH_DUE_MARKER
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_state import head_branch, head_sha
 from coordinator_core.git.git_objects import cas_ref
@@ -237,6 +238,11 @@ DUE_SWEEP_MIN_GAP_SECS = 15.0
 #: Sweep clock reading of each repo's last sweep. Guarded by `_cadence_lock`.
 _due_swept_at: "dict[Path, float]" = {}
 
+#: HEAD sha each repo showed at the last `mark_moved_heads` scan, and that scan's clock reading
+#: (a one-element list so the reset and scan share one guarded cell). Guarded by `_cadence_lock`.
+_seen_heads: "dict[Path, Optional[str]]" = {}
+_heads_scanned_at: "list[Optional[float]]" = [None]
+
 #: Per-repo push-failure backoff: `[consecutive_failed_sweeps, sweeps_left_to_skip]`.
 #: Without it a repo that fails every tick is re-pushed every tick and logs a
 #: `push-failures.log` row each time. Guarded by `_cadence_lock`.
@@ -272,6 +278,8 @@ def reset_cadence_for_test() -> None:
         _foreign_deliveries.clear()
         _due_repos.clear()
         _due_swept_at.clear()
+        _seen_heads.clear()
+        _heads_scanned_at[0] = None
         _backoff.clear()
         _publish_retired_at.clear()
 
@@ -572,7 +580,7 @@ def _sweep_one(repo_root: Union[str, Path], scope_gate: bool = False) -> str:
         return "skipped"
     branch = head_branch(root)
     if scope_gate:
-        if branch is None or not branch_gate(branch)[0]:
+        if branch is None or not branch_gate(branch, str(root))[0]:
             return "skipped"
         if owned_push_remote(root, branch)[0] is None:
             return "skipped"
@@ -619,6 +627,73 @@ def note_commit(repo_root: Union[str, Path]) -> None:
             entry[1] = 0
 
 
+def mark_moved_heads(
+    repos: Iterable[Union[str, Path]], *, clock: Callable[[], float] = time.monotonic
+) -> "list[Path]":
+    """Mark due every repo whose HEAD sha differs from the last scan's, and return them.
+
+    The cold-process commit route (`git.commit`) marks only when this module is already loaded in
+    the committing process, so a hand commit made there is otherwise swept only on the 600s tick.
+    Reads HEAD from files (zero spawns), scans at most once per `DUE_SWEEP_MIN_GAP_SECS`, and
+    seeds a repo's first sighting without marking it. Never raises."""
+    now = clock()
+    with _cadence_lock:
+        last = _heads_scanned_at[0]
+        if last is not None and now - last < DUE_SWEEP_MIN_GAP_SECS:
+            return []
+        _heads_scanned_at[0] = now
+    moved: "list[Path]" = []
+    for raw in repos:
+        root = Path(raw)
+        try:
+            sha = head_sha(root)
+        except Exception:  # noqa: BLE001 -- an unreadable repo is skipped, never fatal to the tick
+            continue
+        with _cadence_lock:
+            seen = root in _seen_heads
+            previous = _seen_heads.get(root)
+            _seen_heads[root] = sha
+        if seen and sha is not None and sha != previous:
+            note_commit(root)
+            moved.append(root)
+    return moved
+
+
+def _read_due_marker(root: Path) -> Optional[str]:
+    """Content of `<common-dir>/push-due` (the sha a cold commit left), or None. No spawn, never raises."""
+    try:
+        return (resolve_git_common_dir(root) / PUSH_DUE_MARKER).read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+
+
+def _clear_due_marker(root: Path, seen: Optional[str]) -> None:
+    """Unlink the marker only if it still holds `seen`: a commit landing mid-sweep keeps its mark."""
+    if seen is None or _read_due_marker(root) != seen:
+        return
+    try:
+        (resolve_git_common_dir(root) / PUSH_DUE_MARKER).unlink()
+    except OSError:
+        pass
+
+
+def mark_due_markers(repos: Iterable[Union[str, Path]]) -> "list[Path]":
+    """Mark due every repo carrying a cold-commit `push-due` marker, and return them.
+
+    One file read per repo, zero spawns. The marker is cleared by `sweep_repos` once the repo is
+    visited, never here. Never raises."""
+    marked: "list[Path]" = []
+    for raw in repos:
+        root = Path(raw)
+        try:
+            if _read_due_marker(root) is not None:
+                note_commit(root)
+                marked.append(root)
+        except Exception:  # noqa: BLE001 -- an unreadable repo is skipped, never fatal to the tick
+            continue
+    return marked
+
+
 def take_due_repos(clock: Callable[[], float] = time.monotonic) -> "list[Path]":
     """Due repos whose last sweep is `DUE_SWEEP_MIN_GAP_SECS` or more ago (or
     never). Read-only: the sweep records and clears them."""
@@ -641,14 +716,142 @@ def _backed_off_now(root: Path) -> bool:
         return True
 
 
+#: Consecutive failed sweeps at which the live G-EM and the owning sessions are told. Equality,
+#: not `>=`: one alert per streak; a non-failed result pops the entry and re-arms it.
+PERSISTENT_FAILURE_STREAK = 3
+
+_ALERT_ERROR_MAX_CHARS = 200
+
+
+def _last_logged_error(root: Path, branch: str) -> Optional[str]:
+    """Newest `push-failures.log` error for exactly `branch`, capped for a message; None when absent.
+
+    The parser is `push.state`'s, so the readback and the alert never disagree."""
+    from coordinator_core.ops.push_state import _read_last_error
+
+    try:
+        error = _read_last_error(resolve_git_common_dir(root), branch)
+    except OSError:
+        return None
+    return error[:_ALERT_ERROR_MAX_CHARS] if error else None
+
+
+def _last_logged_verb(root: Path, branch: str) -> str:
+    """"unconfirmed" when the newest `push-failures.log` row for exactly `branch` is headlined
+    `PUSH UNCONFIRMED`, else "failed"."""
+    from coordinator_core.ops.push_state import last_log_row
+
+    try:
+        row = last_log_row(resolve_git_common_dir(root), branch)
+    except OSError:
+        return "failed"
+    return "unconfirmed" if row and "PUSH UNCONFIRMED" in row else "failed"
+
+
+def _tracking_ref_equals_head(root: Path, branch: str) -> bool:
+    """True when the owned remote's tracking ref already equals HEAD: the push landed, so a
+    failed or unconfirmed sweep is no persistent failure. Zero spawns; False on any doubt."""
+    try:
+        from coordinator_core.git.git_objects import read_ref_loose_or_packed
+        from coordinator_core.git.git_state import head_sha
+        from coordinator_core.ops.push_outstanding import owned_push_remote
+
+        remote, _ = owned_push_remote(root, branch)
+        head = head_sha(root)
+        if remote is None or head is None:
+            return False
+        upstream = read_ref_loose_or_packed(resolve_git_common_dir(root), f"refs/remotes/{remote}/{branch}")
+        return upstream is not None and upstream == head
+    except Exception:  # noqa: BLE001 -- on doubt, alert
+        return False
+
+
+def owning_sessions(root: Path, branch: str) -> "list[str]":
+    """Names of live sessions whose `meta.json` `branch` equals `branch`. Never raises."""
+    names: "list[str]" = []
+    try:
+        from coordinator_core.session import core as session_core
+
+        hub = session_core.sessions_dir(str(root))
+        if not hub or not os.path.isdir(hub):
+            return names
+        for entry in sorted(os.listdir(hub)):
+            if entry.startswith("."):
+                continue
+            try:
+                with open(os.path.join(hub, entry, "meta.json"), "r", encoding="utf-8") as fh:
+                    meta = json.load(fh)
+                name = meta.get("name")
+                if meta.get("branch") != branch or not isinstance(name, str) or not name:
+                    continue
+                pid = int(meta.get("stable_pid") or 0)
+                epoch = str(meta.get("stable_pid_start_epoch") or "")
+                if pid <= 0 or not session_core.stable_pid_alive(pid, str(meta.get("stable_pid_lstart") or ""), epoch):
+                    continue
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+            if name not in names:
+                names.append(name)
+    except Exception:  # noqa: BLE001 -- alerting is best-effort
+        return []
+    return names
+
+
+def _send_to_session(root: Path, name: str, text: str) -> None:
+    """Message one named session through `halt_split_tree`'s detached unimatrix-send path, with
+    its `_ALERT_SENDER` seam and its pytest / throwaway-root skip."""
+    from coordinator_core.ops.dispatch_emit import halt_split_tree as hst
+
+    if hst._ALERT_SENDER is not None:
+        hst._ALERT_SENDER(name, text)
+        return
+    if os.environ.get("PYTEST_CURRENT_TEST") or hst._is_throwaway_root(root):
+        return
+    from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
+
+    engine_root = Path(__file__).resolve().parents[2]
+    script = engine_root / "coordinator" / "bin" / "unimatrix-send.py"
+    spawn_detached(str(engine_root), str(script), ["--to", name, text])
+
+
+def _alert_persistent_failure(root: Path, streak: int) -> None:
+    """Tell the live G-EM and each owning session that `root`'s push has failed `streak`
+    consecutive sweeps. Never raises."""
+    try:
+        from coordinator_core.ops.dispatch_emit import halt_split_tree as hst
+
+        branch = head_branch(root) or "<unknown>"
+        if _tracking_ref_equals_head(root, branch):
+            return
+        error = _last_logged_error(root, branch) or "<none logged>"
+        verb = _last_logged_verb(root, branch)
+        text = (
+            f"PUSH FAILING: {root.name} {branch} {streak} sweeps; last error [{verb}] {error}; "
+            "readback: coordinator-invoke push.state"
+        )
+        hst.send_live_gem(root, text)
+        for name in owning_sessions(root, branch):
+            try:
+                _send_to_session(root, name, text)
+            except Exception:  # noqa: BLE001 -- one dead session must not block the next
+                continue
+    except Exception:  # noqa: BLE001 -- alerting is best-effort; the log is the truth
+        return
+
+
 def _note_sweep_result(root: Path, result: Optional[str]) -> None:
+    alert_streak = 0
     with _cadence_lock:
         if result == "failed":
             entry = _backoff.setdefault(root, [0, 0])
             entry[0] += 1
             entry[1] = min(2 ** (entry[0] - 1), BACKOFF_MAX_SKIP_SWEEPS)
+            if entry[0] == PERSISTENT_FAILURE_STREAK:
+                alert_streak = entry[0]
         else:
             _backoff.pop(root, None)
+    if alert_streak:
+        _alert_persistent_failure(root, alert_streak)
 
 
 def note_foreign_delivery(repo_root: Union[str, Path], branch: str) -> None:
@@ -702,7 +905,7 @@ def _is_definitive_reject(stderr: str) -> bool:
 def _push_foreign(pair: tuple, *, ceiling_secs: float) -> None:
     """Push one registered named branch; never raises, never touches HEAD's branch."""
     root, branch = pair
-    allowed, _reason = branch_gate(branch)
+    allowed, _reason = branch_gate(branch, str(root))
     if not allowed:
         _forget_foreign(pair)
         return
@@ -822,7 +1025,7 @@ def _push_pending_record(sender: Path, record: dict, *, ceiling_secs: float) -> 
     root = Path(record["receiver_root"])
     branch = record["branch"]
     remote = record["remote"]
-    allowed, _reason = branch_gate(branch)
+    allowed, _reason = branch_gate(branch, str(root))
     if not allowed:
         _memo_push_pending.bump_attempt(record, f"branch {branch!r} is not pushable")
         return
@@ -1030,6 +1233,7 @@ def sweep_repos(
     start = clock()
     deadline = start + total_ceiling_secs
     ordered = list(dict.fromkeys(Path(repo) for repo in repos))
+    marker_seen = {root: _read_due_marker(root) for root in ordered}
     pushed: list = []
     skipped: list = []
     failed: list = []
@@ -1076,6 +1280,7 @@ def sweep_repos(
         with _cadence_lock:
             _due_repos.discard(root)
             _due_swept_at[root] = clock()
+        _clear_due_marker(root, marker_seen.get(root))
         _note_sweep_result(root, result)
         {"pushed": pushed, "failed": failed}.get(result, skipped).append(root)
     if due_only:
@@ -1086,6 +1291,7 @@ def sweep_repos(
                 if root not in admitted and root not in not_reached:
                     _due_repos.discard(root)
                     _due_swept_at[root] = clock()
+                    _clear_due_marker(root, marker_seen.get(root))
     else:
         _sweep_foreign(deadline=deadline, clock=clock)
         _sweep_memo_push_pending(ordered, deadline=deadline, clock=clock)
@@ -1141,6 +1347,14 @@ def on_idle_tick(
     try:
         engine_converge.schedule_convergence()
     except Exception:  # noqa: BLE001 -- convergence scheduling must never break the tick
+        pass
+    try:
+        mark_moved_heads(served_repos(), clock=clock)
+    except Exception:  # noqa: BLE001 -- the head scan must never break the tick
+        pass
+    try:
+        mark_due_markers(registry_sweep_repos(served_repos()))
+    except Exception:  # noqa: BLE001 -- the marker scan must never break the tick
         pass
     if not _sweep_due(clock=clock, interval_secs=interval_secs):
         due = take_due_repos(clock)

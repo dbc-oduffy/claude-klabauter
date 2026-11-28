@@ -28,6 +28,10 @@ HEAVY = (
     "coordinator_core.warp_fire",
 )
 
+GUARD_PREFIXES = ("coordinator_core.bash_guards._dc_", "coordinator_core.bash_guards.block_stash_destruction",
+                  "coordinator_core.bash_guards.guard_disk_fill",
+                  "coordinator_core.write_guards.block_drive_root_new_dir_write")
+
 _PROBE = """
 import json, sys
 import coordinator_core.host_hooks.shim as shim
@@ -38,7 +42,16 @@ if mode == "nag":
 shim._dial = lambda request: None
 payload = {"hook_event_name": "PreToolUse", "session_id": "s-1", "cwd": sys.argv[2],
            "tool_name": "Bash", "tool_input": {"command": "ls"}}
-answer = shim.run("grok", json.dumps(payload))
+host = "grok"
+if mode == "chain":
+    payload = {"hook_event_name": "PreToolUse", "session_id": "s-1", "cwd": sys.argv[2], "tool_name": "Edit",
+               "tool_input": {"file_path": sys.argv[2] + "/a.py", "old_string": "a", "new_string": "b"}}
+    host = "codex"
+if mode in ("cold-ls", "cold-rm"):
+    shim._degrade = lambda *a, **k: None
+    host = "codex"
+    payload["tool_input"] = {"command": "ls" if mode == "cold-ls" else "rm -rf " + sys.argv[2] + "/nothing-here"}
+answer = shim.run(host, json.dumps(payload))
 print(json.dumps({"answer": answer, "modules": sorted(sys.modules)}))
 """
 
@@ -63,7 +76,24 @@ def test_nag_answer_loads_no_heavy_module(tmp_path):
 def test_chain_branch_is_what_loads_the_heavy_set(tmp_path):
     out = _cold("chain", tmp_path)
     present = [m for m in HEAVY[:4] if m in out["modules"]]
-    assert present, "pin is vacuous: the no-nag branch no longer loads the guard chain"
+    assert present, "pin is vacuous: the cold write chain no longer loads the guard chain"
+
+
+def test_cold_ls_loads_none_of_the_heavy_set_nor_any_guard(tmp_path):
+    out = _cold("cold-ls", tmp_path)
+    assert out["answer"] == {}
+    leaked = [m for m in HEAVY if m in out["modules"]]
+    assert not leaked, "heavy module on the cold harmless-command path: %s" % leaked
+    guards = [m for m in out["modules"] if m.startswith(GUARD_PREFIXES)]
+    assert not guards, "a guard module loaded for `ls`: %s" % guards
+
+
+def test_cold_deny_class_command_loads_its_guard_but_not_the_full_chain(tmp_path):
+    out = _cold("cold-rm", tmp_path)
+    assert "coordinator_core.host_hooks.backstop" in out["modules"], "pin is vacuous: rm no longer reaches its classifier"
+    assert "coordinator_core.bash_guards._dc_rm" not in out["modules"], "the cold rm route loaded the git-spawning guard"
+    full_chain = [m for m in HEAVY[:4] if m in out["modules"]]
+    assert not full_chain, "the deny-class path loaded the full chain: %s" % full_chain
 
 
 def test_nag_module_import_defers_warp_fire(tmp_path):

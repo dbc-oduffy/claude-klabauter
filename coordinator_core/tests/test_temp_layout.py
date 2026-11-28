@@ -46,6 +46,52 @@ def test_kept_marker_name() -> None:
     assert temp_layout.PYTEST_KEPT_MARKER == ".coordinator-kept-failing"
 
 
+def _run_dirs(root: Path, count: int, marker: str | None = None) -> list[Path]:
+    dirs = []
+    for i in range(count):
+        d = root / f"{4000 + i}-aaaaa{i}"
+        d.mkdir(parents=True)
+        (d / "f").write_text("x")
+        stamp = d
+        if marker:
+            stamp = d / marker
+            stamp.touch()
+        os.utime(stamp, (1000 + i, 1000 + i))
+        dirs.append(d)
+    return dirs
+
+
+def test_retain_latest_keeps_newest_two_of_three_kept_runs(tmp_path: Path) -> None:
+    oldest, middle, newest = _run_dirs(tmp_path, 3, temp_layout.PYTEST_KEPT_MARKER)
+    moved = temp_layout.retain_latest(tmp_path, keep=2, marker=temp_layout.PYTEST_KEPT_MARKER)
+    assert not oldest.exists()
+    assert middle.is_dir() and newest.is_dir()
+    assert moved == [tmp_path / temp_layout.REAP_DIRNAME / oldest.name]
+    assert (moved[0] / "f").is_file()
+
+
+def test_retain_latest_leaves_unmarked_and_foreign_entries(tmp_path: Path) -> None:
+    kept = _run_dirs(tmp_path, 3, temp_layout.PYTEST_KEPT_MARKER)
+    live = tmp_path / "9999-bbbbbb"
+    live.mkdir()
+    foreign = tmp_path / "notes"
+    foreign.mkdir()
+    temp_layout.retain_latest(tmp_path, keep=2, marker=temp_layout.PYTEST_KEPT_MARKER)
+    assert live.is_dir() and foreign.is_dir()
+    assert not kept[0].exists()
+
+
+def test_retain_latest_without_marker_orders_by_dir_mtime_and_is_idempotent(tmp_path: Path) -> None:
+    dirs = _run_dirs(tmp_path, 4)
+    temp_layout.retain_latest(tmp_path)
+    assert [d.exists() for d in dirs] == [False, False, True, True]
+    assert temp_layout.retain_latest(tmp_path) == []
+
+
+def test_retain_latest_on_missing_root_is_empty(tmp_path: Path) -> None:
+    assert temp_layout.retain_latest(tmp_path / "absent") == []
+
+
 @pytest.mark.parametrize(
     "name,expected",
     [("1234-abcdef", 1234), ("0-000000", 0), ("1234-ABCDEF", None), ("1234-abcde", None),
@@ -175,6 +221,49 @@ def test_kept_dir_is_not_reaped_and_registers_no_atexit(fake_temp, monkeypatch: 
     assert not kept.exists()
 
 
+def test_managed_temp_dir_carries_a_pid_owner_mark(fake_temp) -> None:
+    from coordinator_core import owner_mark
+
+    with temp_layout.managed_temp_dir("probe", "/work/my-repo") as d:
+        mark = owner_mark.read_mark(d)
+        assert mark is not None
+        assert (mark["owner_kind"], mark["owner_id"]) == ("pid", str(os.getpid()))
+        assert mark["repo"] == "/work/my-repo"
+        assert owner_mark.owner_alive(mark) is True
+
+
+def test_make_managed_temp_dir_carries_a_pid_owner_mark(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import owner_mark
+
+    monkeypatch.setattr(atexit, "register", lambda fn, *a: None)
+    mark = owner_mark.read_mark(temp_layout.make_managed_temp_dir("handoff"))
+    assert mark is not None and mark["owner_id"] == str(os.getpid())
+
+
+def test_kept_dir_mark_names_the_session_and_the_age_floor(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import owner_mark
+
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
+    kept, cleanup = temp_layout.create_managed_temp_dir("keep")
+    mark = owner_mark.read_mark(kept)
+    assert mark is not None
+    assert (mark["owner_kind"], mark["owner_id"]) == ("session", "11111111-2222-3333-4444-555555555555")
+    assert mark["ttl_hours"] == temp_layout._KEPT_MAX_AGE_S / 3600
+    cleanup()
+
+
+def test_a_failing_stamp_never_fails_the_creation(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import owner_mark
+
+    def boom(*_a, **_k):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(owner_mark, "write_mark", boom)
+    with temp_layout.managed_temp_dir("probe") as d:
+        assert d.is_dir() and owner_mark.read_mark(d) is None
+    assert not d.exists()
+
+
 def test_kept_dir_is_reaped_only_once_older_than_the_age_bar(fake_temp) -> None:
     run_temp = temp_layout.managed_tempdir() / temp_layout.RUN_TEMP_DIRNAME
     run_temp.mkdir()
@@ -204,13 +293,38 @@ def test_mkdtemp_in_creates_under_chosen_parent(tmp_path: Path) -> None:
 
 
 def test_mkdtemp_in_is_private_and_retries_on_name_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    tokens = iter(["aaaaaaaa", "aaaaaaaa", "bbbbbbbb"])
-    monkeypatch.setattr(temp_layout.secrets, "token_hex", lambda _n: next(tokens))
+    tokens = iter(["aaaaaa", "aaaaaa", "bbbbbb"])
+    monkeypatch.setattr("secrets.token_hex", lambda _n: next(tokens))
     first = temp_layout.mkdtemp_in("c-", tmp_path)
     second = temp_layout.mkdtemp_in("c-", tmp_path)
-    assert first.name == "c-aaaaaaaa" and second.name == "c-bbbbbbbb"
+    assert first.name == f"c-{os.getpid()}-aaaaaa" and second.name == f"c-{os.getpid()}-bbbbbb"
     if os.name != "nt":
         assert stat.S_IMODE(first.stat().st_mode) == 0o700
+
+
+def test_mkdtemp_in_chosen_parent_name_carries_the_owner_pid(tmp_path: Path) -> None:
+    d = temp_layout.mkdtemp_in("own-", tmp_path)
+    m = re.fullmatch(r"own-(\d+)-[0-9a-f]{6}", d.name)
+    assert m is not None and int(m.group(1)) == os.getpid()
+
+
+def test_mkdtemp_in_reaps_a_dead_owner_sibling_and_spares_live_and_foreign_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.group_em import session_registry
+
+    dead, live = 2_000_001, 2_000_002
+    monkeypatch.setattr(session_registry, "pid_alive", lambda pid: pid == live)
+    gone = tmp_path / f"own-{dead}-abcdef"
+    kept_live = tmp_path / f"own-{live}-abcdef"
+    other_prefix = tmp_path / f"zzz-{dead}-abcdef"
+    unparseable = tmp_path / "own-notapid"
+    for p in (gone, kept_live, other_prefix, unparseable):
+        p.mkdir()
+        (p / "f.txt").write_text("x")
+    temp_layout.mkdtemp_in("own-", tmp_path)
+    assert not gone.exists()
+    assert kept_live.exists() and other_prefix.exists() and unparseable.exists()
 
 
 def test_strict_managed_temp_dir_raises_naming_leaked_path_on_failed_removal(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,6 +378,60 @@ def test_temp_dir_in_none_parent_lands_under_managed_root(fake_temp) -> None:
     with temp_layout.temp_dir_in("tdn-", None) as d:
         assert d.parent == fake_temp / "coordinator" / "_fleet" / "run-temp"
     assert not d.exists()
+
+
+def test_temp_dir_in_none_parent_registers_no_atexit_and_removes_on_raise(
+    fake_temp, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registered = []
+    monkeypatch.setattr(atexit, "register", lambda fn, *a: registered.append(fn))
+    with pytest.raises(RuntimeError):
+        with temp_layout.temp_dir_in("tdr-", None) as d:
+            (d / "f.txt").write_text("x")
+            raise RuntimeError("boom")
+    assert not d.exists()
+    assert not registered
+
+
+def test_temp_dir_in_chosen_parent_removed_on_both_exits(tmp_path: Path) -> None:
+    with temp_layout.temp_dir_in("tdp-", tmp_path) as ok:
+        assert ok.parent == tmp_path
+    with pytest.raises(RuntimeError):
+        with temp_layout.temp_dir_in("tdp-", tmp_path) as bad:
+            raise RuntimeError("boom")
+    assert not ok.exists() and not bad.exists()
+
+
+def test_make_managed_temp_dir_atexit_swallows_a_failed_removal(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
+    registered = []
+    monkeypatch.setattr(atexit, "register", lambda fn, *a: registered.append(fn))
+    d = temp_layout.make_managed_temp_dir("held")
+
+    def refuse(_path: Path) -> None:
+        raise PermissionError("held")
+
+    monkeypatch.setattr(temp_layout, "_rmtree_strict", refuse)
+    registered[0]()
+    assert d.is_dir()
+
+
+def test_only_a_kept_entry_survives_every_creator_on_both_exits(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
+    registered = []
+    monkeypatch.setattr(atexit, "register", lambda fn, *a: registered.append(fn))
+    kept, _cleanup = temp_layout.create_managed_temp_dir("keep", "/work/my-repo")
+    run_temp = kept.parent
+
+    with temp_layout.managed_temp_dir("a", "/work/my-repo"):
+        pass
+    with pytest.raises(RuntimeError):
+        with temp_layout.managed_temp_dir("b", "/work/my-repo"):
+            raise RuntimeError("boom")
+    handed = temp_layout.make_managed_temp_dir("c", "/work/my-repo")
+    for fn in registered:
+        fn()
+
+    assert not handed.exists()
+    assert [p.name for p in run_temp.iterdir()] == [kept.name]
 
 
 def test_managed_dir_does_not_renest_the_skeleton_inside_a_session_dir(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -320,6 +488,31 @@ def test_pytest_basetemp_root_leaves_a_repo_redirected_temp(redirected_into_repo
     fleet = temp_layout.pytest_fleet_basetemp_root()
     assert not fleet.is_relative_to(repo)
     assert fleet.parts[-3:] == ("coordinator", "_fleet", "pytest")
+
+
+def test_default_basetemp_hook_lands_outside_the_worktree(redirected_into_repo, monkeypatch) -> None:
+    import types
+
+    from coordinator_core import conftest as cc
+
+    repo, _system = redirected_into_repo
+    if sys.platform != "win32":
+        monkeypatch.setattr(temp_layout, "_inside_worktree", lambda p: Path(p).is_relative_to(repo))
+        monkeypatch.setattr(temp_layout.Path, "is_dir", lambda self: True)
+    config = types.SimpleNamespace(option=types.SimpleNamespace(basetemp=None), rootpath=repo)
+    cc.default_basetemp_to_temp_layout(config)
+    assert not Path(config.option.basetemp).is_relative_to(repo)
+
+
+def test_default_basetemp_hook_keeps_a_callers_basetemp(tmp_path) -> None:
+    import types
+
+    from coordinator_core import conftest as cc
+
+    given = str(tmp_path / "given")
+    config = types.SimpleNamespace(option=types.SimpleNamespace(basetemp=given), rootpath=tmp_path)
+    cc.default_basetemp_to_temp_layout(config)
+    assert config.option.basetemp == given
 
 
 def test_pytest_basetemp_root_keeps_a_plain_temp(fake_temp) -> None:
@@ -506,6 +699,7 @@ def test_old_root_bug_blitz_cache_ages_out_at_seven_days(tmp_path, monkeypatch) 
         pass
     assert not old.exists() and mid.exists() and new.exists()
 
+
 def test_old_root_reap_skips_a_leased_commit_clone_and_prunes_the_rest(tmp_path, monkeypatch) -> None:
     *_, disk = _legacy_tree(tmp_path, monkeypatch)
     clones = tmp_path / "oldtmp" / "coordinator" / "_fleet" / "claude-klabauter-commit-clone"
@@ -521,6 +715,17 @@ def test_old_root_reap_skips_a_leased_commit_clone_and_prunes_the_rest(tmp_path,
         pass
     assert leased.exists()
     assert not dead_lease.exists() and not bare.exists()
+
+
+def test_reap_dead_owner_dirs_cap_bounds_removals_per_call(tmp_path: Path) -> None:
+    run_temp = tmp_path / "run-temp"
+    dead = [run_temp / f"2000000000-{i:06x}-x" for i in range(5)]
+    for d in dead:
+        d.mkdir(parents=True)
+    temp_layout._reap_dead_owner_dirs(run_temp, cap=2)
+    assert sum(d.exists() for d in dead) == 3
+    temp_layout._reap_dead_owner_dirs(run_temp, cap=64)
+    assert not any(d.exists() for d in dead)
 
 
 def test_scratch_root_is_the_machine_local_key_when_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -558,6 +763,32 @@ def test_build_root_falls_back_to_scratch_root_with_a_warning_when_unset(tmp_pat
         assert temp_layout.build_root() == tmp_path / "s"
 
 
+def test_scratch_and_build_root_delegate_to_run_scratch_with_the_managed_fallback(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import run_scratch
+
+    _registry(monkeypatch, {})
+    seen: list = []
+    monkeypatch.setattr(run_scratch, "scratch_root", lambda fallback=None: seen.append(("scratch", fallback)) or Path("S"))
+    monkeypatch.setattr(run_scratch, "build_root", lambda fallback=None: seen.append(("build", fallback)) or Path("B"))
+    assert temp_layout.scratch_root("/work/r") == Path("S")
+    with pytest.warns(UserWarning):
+        assert temp_layout.build_root() == Path("B")
+    assert seen[0] == ("scratch", temp_layout.coordinator_temp_root("/work/r"))
+    assert seen[-1] == ("build", Path("S"))
+
+
+def test_scratch_root_resolves_through_the_registry_dir_when_machine_resolver_is_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core import run_scratch
+
+    registry = tmp_path / "machine-local"
+    registry.mkdir()
+    (registry / "registry.local.toml").write_text('[paths]\nscratch_root = "/vendored/s"\n', encoding="utf-8")
+    monkeypatch.setattr(run_scratch, "_machine_resolver", lambda: None)
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry))
+    monkeypatch.delenv("MACHINE_LOCAL_PATHS_SCRATCH_ROOT", raising=False)
+    assert temp_layout.scratch_root("/work/r") == Path("/vendored/s")
+
+
 def test_build_output_dir_is_build_root_repo_output_and_leaves_a_prior_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _registry(monkeypatch, {"paths.build_root": str(tmp_path)})
     out = temp_layout.build_output_dir("/work/game", "win64")
@@ -574,3 +805,33 @@ def test_build_output_dir_refuses_a_non_segment_output(tmp_path: Path, monkeypat
     _registry(monkeypatch, {"paths.build_root": str(tmp_path)})
     with pytest.raises(ValueError):
         temp_layout.build_output_dir("/work/game", output)
+
+
+def test_root_writers_name_every_child_shape_with_owner_and_bound() -> None:
+    writers = {w.name: w for w in temp_layout.COORDINATOR_ROOT_WRITERS}
+    assert len(writers) == len(temp_layout.COORDINATOR_ROOT_WRITERS)
+    assert {"pytest", "run-temp", "clean-mirror"} <= {w.name for w in writers.values() if w.scope == "repo"}
+    assert {"fleet-session-files", "fleet-caches", "claude-klabauter-commit-clone", "claude-klabauter-publish-engine"} <= {
+        w.name for w in writers.values() if w.scope == "fleet"
+    }
+    for w in writers.values():
+        assert w.owner in {"pid", "lease", "none"}
+        assert w.max_age_s >= 0
+    assert writers["claude-klabauter-commit-clone"].owner == "lease"
+    assert writers["pytest"].owner == "pid"
+
+
+def test_unowned_outputs_keep_latest_two() -> None:
+    for w in temp_layout.COORDINATOR_ROOT_WRITERS:
+        if w.name in {"clean-mirror", "fleet-caches", "claude-klabauter-commit-clone", "claude-klabauter-publish-engine"}:
+            assert w.keep_latest == 2
+
+
+def test_root_writer_matching_is_pinned_to_the_producer_shape() -> None:
+    writers = {w.name: w for w in temp_layout.COORDINATOR_ROOT_WRITERS}
+    assert writers["fleet-session-files"].matches("workflow-stopped-abc")
+    assert not writers["fleet-session-files"].matches("someone-elses-file")
+    assert writers["fleet-caches"].matches("tmpab12_cd9")
+    assert writers["fleet-caches"].matches("mk-git-seed-1")
+    assert not writers["fleet-caches"].matches("tmpshort")
+    assert writers["pytest"].matches("123-abcdef")

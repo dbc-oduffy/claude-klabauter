@@ -72,7 +72,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     return root
 
@@ -103,7 +103,7 @@ def _call(repo: Path, verdict: dict, slice_files: tuple = ("a.py",)) -> dict:
 
 
 def _met(**fields) -> dict:
-    return {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True, **fields}]}
+    return {"items": [{"id": "R1", "status": "met", "wired": True, **fields}]}
 
 
 def test_met_row_file_left_dirty_refuses_and_names_it(repo):
@@ -158,7 +158,7 @@ def test_gitignored_and_machine_local_paths_never_ride_the_commit(repo):
 
 def test_met_row_files_names_only_existing_files_of_met_items(repo):
     verdict = {"items": [
-        {"id": "R1", "status": "met", "met_by": "a.py", "root_read": [_SETTER, "coordinator/bin", "missing.py"]},
+        {"id": "R1", "status": "met", "root_read": [_SETTER, "coordinator/bin", "missing.py"]},
         {"id": "R2", "status": "not_met", "root_read": "README.md"},
     ]}
     assert met_row_files(repo, verdict) == (_SETTER,)

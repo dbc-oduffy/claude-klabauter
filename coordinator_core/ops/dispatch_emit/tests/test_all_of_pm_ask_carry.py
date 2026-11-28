@@ -103,6 +103,22 @@ def test_a_resumed_run_reads_its_predecessors_explicit_set(repo: Path) -> None:
     _reads(repo, WARP, True)
 
 
+def test_a_fresh_id_superseding_a_walled_run_reads_its_explicit_set(repo: Path) -> None:
+    rl.start(repo, OLDER, all_of_pm_ask=True)
+    rl.start(repo, WARP, supersedes=OLDER)
+    _reads(repo, WARP, True)
+    rl.revise(repo, OLDER, all_of_pm_ask=False)
+    assert rl.read_ledger(repo, _dir(repo, WARP)).all_of_pm_ask is False
+    rl._write_view(repo, _dir(repo, WARP), WARP)
+    _reads(repo, WARP, False)
+
+
+def test_the_85639d_witness_a_chain_hop_with_the_ask_set_yes_reads_yes(repo: Path) -> None:
+    rl.start(repo, ASK, all_of_pm_ask=True)
+    rl.start(repo, WARP, chain_parent=ASK, all_of_pm_ask=False)
+    _reads(repo, WARP, True)
+
+
 def test_a_predecessor_cycle_terminates(repo: Path) -> None:
     rl.start(repo, ASK, resumed_from=WARP)
     rl.start(repo, WARP, resumed_from=ASK)

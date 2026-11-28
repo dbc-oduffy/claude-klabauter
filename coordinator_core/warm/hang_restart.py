@@ -8,6 +8,7 @@ respawn-on-next-op path restarts the server; this module only decides, logs one 
 Every decision appends one line to `<svc>/hang-restarts.log`:
 `<UTC> pid=<server pid> action=restart|suppressed|io-stall [reason=...] count=.. window_s=.. backoff_s=.. dumps=..`
 (`io-stall`: the window's stalled legs are blocked reads, so restarting would not clear the disk; report only.)
+(`suppressed reason=io-held`: the window's stall records are mostly import / filesystem waits, so a restart would re-import cold.)
 (`suppressed reason=io-saturated-by-peer`: a non-engine process tops the box's read sample, bounded by `IO_SATURATED_MAX_DEFER_SECS`;
 `suppressed reason=worker-replaced`: a held pool worker was retired alone while peers served, before any whole-engine restart.)
 (`backoff_s` is the wait owed the previous restart at decision time, 0 for a first restart).
@@ -98,11 +99,10 @@ def _stamp_epoch(name: str) -> Optional[int]:
 _IMPORT_SCAN_BYTES = 65536
 _THREAD_HEADER_SUFFIX = "(most recent call first):"
 _FRAME_RE = re.compile(r'^\s*File "([^"]*)", line \d+ in (\S+)')
-_IMPORT_WAIT_FUNCS = frozenset({"_path_stat", "find_spec"})
 
 
 def _is_import_wait_top(frame_line: str) -> bool:
-    """True when a stack's top frame sits in an importlib path stat / spec lookup or zipimport."""
+    """True when a stack's top frame sits in an importlib path stat / spec lookup / module-bytes read or zipimport."""
     match = _FRAME_RE.match(frame_line)
     if match is None:
         return False
@@ -111,7 +111,7 @@ def _is_import_wait_top(frame_line: str) -> bool:
         return True
     if func == "_path_stat":
         return True
-    return func == "find_spec" and "importlib" in filename
+    return func in ("find_spec", "get_data") and "importlib" in filename
 
 
 def _has_import_wait_top(text: str) -> bool:
@@ -128,7 +128,7 @@ def _has_import_wait_top(text: str) -> bool:
 
 def _is_io_wait_record(path: Path) -> bool:
     """True when the record is held on the filesystem: its header carries `stall-class: io-wait`, or
-    a thread's top frame is an import wait (importlib `_path_stat` / `find_spec`, zipimport).
+    a thread's top frame is an import wait (importlib `_path_stat` / `find_spec` / `get_data`, zipimport).
     Unreadable reads as hung."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -246,11 +246,13 @@ def _backoff_secs(lines: list, now: float, base: float) -> float:
 STALLED_SUCCESSOR_REASON = "stalled-successor"
 IO_SATURATED_REASON = "io-saturated-by-peer"
 WORKER_REPLACED_REASON = "worker-replaced"
+IO_HELD_REASON = "io-held"
 # A top reader below this rate is noise, not saturation.
 IO_SATURATION_MIN_MBPS = 4.0
 # Suppression for a saturated box is bounded: a chain of io-saturated suppressions this old stops
 # shielding, so a genuinely hung engine still reaches the whole-engine restart.
 IO_SATURATED_MAX_DEFER_SECS = 600.0
+IO_HELD_MAX_DEFER_SECS = IO_SATURATED_MAX_DEFER_SECS
 _BOX_IO_KEY = "box-io-read-top"
 _BOX_IO_SCAN_BYTES = 16384
 _BOX_IO_RECORDS_SCANNED = 8
@@ -333,18 +335,20 @@ def _box_io_saturated(stall_dir: Path, since: float, server_pid: int) -> bool:
     return False
 
 
-def _saturation_defer_spent(lines: list, now: float) -> bool:
-    """True when the unbroken chain of io-saturated suppressions (no restart between) began
-    `IO_SATURATED_MAX_DEFER_SECS` or more before `now`."""
+def _saturation_defer_spent(
+    lines: list, now: float, reason: str = IO_SATURATED_REASON, bound: float = IO_SATURATED_MAX_DEFER_SECS
+) -> bool:
+    """True when the unbroken chain of `reason` suppressions (no restart between) began
+    `bound` or more before `now`."""
     first = None
     for line in reversed(lines):
         if " action=restart " in line + " ":
             break
-        if f" reason={IO_SATURATED_REASON} " in line + " ":
+        if f" reason={reason} " in line + " ":
             epoch = _line_epoch(line)
             if epoch is not None:
                 first = epoch
-    return first is not None and now - first >= IO_SATURATED_MAX_DEFER_SECS
+    return first is not None and now - first >= bound
 
 
 def _line_pid(line: str) -> Optional[int]:
@@ -454,6 +458,10 @@ def _record_decision(
     reason, backoff = _gate(svc, lines, now, base, pid, io_held, successor_check, io_saturated)
     if progress:
         reason = "progress"
+    if reason is None and io_held and not _saturation_defer_spent(
+        lines, now, IO_HELD_REASON, IO_HELD_MAX_DEFER_SECS
+    ):
+        reason = IO_HELD_REASON
     if reason is None and replace_held and progressed_within(window or HANG_WINDOW_SECS):
         if _try_replace_held_worker():
             reason = WORKER_REPLACED_REASON
@@ -574,6 +582,8 @@ def note_stall(
             marks = [m for m in _stall_marks.get(str(stall_dir), []) if mono - m < window]
             marks.append(mono)
             _stall_marks[str(stall_dir)] = marks
+            for stale in [k for k, t in _first_suppress.items() if mono - t >= IO_SATURATED_MAX_DEFER_SECS]:
+                del _first_suppress[stale]
             count = len(marks)
             if count < threshold:
                 return None
@@ -594,6 +604,8 @@ def note_stall(
         helper.join(deadline)
         key = str(stall_dir)
         if progress:
+            with _stall_marks_lock:
+                _first_suppress.pop(key, None)
             return "suppressed"
         if verdict and verdict[0] == "suppressed":
             with _stall_marks_lock:

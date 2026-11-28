@@ -223,3 +223,72 @@ def test_the_receipt_check_command_reads_the_top_level_sha_not_em_brief(tmp_path
     out = subprocess.run([sys.executable, "-c", argv_code, str(script)], capture_output=True, text=True, timeout=30,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     assert out.stdout.strip() == f"MISMATCH receipt sha256 {'7b' * 32} != script sha256 {digest}"
+
+
+_CHAIN_ASK = "ask-20261116T074832-d9c25e"
+
+
+def _chain_emit_prompt(carry_file: str, handoff: dict) -> str:
+    """The prompt `_relayEmit` hands the chain-emit agent, captured by running the real chain-hop template under node."""
+    import re
+    import shutil
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import CHAIN_HANDOFF_KEY
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    values = des._chain_follow_values(carry_file)
+    values["__RUN_SCRIPT_SUFFIX__"] = json.dumps(".workflow.mjs")
+    chain_js = re.sub("|".join(values), lambda m: values[m.group(0)], des._EMIT_RELAY_JS + des._CHAIN_FOLLOW_JS)
+    code = (
+        "const RUN_SCRIPT_SUFFIX = '.workflow.mjs';\n"
+        f"const ASK_RUN_ID = {json.dumps(_CHAIN_ASK)};\n"
+        f"const ASK_SCRIPT_PATH = {json.dumps('scratch/warp/' + _CHAIN_ASK + '.workflow.mjs')};\n"
+        f"const first = {{ ok: true, result: {{ {json.dumps(CHAIN_HANDOFF_KEY)}: {json.dumps(handoff)} }} }};\n"
+        "const prompts = [];\n"
+        "const _normPath = (p) => p;\n"
+        "const _startLoop = async () => ({ ok: true, result: { done: true } });\n"
+        "const agent = async (p) => { prompts.push(p); return { path: 'scratch/warp/warp-x-20261116T080000-abcdef.workflow.mjs', run_id: 'warp-x-20261116T080000-abcdef', fire_args: {} }; };\n"
+        "(async () => {\n" + chain_js + "\n})().then(() => console.log(JSON.stringify(prompts)));\n"
+    )
+    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    (prompt,) = json.loads(out.stdout)
+    return prompt
+
+
+@pytest.mark.parametrize("carry,handoff", [
+    ("", {"ask_brief": "it's é"}),
+    ("/c/carry.json", {"ask": True, "value_class": "corpus", "note": "it's é"}),
+    ("/c/carry.json", {"ask": True, "sizing_path": "state/sizings/x.yaml", "chain_parent": _CHAIN_ASK, "note": "it's é"}),
+])
+def test_the_chain_emit_relay_command_is_one_line_without_a_heredoc_and_the_json_arg_round_trips(carry, handoff) -> None:
+    """A heredoc is a PowerShell ParserError; the relay command is one line whose single-quoted JSON argument holds no quote."""
+    import re
+
+    prompt = _chain_emit_prompt(carry, handoff)
+    assert "<<" not in prompt and "CHAIN_PARAMS_JSON" not in prompt and "heredoc" not in prompt
+    arg = re.search(r" '(\{[^\n]*\})'(?: \| |\n)", prompt).group(1)
+    assert "'" not in arg and arg.isascii()
+    assert "it's é" in json.loads(arg).values()
+
+
+def test_the_chain_emit_merge_command_runs_with_the_json_as_an_argument_not_stdin(tmp_path: Path) -> None:
+    """The plain merge: python reads the hand-off from argv and the carry file, then the emit takes the result on stdin."""
+    import re
+    import subprocess
+    import sys
+
+    carry = tmp_path / "carry.json"
+    carry.write_text(json.dumps({"em_context_digest": "d" * 8, "launcher_child": True, "warp_home": str(tmp_path)}), encoding="utf-8")
+    prompt = _chain_emit_prompt(str(carry), {"ask": True, "value_class": "corpus"})
+    merge_py = re.search(r'(?:python3?) -c "(.*?)" "', prompt).group(1)
+    arg = re.search(r'" (\'\{.*?\}\') \| ', prompt).group(1)[1:-1]
+    out = subprocess.run([sys.executable, "-c", merge_py, str(carry), arg], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    emitted = json.loads(out.stdout)
+    assert emitted["value_class"] == "corpus" and emitted["em_context_digest"] == "d" * 8 and "warp_home" not in emitted

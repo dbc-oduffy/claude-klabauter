@@ -1,4 +1,4 @@
-"""halt_tree_evict.evict calls live_write_guard.check_live_write and aborts the reset on refusal."""
+"""halt_tree_evict.evict records the tree's bytes and never writes the tree or consults the live-write guard."""
 
 from __future__ import annotations
 
@@ -10,92 +10,44 @@ from pathlib import Path
 import pytest
 
 BAD = b"peer hunk\n"
-HEAD = b"ok = 1\n"
 
 
-def _stage(root, run_id, baseline) -> None:
-    """Stage `run_id` against `baseline` ({path: bytes | None}) so its hunks are attributable."""
-    from coordinator_core.git import git_objects
-    from coordinator_core.git.git_dir import resolve_git_common_dir
-
-    shas = {
-        p: None if b is None else git_objects.write_object(resolve_git_common_dir(root), b"blob", b)
-        for p, b in baseline.items()
-    }
-    rdir = root / "state" / "warp" / run_id
-    rdir.mkdir(parents=True, exist_ok=True)
-    (rdir / "manifest.json").write_text(
-        json.dumps({"rows": [], "doc_writes": [], "write_baseline": shas}), encoding="utf-8"
-    )
-
-
-def _world(tmp_path, baseline=HEAD):
+def _world(tmp_path):
     root, rec = tmp_path / "root", tmp_path / "rec"
     root.mkdir()
     (root / "a.py").write_bytes(BAD)
-    _stage(root, "me", {"a.py": baseline})
     return root, rec
 
 
-def test_refusal_leaves_tree_and_record_untouched_and_names_holder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    root, rec = _world(tmp_path)
-    seen = []
-
-    def refuse(r, run_id, path, new_bytes, claims=None) -> str:
-        seen.append((run_id, path, new_bytes))
-        return "write to a.py drops 1 unlanded hunk(s) held by peer-run."
-
-    monkeypatch.setattr(live_write_guard, "check_live_write", refuse)
-    refused: dict = {}
-    idx = hte.evict(root, rec, ["a.py"], {"a.py": HEAD}, run_id="me", refused=refused)
-    assert seen == [("me", "a.py", HEAD)]
-    assert "peer-run" in refused["a.py"]
-    assert idx == {}
-    assert (root / "a.py").read_bytes() == BAD
-    assert not (rec / "evicted.json").exists()
-    assert not (rec / "withheld-blobs").exists()
-
-
-def test_no_refusal_still_evicts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    root, rec = _world(tmp_path)
-    monkeypatch.setattr(live_write_guard, "check_live_write", lambda *a: None)
-    refused: dict = {}
-    idx = hte.evict(root, rec, ["a.py"], {"a.py": HEAD}, run_id="me", refused=refused)
-    assert "a.py" in idx and refused == {}
-    assert (root / "a.py").read_bytes() == HEAD
-
-
-def test_untracked_path_is_checked_as_removal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    root, rec = _world(tmp_path, baseline=None)
-    seen = []
-    monkeypatch.setattr(live_write_guard, "check_live_write", lambda r, i, p, b, c=None: seen.append(b))
-    hte.evict(root, rec, ["a.py"], {"a.py": None}, run_id="me")
-    assert seen == [b""]
-    assert not (root / "a.py").exists()
-
-
-def test_without_run_id_guard_is_not_consulted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_evict_records_bytes_and_leaves_the_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, rec = _world(tmp_path)
 
-    def boom(*a):
-        raise AssertionError("guard consulted without run_id")
+    def boom(*a, **k):
+        raise AssertionError("live-write guard consulted by a record-only evict")
 
     monkeypatch.setattr(live_write_guard, "check_live_write", boom)
-    refused: dict = {}
-    idx = hte.evict(root, rec, ["a.py"], {"a.py": HEAD}, refused=refused)
-    assert idx == {}
-    assert "run unknown" in refused["a.py"]
+    idx = hte.evict(root, rec, ["a.py"])
+    sha = idx["a.py"]["blob"]
+    assert idx["a.py"]["head"] == sha
+    assert (rec / hte.BLOBS_DIR / sha).read_bytes() == BAD
+    assert json.loads((rec / hte.EVICTED_FILE).read_text(encoding="utf-8")) == idx
     assert (root / "a.py").read_bytes() == BAD
 
 
-def test_tree_eviction_apply_surfaces_refusal_as_unowned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_tree_path_is_skipped_and_writes_no_record(tmp_path: Path) -> None:
+    root, rec = _world(tmp_path)
+    assert hte.evict(root, rec, ["gone.py"]) == {}
+    assert not (rec / hte.EVICTED_FILE).exists()
+    assert not (rec / hte.BLOBS_DIR).exists()
+
+
+def test_tree_eviction_apply_keeps_the_tree(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.halted_record_eviction import TreeEviction
 
     root, _ = _world(tmp_path)
     (root / "rec").mkdir()
-    monkeypatch.setattr(live_write_guard, "check_live_write", lambda *a: "held by peer-run")
-    ev = TreeEviction(root, "rec", {"a.py": HEAD}, {}, {}, "me")
+    ev = TreeEviction(root, "rec", ["a.py"], {}, {}, [])
     ev.apply()
-    assert ev.evicted == []
-    assert ev.unowned == {"a.py": "held by peer-run"}
+    assert ev.evicted == ["a.py"]
+    assert (root / "rec" / hte.EVICTED_FILE).exists()
     assert (root / "a.py").read_bytes() == BAD

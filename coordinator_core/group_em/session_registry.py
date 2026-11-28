@@ -111,21 +111,11 @@ def read_rows(directory: Optional[Path] = None) -> list[RegistryRow]:
 
 
 def _pid_alive_windows(pid: int) -> bool:
-    import ctypes
+    """invariant: access denied (another user's pid) is doubt and reads alive, never dead."""
+    from coordinator_core.ask_spool.record import win_pid_state
 
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    STILL_ACTIVE = 259
-    kernel32 = ctypes.windll.kernel32
-    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not handle:
-        return False
-    try:
-        code = ctypes.c_ulong()
-        if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-            return code.value == STILL_ACTIVE
-        return True
-    finally:
-        kernel32.CloseHandle(handle)
+    state = win_pid_state(pid)
+    return True if state is None else state
 
 
 def _pid_alive_posix(pid: int) -> bool:
@@ -142,7 +132,12 @@ def _pid_alive_posix(pid: int) -> bool:
     return True
 
 
-def pid_alive(pid: int) -> bool:
+def pid_alive(pid) -> bool:
+    """The one cross-platform liveness probe; a non-numeric or non-positive pid reads dead."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
     if pid <= 0:
         return False
     arm = _pid_alive_windows if os.name == "nt" else _pid_alive_posix

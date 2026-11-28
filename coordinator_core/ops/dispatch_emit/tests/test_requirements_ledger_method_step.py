@@ -24,7 +24,7 @@ def _ledger():
 
 
 def _verdict(**extra):
-    return {"items": [{"id": rid, "status": "met", "met_by": "a.py", **extra.get(rid, {})} for rid, _ in ITEMS]}
+    return {"items": [{"id": rid, "status": "met", "evidence": "verified", **extra.get(rid, {})} for rid, _ in ITEMS]}
 
 
 def _fence(row, mechanism, at, deviation: str = "") -> str:
@@ -84,7 +84,7 @@ def test_mechanism_absent_from_tree_fails_even_when_item_is_met(root) -> None:
 
 def test_unmarked_row_carries_no_trace_burden(root) -> None:
     ledger = rl.Ledger((rl.Item("R1", "(a) plain", "relayed", "", "relayed", ""),), False, "x", ())
-    out = rl.judge(ledger, {"items": [{"id": "R1", "status": "met", "met_by": "a.py"}]}, repo_root=root, plan_text="")
+    out = rl.judge(ledger, {"items": [{"id": "R1", "status": "met", "evidence": "verified"}]}, repo_root=root, plan_text="")
     assert out["pass"], out
 
 

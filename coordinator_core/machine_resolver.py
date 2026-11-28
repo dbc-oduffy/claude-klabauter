@@ -112,7 +112,6 @@ from __future__ import annotations
 
 import datetime
 import functools
-import logging
 import os
 import re
 import stat
@@ -126,14 +125,20 @@ from coordinator_core._repo_root_probe import (
     reset_repo_root_memo as _reset_repo_root_memo,
     resolve_repo_root as _resolve_repo_root,
 )
-from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.daily_branch import sanitize_slug
 from coordinator_core.shared_read import read_bytes_shared
 from coordinator_core.win_portability import same_path as _same_path
 
-_LOG = logging.getLogger(__name__)
 
 _GIT_TIMEOUT = 10
+
+
+def atomic_write_bytes(path, data: bytes) -> None:
+    """``atomic_replace.atomic_write_bytes``, imported at first write: its
+    ``tempfile`` closure (~7ms) stays off every read-only cold hook process."""
+    from coordinator_core.atomic_replace import atomic_write_bytes as _write
+
+    _write(path, data)
 
 
 def _tail_slug(value: str) -> str:
@@ -492,7 +497,7 @@ def registry_set(key: str, value: str) -> None:
     single-writer ``repos.*`` namespace, not a reimplementation of it.
 
     Scope: ONLY the flat, root-namespace ``"<key>" = '<value>'`` shape — the
-    same shape ``repos.*`` and ``publish.mirrors.*.path`` keys always use
+    same shape ``repos.*`` and ``publish.mirrors.*`` path keys always use
     (never promoted to a concern-file namespace — see
     ``merged_flat_registry``'s docstring). Does not handle table-form
     definitions, concern-namespaced keys, or array values; a caller needing
@@ -611,7 +616,7 @@ def merged_flat_registry() -> dict:
     (one that needs to enumerate a whole `repos.*`/`prefix.*` namespace rather
     than resolve a single dotted key, for which `registry_get` above is
     already the whole answer) does not reinvent this merge per call site.
-    `repos.*` and `publish.mirrors.*.path` are confirmed root-namespace-only
+    `repos.*` and `publish.mirrors.*` path keys are confirmed root-namespace-only
     keys (never a promoted concern-file namespace — see
     `_machine_local.py::_flatten_nested`'s docstring and its
     concern-namespace-exclusivity check), so the same two-file precedence
@@ -926,7 +931,9 @@ def canonical_repo_key_for_root(root, repo_key_paths: dict) -> Optional[str]:
         return preferred[0]
 
     chosen = (preferred or matches)[0]
-    _LOG.warning(
+    import logging  # lazy: a cold hook process never reaches this warning
+
+    logging.getLogger(__name__).warning(
         "canonical_repo_key_for_root: %s is registered under %d keys (%s) and "
         "the seeded roster does not single one out; taking %r by lexicographic "
         "tie-break. Declare the canonical key in registry.toml to fix the "

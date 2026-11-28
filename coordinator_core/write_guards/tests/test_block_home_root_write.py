@@ -35,6 +35,18 @@ def test_write_of_new_home_file_is_advised(home) -> None:
     assert out["additionalContext"] == machine_profile.ADVISORY_PREFIX + DENY_REASON
 
 
+@pytest.mark.parametrize("name", [".claude.json.tmp.123.abc", ".claude.json.lock", ".claude.json.backup"])
+def test_claude_json_sibling_deny_names_claude_code(home, name) -> None:
+    ctx = guard.check(_payload(home / name))["hookSpecificOutput"]["additionalContext"]
+    assert "Claude Code" in ctx
+    assert name in ctx
+
+
+def test_unattributed_home_file_deny_does_not_name_a_writer(home) -> None:
+    ctx = guard.check(_payload(home / "fo.txt"))["hookSpecificOutput"]["additionalContext"]
+    assert "Claude Code" not in ctx
+
+
 def test_notebook_path_is_judged(home) -> None:
     assert guard.check(_payload(home / "n.ipynb", "NotebookEdit", "notebook_path")) is not None
 

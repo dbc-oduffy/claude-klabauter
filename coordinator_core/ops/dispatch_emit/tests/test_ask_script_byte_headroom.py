@@ -92,3 +92,34 @@ def test_raw_ask_with_279kb_plan_blitz_stays_under_ninety_percent(monkeypatch: p
 
 def test_runner_cap_constant_is_unchanged() -> None:
     assert emit._WORKFLOW_SCRIPT_BYTE_CAP == 524288
+
+
+# Read at import: the per-test fixtures that lift the cap act after collection.
+_RUNNER_CAP = emit._WORKFLOW_SCRIPT_BYTE_CAP
+# Question: how far under the runner cap must the unhoisted, unstaged shape compose, so the next prompt addition
+# does not turn every literal-text composer test into an AskComposeRefused again? 32 KiB, the growth of a few days.
+_LITERAL_TEXT_HEADROOM_BYTES = 32768
+
+
+def _split_bytes(monkeypatch, shape: str) -> int:
+    from coordinator_core.benchmarks.ask_script_bytes_probe import compose_in_run_commit_split
+
+    script = compose_in_run_commit_split(shape, _PLUGIN_ROOT, monkeypatch)
+    n = len(script.encode("utf-8"))
+    print(f"in-run-commit split ({shape}) bytes: {n}")
+    return n
+
+
+def test_in_run_commit_split_stays_under_ninety_percent_of_the_runner_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _PLUGIN_ROOT, "plugin root did not resolve at import; plan-blitz.mjs is unreachable"
+    n = _split_bytes(monkeypatch, "production")
+    assert n <= _CEILING, f"in-run-commit split is {n} bytes; ceiling is {_CEILING} (90% of the runner cap)"
+
+
+def test_literal_text_in_run_commit_split_keeps_headroom_under_the_runner_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    n = _split_bytes(monkeypatch, "literal_text")
+    bar = _RUNNER_CAP - _LITERAL_TEXT_HEADROOM_BYTES
+    assert n <= bar, (
+        f"unhoisted, unstaged in-run-commit split is {n} bytes; bar is {bar} "
+        f"({_RUNNER_CAP}-byte runner cap less {_LITERAL_TEXT_HEADROOM_BYTES})"
+    )

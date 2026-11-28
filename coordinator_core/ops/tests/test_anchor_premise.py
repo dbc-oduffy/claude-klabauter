@@ -219,6 +219,22 @@ def test_true_premise_with_a_loose_check_is_unevaluable_not_contradicted(tmp_pat
     assert (v["verdict"], v["source"]) == ("RESOLVES", "engine-check")
 
 
+def test_elided_pattern_mismatch_is_a_malformed_check_not_contradicted(tmp_path: Path) -> None:
+    from coordinator_core.ops._anchor_premise import anchor_verdicts
+
+    (tmp_path / "fan_launcher.py").write_text(_LAUNCHER)
+    elided = _ap1("grep -c 'emitted: Sequence[...]' fan_launcher.py")
+    (v,) = anchor_verdicts(elided, [], [], "p", tmp_path)
+    assert v["verdict"] is None and v["source"] == "none"
+    assert v["observed"].startswith("malformed check: pattern ") and "elides with '...'" in v["observed"]
+    assert anchor_findings(elided, [], [], "p", tmp_path) == []
+    fixed = _ap1("grep -c 'absent_token' fan_launcher.py")
+    (v,) = anchor_verdicts(fixed, [], [], "p", tmp_path)
+    assert (v["verdict"], v["source"]) == ("CONTRADICTED", "engine-check")
+    (v,) = anchor_verdicts(elided, [{"id": "AP1", "verdict": "CONTRADICTED"}], [], "p", tmp_path)
+    assert v["verdict"] is None and v["source"] == "none" and v["observed"].startswith("malformed check")
+
+
 def test_overmatch_relief_never_covers_a_shortfall_a_count_claim_or_a_bound(tmp_path: Path) -> None:
     from coordinator_core.ops._anchor_premise import anchor_verdicts
 

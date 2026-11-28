@@ -53,7 +53,12 @@ _RULABLE = ("T2", "R2")
 _EM_ROWS = ("E1", "E2")
 _LANDED = {"committed": True, "sha": "abc1234", "error": None, "refused": None}
 _MET = {"items": [{"id": i, "status": "met", "wired": True} for i in _RULABLE]}
-_UNMET = {"items": [{"id": "T2", "status": "not_met", "essential": True, "remaining": ["the criterion is red"]}]}
+_UNMET = {
+    "items": [
+        {"id": "T2", "status": "not_met", "essential": True, "remaining": ["the criterion is red"]},
+        {"id": "R2", "status": "met", "wired": True},
+    ]
+}
 # The resume's landed A1/A2 code owes the review floor (review_floor.py); a carried prior-run verdict stands in
 # for the review wave this stubbed run never dispatches.
 _CARRIED_REVIEW = {

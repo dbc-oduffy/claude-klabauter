@@ -12,7 +12,7 @@ with an empty reachable spawn set.
 
 Negative-spec:
     - Never raises: an invalid param or I/O failure is `{"error": ...}`.
-    - Spawns nothing; with no box Group EM holder it writes nothing.
+    - Spawns nothing; with no box Group EM holder START/END spool locally, REQUEST writes nothing.
 """
 
 from __future__ import annotations
@@ -37,8 +37,11 @@ def _groupem_admission_post(params: dict, repo_root: Optional[Path] = None) -> d
         declared_peak_mb (number, optional) -- expected peak tree RSS in MB; START lines only.
 
     Returns:
-        {"posted": True, "path", "phase", "pids", "dead_pids", "holder_live"}
-        {"posted": False, "reason": "bad_phase" | "no_box_holder"}
+        {"posted": True, "delivered": True, "path", "phase", "pids", "dead_pids", "holder_live"}
+        {"posted": False, "delivered": False, "spooled": bool, "degraded": True, "reason": "no_box_holder",
+         ["spool_error"], "path" (the spool), "phase", "pids", "dead_pids", "holder_live": False}
+            -- START/END with no holder; the line is spooled for the managing Group EM to drain.
+        {"posted": False, "reason": "bad_phase" | "no_box_holder"} -- no_box_holder for REQUEST only
         or {"error": str} on an invalid param.
     """
     p = params if isinstance(params, dict) else {}

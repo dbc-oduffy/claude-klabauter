@@ -254,6 +254,86 @@ def test_gather_on_the_raw_registry_samples_the_local_box_once(tmp_path, monkeyp
     assert [r["box"] for r in rows] == [local] and len(samples) == 1
 
 
+def test_gather_persists_the_live_snapshot_and_a_local_only_call_keeps_far_boxes(tmp_path):
+    cache = tmp_path / "g" / "c.json"
+    snap = tmp_path / "g" / "fleet-live-snapshot.json"
+    ok = lambda box, op, params, timeout: {"ok": True, "reply": {"row": _fresh("far")}}  # noqa: E731
+    _gather(ok, cache)
+    rows = {r["box"]: r for r in fl.read_live_snapshot(60.0, now=1010.0, path=snap)}
+    assert set(rows) == {"me", "far"}
+    assert rows["far"]["ram_free_mb"] == 2048 and rows["far"]["gpu_util_pct"] == 7
+    assert rows["far"]["vram_used_mib"] == 900 and rows["far"]["cpu_pct"] == 10
+    assert rows["far"]["age_s"] == 10.0 and rows["far"]["stale"] is False
+    fl.gather([], timeout=1.0, cache_path=cache, local_sample=lambda: {**_fresh("me"), "sampled_at": 2000.0}, local_id="me", now=2000.0)
+    later = {r["box"]: r for r in fl.read_live_snapshot(60.0, now=2000.0, path=snap)}
+    assert set(later) == {"me", "far"} and later["far"]["stale"] is True and later["me"]["stale"] is False
+
+
+def test_a_down_box_is_persisted_by_state_never_as_free(tmp_path):
+    from coordinator_core.group_em import fleet_balance
+
+    cache = tmp_path / "g" / "c.json"
+    down = lambda box, op, params, timeout: {"ok": False, "reason": "ssh_unreachable"}  # noqa: E731
+    _gather(down, cache)
+    rows = {r["box"]: r for r in fl.read_live_snapshot(60.0, now=1001.0, path=tmp_path / "g" / "fleet-live-snapshot.json")}
+    assert rows["far"]["state"] == "unreachable"
+    assert fleet_balance.is_idle(rows["far"], now=1001.0) is False
+    assert fleet_balance.is_idle(rows["me"], now=1001.0) is True
+
+
+def test_read_live_snapshot_missing_or_malformed_is_empty(tmp_path):
+    assert fl.read_live_snapshot(60.0, path=tmp_path / "none.json") == []
+    bad = tmp_path / "bad.json"
+    bad.write_text("[1]", "utf-8")
+    assert fl.read_live_snapshot(60.0, path=bad) == []
+
+
+_CLASSES = {"p": [0, 1], "e": [2, 3, 4]}
+
+
+def test_core_classes_validation_refuses_a_guess():
+    assert fl.valid_core_classes(_CLASSES) == _CLASSES
+    for bad in (None, {"p": [0, 1]}, {"p": [0, 1], "e": [1, 2]}, {"p": [], "e": [1]}, {"p": [True], "e": [1]}):
+        assert fl.valid_core_classes(bad) is None
+
+
+def test_class_use_counts_free_cores_per_class_and_refuses_uncovered_busy():
+    total, free = fl.class_use(_CLASSES, [90.0, 10.0, 0.0, 50.0, 24.0])
+    assert total == {"p": 2, "e": 3} and free == {"p": 1, "e": 2}
+    assert fl.class_use(_CLASSES, [0.0, 0.0]) == ({"p": 2, "e": 3}, None)
+
+
+def test_a_declared_box_row_carries_per_class_cores_and_an_undeclared_one_stays_a_count():
+    raw = {"cores": 5}
+    out = fl.with_core_classes(raw, _CLASSES, lambda: [0.0] * 5)
+    assert out["core_classes"] == _CLASSES and out["free_cores_by_class"] == {"p": 2, "e": 3}
+    assert out["cores_by_class"] == {"p": 2, "e": 3}
+    assert fl.with_core_classes(raw, {"p": [0, 1]}, lambda: [0.0] * 5) is raw
+
+
+def test_local_box_json_declares_the_split(tmp_path, monkeypatch):
+    home = _home(tmp_path, monkeypatch)
+    assert fl.read_core_classes(home) is None
+    path = home / "state" / "group-em" / "box.json"
+    data = json.loads(path.read_text("utf-8"))
+    data["capability"] = {"core_classes": _CLASSES}
+    path.write_text(json.dumps(data), "utf-8")
+    assert fl.read_core_classes(home) == _CLASSES
+
+
+def test_class_fields_survive_a_down_box_as_maxima_and_render(tmp_path):
+    cache = tmp_path / "g" / "c.json"
+    split = _fresh("far", core_classes=_CLASSES, cores_by_class={"p": 2, "e": 3}, free_cores_by_class={"p": 1, "e": 3})
+    ok = lambda box, op, params, timeout: {"ok": True, "reply": {"row": split}}  # noqa: E731
+    first = {r["box"]: r for r in _gather(ok, cache)}
+    assert first["far"]["free_cores_by_class"] == {"p": 1, "e": 3}
+    text = fl.render(list(first.values()))
+    assert "2p+3e" in text and "freecores 1p/3e" in text
+    down = lambda box, op, params, timeout: {"ok": False, "reason": "ssh_unreachable"}  # noqa: E731
+    again = {r["box"]: r for r in _gather(down, cache)}
+    assert again["far"]["cores_by_class"] == {"p": 2, "e": 3} and again["far"]["free_cores_by_class"] is None
+
+
 def _specs(home, **data):
     (home / "state").mkdir(exist_ok=True)
     (home / "state" / "box-specs.json").write_text(json.dumps(data), "utf-8")

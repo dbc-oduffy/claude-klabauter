@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 
@@ -200,6 +201,50 @@ def test_no_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "Popen", boom)
     _repo(tmp_path, _editor(tool_names=[UE_TOOL]))
     assert g.evaluate(_payload(tmp_path, UE_TOOL)) != {}
+
+
+_IO_EVENTS: list = []
+_IO_RECORDING = [False]
+
+
+def _record_io(event: str, args: tuple) -> None:
+    if _IO_RECORDING[0] and event in ("open", "os.listdir", "os.scandir"):
+        _IO_EVENTS.append((event, str(args[0])))
+
+
+# An audit hook cannot be removed: one registration per process, gated on _IO_RECORDING.
+sys.addaudithook(_record_io)
+
+
+@pytest.mark.parametrize("tool", [UE_TOOL, "Bash"])
+def test_a_steady_call_is_under_the_cpu_bar_with_no_file_io(tmp_path: Path, tool: str) -> None:
+    """The route table is parsed once per (path, mtime, size); a steady call only stats."""
+    import time
+
+    _repo(tmp_path, _editor(tool_names=[UE_TOOL], bash_patterns=[ANCHORED]))
+    extra = {"tool_input": {"command": UE_CMD}} if tool == "Bash" else {}
+    payload = _payload(tmp_path, tool, **extra)
+    assert _ctx(g.evaluate(payload))
+    calls = 20
+    _IO_EVENTS.clear()
+    _IO_RECORDING[0] = True
+    t0 = time.process_time()
+    try:
+        for _ in range(calls):
+            g.evaluate(payload)
+    finally:
+        _IO_RECORDING[0] = False
+    cpu_ms = (time.process_time() - t0) * 1000.0 / calls
+    assert cpu_ms < 50.0
+    assert _IO_EVENTS == []
+
+
+def test_a_changed_route_table_is_re_read(tmp_path: Path) -> None:
+    """The cache that holds steady IO at zero never serves a stale table."""
+    _repo(tmp_path, _editor(tool_names=[UE_TOOL]))
+    assert _ctx(g.evaluate(_payload(tmp_path, UE_TOOL)))
+    _repo(tmp_path, _editor(tool_names=["some_other_tool"]))
+    assert g.evaluate(_payload(tmp_path, UE_TOOL)) == {}
 
 
 @pytest.mark.parametrize("bad", [None, "x", 3])

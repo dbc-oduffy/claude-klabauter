@@ -10,6 +10,8 @@ from coordinator_core.completion_receipts.model import validate
 from coordinator_core.completion_receipts.store import ReceiptWriteError
 from coordinator_core.ops.dispatch_emit import completion_receipt as cr
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest
+from coordinator_core.session.claims import list_claims_by_session_checked as _REAL_LISTER
+from coordinator_core.tests.git_seed import seeded_repo
 from pathlib import Path
 
 NOW = "2026-10-01T18:00:00Z"
@@ -57,7 +59,7 @@ def _isolate(monkeypatch: pytest.MonkeyPatch):
     claimed: list = []
     monkeypatch.setattr(
         "coordinator_core.session.claims.list_claims_by_session_checked",
-        lambda sid, cwd=None: ([("handoff", n) for n in claimed], []),
+        lambda sid, cwd=None, classes=None: ([("handoff-claims", n) for n in claimed], []),
     )
     return claimed
 
@@ -130,6 +132,29 @@ def test_handoff_claims_name_flat_and_sharded_batons(tmp_path: Path, _isolate) -
         "state/handoffs/2026-10/2026-10-06-sharded.md",
         "state/handoffs/undated.md",
     ]
+
+
+def test_handoff_claims_unmocked_real_hub_beside_foreign_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "coordinator_core.session.claims.list_claims_by_session_checked", _REAL_LISTER
+    )
+    repo = seeded_repo(tmp_path, readme="x")
+    hub = repo / ".coordinator-local" / "coordinator-sessions"
+    for cls in ("memo-claims", "plan-claims", "row-claims"):
+        for i in range(334):
+            cdir = hub / cls / f"foreign-{i}"
+            cdir.mkdir(parents=True)
+            (cdir / "session_id").write_text("foreign-sid")
+    for name, sid in (("mine.md", SID), ("theirs.md", "foreign-sid")):
+        cdir = hub / "handoff-claims" / name
+        cdir.mkdir(parents=True)
+        (cdir / "session_id").write_text(sid)
+    mine_memo = hub / "memo-claims" / "mine-memo.md"
+    mine_memo.mkdir(parents=True)
+    (mine_memo / "session_id").write_text(SID)
+    assert cr._handoff_claims(repo, SID) == ["state/handoffs/mine.md"]
 
 
 def test_plan_mode_no_claim_falls_back_to_sizing_baton(tmp_path: Path) -> None:

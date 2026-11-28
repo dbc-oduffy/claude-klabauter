@@ -413,22 +413,12 @@ def _python_package_files(project_name: str) -> dict:
         "\n"
         "[tool.pytest.ini_options]\n"
         'testpaths = ["tests"]\n'
-        'markers = ["slow: excluded from the fast tier (scripts/run_fast_tests.py)"]\n'
+        "markers = [\n"
+        '    "slow: excluded from the fast tier",\n'
+        '    "integration: excluded from the fast tier",\n'
+        "]\n"
     )
-    runner = (
-        '"""Fast-tier test runner: pytest over tests/ minus tests marked `slow`."""\n'
-        "import subprocess\n"
-        "import sys\n"
-        "\n"
-        "\n"
-        "def main() -> int:\n"
-        '    cmd = [sys.executable, "-m", "pytest", "-m", "not slow", "-q", *sys.argv[1:]]\n'
-        "    return subprocess.run(cmd).returncode\n"
-        "\n"
-        "\n"
-        'if __name__ == "__main__":\n'
-        "    sys.exit(main())\n"
-    )
+    gitignore = "__pycache__/\n*.pyc\n.pytest_cache/\n*.egg-info/\nbuild/\ndist/\n.venv/\n"
     smoke_test = (
         f"import {pkg}\n"
         "\n"
@@ -440,7 +430,7 @@ def _python_package_files(project_name: str) -> dict:
         "pyproject.toml": pyproject,
         f"{pkg}/__init__.py": f"# {pkg}\n",
         "tests/test_smoke.py": smoke_test,
-        "scripts/run_fast_tests.py": runner,
+        ".gitignore": gitignore,
     }
 
 
@@ -509,6 +499,33 @@ def _git_init_main(target: str) -> int:
     return proc.returncode
 
 
+def _cut_day_branch(target: str) -> None:
+    """Leave HEAD of the new repo on the day branch so its first commit lands off main.
+
+    Invariant: assert_day_branch and the cut lock act on the process cwd, so cwd is
+    switched to `target` for the call and always restored. Never fatal: a failed cut
+    warns and the scaffold stands, since a repo left on main is recoverable by the
+    ceremony's day-branch-assert.
+    """
+    from coordinator_core.daily_day import local_day
+    from coordinator_core.hooks.day_branch_assert import FAILED, assert_day_branch
+    from coordinator_core.machine_resolver import compute_machine
+
+    prior_cwd = os.getcwd()
+    try:
+        os.chdir(target)
+        result = assert_day_branch(target, compute_machine(), local_day())
+    except Exception as exc:  # noqa: BLE001 - the scaffold is already complete on disk
+        print(f"{_PROG}: day-branch cut failed ({exc}); repo is on main", file=sys.stderr)
+        return
+    finally:
+        os.chdir(prior_cwd)
+    if result.outcome == FAILED:
+        print(f"{_PROG}: day-branch cut failed; repo is on main", file=sys.stderr)
+    elif result.message:
+        print(result.message)
+
+
 def _run_smoke_step(cmd: List[str], cwd: str, timeout: int, label: str) -> int:
     try:
         proc = subprocess.run(
@@ -560,6 +577,8 @@ def main(argv: List[str]) -> int:
     git_rc = _git_init_main(target)
     if git_rc != 0:
         return git_rc
+
+    _cut_day_branch(target)
 
     written: set = set()
 

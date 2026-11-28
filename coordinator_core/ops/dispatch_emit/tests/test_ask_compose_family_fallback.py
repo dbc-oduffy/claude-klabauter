@@ -10,11 +10,11 @@ import subprocess
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import ask_compose, family_invoke_record, stage_family, stage_family_binding
+from coordinator_core.ops.dispatch_emit import ask_compose, family_invoke_record, stage_family
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
 _RUN = "run-1"
-_OPTED = {"stage_family_binding": stage_family_binding.BINDING_REF}
+_OPTED = {"stage_families": {"review": "codex"}}
 
 
 def _script(monkeypatch, sizing: dict | None, sizing_rel: str | None = "sizing.yaml") -> str:
@@ -41,7 +41,7 @@ def test_opted_in_script_carries_the_family_arm_in_the_row_loop_and_the_late_loo
 
 
 def test_non_opted_in_script_carries_no_family_bytes(monkeypatch):
-    for sizing, rel in (({}, "sizing.yaml"), ({"stage_family_binding": ""}, "sizing.yaml")):
+    for sizing, rel in (({}, "sizing.yaml"), ({"stage_families": {}}, "sizing.yaml"), ({"stage_families": {"review": "claude"}}, "sizing.yaml")):
         script = _script(monkeypatch, sizing, rel)
         assert "_familyRun" not in script and "_FAMILY_RESULT_SCHEMA" not in script
 
@@ -52,7 +52,7 @@ def test_non_opted_in_script_equals_the_script_with_the_leg_disabled(monkeypatch
     assert _script(monkeypatch, _OPTED) == plain
 
 
-def test_foreign_binding_ref_keeps_the_leg_and_is_refused_at_stage_time(monkeypatch):
+def test_retired_binding_key_keeps_the_leg_and_is_refused_at_stage_time(monkeypatch):
     assert "async function _familyRun(r)" in _script(monkeypatch, {"stage_family_binding": "elsewhere"})
 
 

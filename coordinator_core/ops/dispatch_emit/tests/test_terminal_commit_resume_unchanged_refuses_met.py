@@ -18,7 +18,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 RUN = "ask-20261017T000000-abc123"
 REL = "state/sizings/2026-10-17-resume.yaml"
-MET = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
+MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 
 
 def _git(root, *a):

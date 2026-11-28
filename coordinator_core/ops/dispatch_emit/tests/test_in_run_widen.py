@@ -76,7 +76,12 @@ def test_classify_block(text, held, kind, path) -> None:
 
 
 def test_doctrine_path_halts_via_guard_constants() -> None:
-    for parts in (*w._CONTENT_ONLY_SURFACES, *w._PER_REPO_SURFACES):
+    from coordinator_core.write_guards.guard_doctrine_surface_edits import (
+        _CONTENT_ONLY_SURFACES,
+        _PER_REPO_SURFACES,
+    )
+
+    for parts in (*_CONTENT_ONLY_SURFACES, *_PER_REPO_SURFACES):
         assert isinstance(w.classify_block(_reply("/".join(parts)), ROOT, ()), w.Halt)
 
 
@@ -156,3 +161,14 @@ def test_record_widens_refuses_denied_surfaces_the_classifier_halts_on(tmp_path:
     items = [{"row": "r1", "path": p} for p in ("state/x.yaml", "CLAUDE.md", "sub/CLAUDE.md", ".git/config", "a//b.py")]
     assert w.record_widens(tmp_path, items) == 0
     assert w.widened_paths(tmp_path) == []
+
+
+def test_module_import_set_excludes_the_guard_trees() -> None:
+    """The unexecuted-plan-rows scan imports this module for `_reply_value`; the guard modules the deny
+    tables come from cost ~230ms to import and load only on first classification."""
+    import ast
+
+    tree = ast.parse(Path(w.__file__).read_text(encoding="utf-8"))
+    top = [n.module or "" for n in tree.body if isinstance(n, ast.ImportFrom)]
+    assert not [m for m in top if m.startswith(("coordinator_core.bash_guards", "coordinator_core.write_guards"))]
+    assert isinstance(w.classify_block(_reply("CLAUDE.md"), ROOT, ()), w.Halt)

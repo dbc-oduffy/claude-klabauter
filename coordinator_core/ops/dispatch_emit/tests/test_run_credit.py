@@ -74,9 +74,10 @@ SIZING = "state/sizings/2026-10-19-thing.yaml"
 
 
 def _run(tmp_path, name, sizing=SIZING, credits=(("C1", "e"),)):
+    from coordinator_core.ops.dispatch_emit import requirements_ledger
+
     d = tmp_path / rc.RECORD_DIR_ROOT / name
-    d.mkdir(parents=True)
-    (d / "run.json").write_text(json.dumps({"sizing_rel": sizing}), encoding="utf-8")
+    requirements_ledger._write_run(d, {"sizing_rel": sizing})
     if credits:
         rc.record(d, [{"chunk": c, "evidence": e} for c, e in credits], "t")
     return d

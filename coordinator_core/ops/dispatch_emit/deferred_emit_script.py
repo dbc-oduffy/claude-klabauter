@@ -248,11 +248,10 @@ if (handoff === null || typeof handoff !== 'object') return first.result;
 // Trap: one hop only. A gate agent that already ran dispatch.emit leaves its reply keys in the hand-off; those are never emit params. emit_error is a launcher child's failed retry: dispatch.emit refuses it as a key, so the hop emits without it.
 const { path: _rp, run_id: _rr, ok: _rk, error: _re, emit_error: _ee, fire_args: _rf, ...chainParams } = handoff;
 const _fail = (why) => _halted({ status: 'failed', run_id: ASK_RUN_ID, error: 'the chained run did not complete (' + why + '); the ask run ' + ASK_RUN_ID + ' stays resumable' });
-// Trap: the payload rides a quoted heredoc on stdin; JSON.stringify escapes every newline, so the body is one line and cannot equal the tag.
-const _chainTag = 'CHAIN_PARAMS_JSON';
+// Trap: the payload is one single-quoted argument, never a heredoc (PowerShell cannot parse one); JSON.stringify escapes every newline so it is one line, and the quote and every non-ASCII char are \u-escaped so the argument holds no `'`.
 // Trap: the hand-off the ask script returns names the sizing and no EM brief, so the chained run would compose without it; the deferred params' brief keys ride the hop.
 // Trap: an LLM retypes a 64-hex digest wrongly, so the brief keys never enter the relay's prompt: the emitting script wrote them, with the launcher flag, session_id and target_root, to _carryFile, and the fixed command merges that file over the hand-off.
-// Trap: sizing_path and chain_parent exist only after the ask run returns and a workflow script has no filesystem, so the fixed command reads them from the ask run's own run.json (sizing_rel) and a run-id argument, never from the heredoc body.
+// Trap: sizing_path and chain_parent exist only after the ask run returns and a workflow script has no filesystem, so the fixed command reads them from the ask run's own run.json (sizing_rel) and a run-id argument, never from the JSON argument.
 const _carryFile = __CARRY_FILE__;
 const _askId = _pathRunId(ASK_SCRIPT_PATH) || ASK_RUN_ID;
 const _fromRunJson = _carryFile !== '' && chainParams.ask === true && typeof chainParams.sizing_path === 'string'
@@ -260,21 +259,22 @@ const _fromRunJson = _carryFile !== '' && chainParams.ask === true && typeof cha
 const { ask: _xa, sizing_path: _xs, session_id: _xi, target_root: _xt, chain_parent: _xc, launcher_child: _xl, ...chainExtras } = chainParams;
 const _chainJson = JSON.stringify(_fromRunJson ? chainExtras : (_carryFile !== '' ? chainParams : { ...chainParams, __LAUNCHER_PARAM__: true }));
 // Trap: warp_home in the carry file serves only the run.json join; a hand-off with no ask/sizing_path (a research sizing) takes this merge, and dispatch.emit refuses the key.
-const _mergePy = "import json,sys; d=json.load(sys.stdin); c=json.load(open(sys.argv[1], encoding='utf-8')); c.pop('warp_home', None); d.update(c); print(json.dumps(d))";
-const _runJsonPy = "import json,os,sys; c=json.load(open(sys.argv[1], encoding='utf-8')); d=json.load(sys.stdin); r=json.load(open(os.path.join(c.pop('warp_home'), sys.argv[2], 'run.json'), encoding='utf-8')); d.update(ask=True, sizing_path=r['sizing_rel'], chain_parent=sys.argv[2]); d.update(c); print(json.dumps(d))";
-const _emitTail = ' <<\'' + _chainTag + '\' | ' + INVOKE + ' ' + EMIT_OP + ' --params-file -\n';
+const _mergePy = "import json,sys; d=json.loads(sys.argv[2]); c=json.load(open(sys.argv[1], encoding='utf-8')); c.pop('warp_home', None); d.update(c); print(json.dumps(d))";
+const _runJsonPy = "import json,os,sys; c=json.load(open(sys.argv[1], encoding='utf-8')); d=json.loads(sys.argv[3]); r=json.load(open(os.path.join(c.pop('warp_home'), sys.argv[2], 'run.json'), encoding='utf-8')); d.update(ask=True, sizing_path=r['sizing_rel'], chain_parent=sys.argv[2]); d.update(c); print(json.dumps(d))";
+const _chainArg = "'" + _chainJson.replace(/[\u007f-￿]/g, (ch) => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0')).replace(/'/g, '\\u0027') + "'";
+const _emitTail = ' | ' + INVOKE + ' ' + EMIT_OP + ' --params-file -';
 const _emitCmd = _fromRunJson
-  ? __PYTHON__ + ' -c "' + _runJsonPy + '" "' + _carryFile + '" "' + _askId + '"' + _emitTail
+  ? __PYTHON__ + ' -c "' + _runJsonPy + '" "' + _carryFile + '" "' + _askId + '" ' + _chainArg + _emitTail
   : (_carryFile !== ''
-    ? __PYTHON__ + ' -c "' + _mergePy + '" "' + _carryFile + '"' + _emitTail
-    : INVOKE + ' ' + EMIT_OP + ' --params-file - <<\'' + _chainTag + '\'\n');
+    ? __PYTHON__ + ' -c "' + _mergePy + '" "' + _carryFile + '" ' + _chainArg + _emitTail
+    : INVOKE + ' ' + EMIT_OP + ' ' + _chainArg);
 let chain;
 if (typeof _re === 'string' && _re !== '') return _fail('emit failed: ' + _re);
 function _relayEmit() {
   return agent(
     __AUTHORITY__
-    + ' Run this command once, with the command word exactly as written and copy the heredoc body byte for byte:\n'
-    + _emitCmd + _chainJson + '\n' + _chainTag + '\n\n'
+    + ' Run this command once, with the command word exactly as written and the single-quoted JSON argument copied byte for byte:\n'
+    + _emitCmd + '\n\n'
     + 'Then '
     + 'return path, run_id and fire_args from its JSON reply verbatim. When the command is denied or fails, '
     + "return the command's error text verbatim in the error field, with path as an empty string and fire_args as {}; on success omit error. "

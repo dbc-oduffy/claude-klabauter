@@ -495,6 +495,59 @@ def test_branch_gate(branch, expect_push, expect_message):
         assert message is None
 
 
+def _repo_with_user(tmp_path, monkeypatch, name):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "no-such-global"))
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    body = f'[user]\n\tname = {name}\n' if name else "[core]\n\tbare = false\n"
+    (git_dir / "config").write_text(body, encoding="utf-8", newline="\n")
+    return str(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "branch,expect_push",
+    [
+        ("example-operator/machine-a/codex-discoverability", True),
+        ("example-operator/mac-mini/2026-11-24", True),
+        ("otheruser/machine-a/x", False),
+        ("main", False),
+        ("release/1.0", False),
+        ("migration/legacy", False),
+        ("example-operator", False),
+        ("example-operator/", False),
+    ],
+)
+def test_branch_gate_admits_the_configured_users_prefix(tmp_path, monkeypatch, branch, expect_push):
+    root = _repo_with_user(tmp_path, monkeypatch, "example-operator")
+    assert auto_push.branch_gate(branch, root)[0] is expect_push
+
+
+def test_branch_gate_user_prefix_needs_repo_root_and_a_configured_name(tmp_path, monkeypatch):
+    root = _repo_with_user(tmp_path, monkeypatch, None)
+    assert auto_push.branch_gate("example-operator/machine-a/x", root)[0] is False
+    assert auto_push.branch_gate("example-operator/machine-a/x")[0] is False
+
+
+def test_branch_gate_user_named_main_still_refuses_main(tmp_path, monkeypatch):
+    root = _repo_with_user(tmp_path, monkeypatch, "main")
+    assert auto_push.branch_gate("main/machine-a/x", root)[0] is False
+
+
+@pytest.mark.parametrize("name", ["release", "migration", "feature"])
+def test_branch_gate_user_named_like_a_protected_prefix_admits_nothing(tmp_path, monkeypatch, name):
+    root = _repo_with_user(tmp_path, monkeypatch, name)
+    assert auto_push.branch_gate(f"{name}/machine-a/x", root)[0] is False
+
+
+def test_branch_gate_reads_global_name_when_repo_has_none(tmp_path, monkeypatch):
+    root = _repo_with_user(tmp_path, monkeypatch, None)
+    glob = tmp_path / "gitconfig"
+    glob.write_text('[user]\n\tname = "example-operator" # me\n\temail = a@b\n', encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(glob))
+    assert auto_push.branch_gate("example-operator/machine-a/x", root)[0] is True
+    assert auto_push.branch_gate("otheruser/machine-a/x", root)[0] is False
+
+
 # The two main()-driven
 # branch-gate-skip stderr tests retired with main(); branch_gate() itself
 # stays covered by test_branch_gate above.

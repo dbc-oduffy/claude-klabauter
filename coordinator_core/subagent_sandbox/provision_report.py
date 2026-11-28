@@ -110,32 +110,10 @@ from coordinator_core.subagent_sandbox.engine import (
 #: so admitting it widens no traversal surface.
 MUTATES = [".coordinator-local/subagent-share/**/*.md", ".coordinator-local/plan-sidecars/*.md"]  # session/agent-id-keyed sidecar docs and pointer index (_write_sidecar_pointer, _provision, _provision_plan_derivable_doc), plan-stem-keyed for the four G2 plan-pipeline emitters; data-dependent filenames, not a fixed artifact
 
-_SEGMENT_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._@-]+")
-
-#: Sanitized segments that must still be rejected even though the
-#: whitelist above preserves dots -- a bare '..' (or '.') survives the
-#: character whitelist untouched and must be caught explicitly.
-_REJECTED_SEGMENTS = {"", ".", ".."}
-
-
-def _sanitize_segment(seg: str) -> Optional[str]:
-    """Reduce ``seg`` to a single safe path segment, or ``None`` if unsafe.
-
-    Whitelists ``[A-Za-z0-9._@-]``, collapsing each run of anything else
-    ('/', '\\', ':', and everything else that could smuggle a directory
-    separator) to a single '-', then rejects the degenerate '.'/'..'/empty
-    results the whitelist alone would let through. Never calls
-    ``Path.resolve()`` -- mirrors the engine's normalized-but-unresolved-string
-    discipline (engine.normalize_file_path).
-
-    Leading and trailing '-' are trimmed so a segment cannot open with the
-    substitution character, and a segment that survives as punctuation alone is
-    rejected rather than becoming a bare '-'.
-    """
-    sanitized = _SEGMENT_WHITELIST_RE.sub("-", seg).strip("-")
-    if sanitized in _REJECTED_SEGMENTS:
-        return None
-    return sanitized
+from coordinator_core.subagent_sandbox.path_segment import (  # noqa: E402 -- leaf; guards import it without this module
+    SEGMENT_WHITELIST_RE as _SEGMENT_WHITELIST_RE,
+    sanitize_segment as _sanitize_segment,
+)
 
 
 #: Leaf of the sidecar POINTER index, under the same

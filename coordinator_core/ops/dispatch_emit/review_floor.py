@@ -178,6 +178,12 @@ def no_delta_code_paths(code_paths: Iterable[str], changed_paths: Iterable[str])
     return not any(c == d or c.startswith(d + "/") for d in declared for c in changed)
 
 
+def review_scope_empty(declared_code: Iterable[str], scope_files: Iterable[str]) -> bool:
+    """True when review owes code (`review_owed_paths(declared_code)` is non-empty) and the prep's
+    frozen scope holds no review-owed path; a run declaring no code is never an empty scope."""
+    return bool(review_owed_paths(declared_code)) and not review_owed_paths(scope_files)
+
+
 NO_DELTA_JS = """\
 const _noDeltaCodePaths = (codePaths, changedPaths) => {
   const norm = (p) => String(p).replace(/\\\\/g, '/').replace(/^\\.\\//, '').replace(/\\/+$/, '');

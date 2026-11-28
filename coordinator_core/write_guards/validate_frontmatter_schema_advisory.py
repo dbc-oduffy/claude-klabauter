@@ -122,6 +122,7 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.content_root import read_content_root
 from coordinator_core.write_guards._case_fold_path import casefold_path, repo_relative
+from coordinator_core.write_guards._schema_cache import cached_load_schemas as _cached_load_schemas
 from coordinator_core.write_guards._repo_root import (
     resolve_repo_root as _shared_resolve_repo_root,
 )
@@ -575,7 +576,7 @@ def _merge_memo_schemas(schemas: dict) -> dict:
     """
     memo_schemas_dir = Path(__file__).resolve().parents[1] / "contract"
     try:
-        memo_schemas = load_schemas(str(memo_schemas_dir))
+        memo_schemas = _cached_load_schemas(str(memo_schemas_dir), lambda d: load_schemas(d))
     except Exception:  # noqa: BLE001 — fail-open, never block on infra
         return schemas
 
@@ -1594,7 +1595,8 @@ def check(payload: dict) -> Optional[dict]:
 
     try:
         schemas = _retry_on_transient_read_failure(
-            lambda: load_schemas(str(_VENDORED_SCHEMAS_DIR)), exists_path=_VENDORED_SCHEMAS_DIR
+            lambda: _cached_load_schemas(str(_VENDORED_SCHEMAS_DIR), lambda d: load_schemas(d)),
+            exists_path=_VENDORED_SCHEMAS_DIR,
         )
     except Exception:  # noqa: BLE001 — mirrors reference's schema-load try/catch
         return None

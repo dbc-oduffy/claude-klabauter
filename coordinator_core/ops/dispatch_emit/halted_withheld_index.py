@@ -32,6 +32,7 @@ INDEX_DIR = ".coordinator-local/halt-withheld"
 SENTINEL = ".built-v2"
 _PRINTS_FILE = "withheld-prints.json"
 _MANIFEST_FILE = "manifest.json"
+PERSIST_DEADLINE_MS = 150.0
 _clock = time.monotonic  # one in-flight read cannot be pre-empted; the bound is between files
 
 
@@ -108,6 +109,7 @@ def _parse_stat_keyed(file, key: str, st) -> Optional[RunEntry]:
 
 _CACHE_FILE = ".coordinator-local/halt-withheld-cache.json"
 _PARSE_MISSES = [0]  # entries parsed from disk by this process; `entries` persists the cache when it moves
+_PERSIST_DIRTY: set = set()
 _LOADED: dict = {}  # repo root -> {index file name: [[mtime_ns, size], packed entry]}
 
 
@@ -166,10 +168,18 @@ def _persist(root: str, index: str) -> None:
         if os.path.dirname(key) == index and key.endswith(".json") and hit[2] is not None:
             rows[os.path.basename(key)] = [[hit[0], hit[1]], _pack(hit[2])]
     _LOADED[str(Path(root))] = rows
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
+
     try:
-        atomic_write_bytes(_cache_path(root), json.dumps(rows, separators=(",", ":")).encode("utf-8"))
+        outcome = halt_resume_record.bounded_write(
+            _cache_path(root), json.dumps(rows, separators=(",", ":")).encode("utf-8"), PERSIST_DEADLINE_MS, preserve_mode=False
+        )
     except OSError:
-        pass
+        return
+    if outcome is halt_resume_record.STALLED:
+        _PERSIST_DIRTY.add(str(Path(root)))
+    else:
+        _PERSIST_DIRTY.discard(str(Path(root)))
 
 
 def _drop_cached(repo_root: Path, run_id: str) -> None:
@@ -436,8 +446,9 @@ def entries(repo_root: Path, unreadable: Optional[set] = None) -> dict:
         _SNAPSHOT[key] = (dir_ns, dict(out), frozenset(bad))
     else:
         _SNAPSHOT.pop(key, None)
-    if _PARSE_MISSES[0] != misses:  # after the settle decision: the write must not age the listing
-        _persist(os.path.dirname(os.path.dirname(key)), key)
+    persist_root = os.path.dirname(os.path.dirname(key))
+    if _PARSE_MISSES[0] != misses or str(Path(persist_root)) in _PERSIST_DIRTY:
+        _persist(persist_root, key)
     return out
 
 

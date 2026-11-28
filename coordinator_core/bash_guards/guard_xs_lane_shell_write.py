@@ -106,7 +106,7 @@ def _unprojectable_extras(cmd: str, cwd: str, root: str, found: List[Any]) -> Li
 def _check(cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]) -> None:
     from coordinator_core.bash_guards._shell_write_projection import shell_writes
     from coordinator_core.hooks._em_write_budget import advised_deny_envelope, shell_write_budget
-    from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
+    from coordinator_core.hooks._repo_root_walk import repo_root as _repo_root
     from coordinator_core.session import xs_lane_budget as xlb
 
     if "agent_id" in payload or not session_id:

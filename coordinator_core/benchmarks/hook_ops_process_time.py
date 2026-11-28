@@ -1,4 +1,8 @@
-"""Process time of the three hook ops over the 200ms one-process bar, single and under concurrent load.
+"""Process time of the hook ops over the 200ms one-process bar, single and under concurrent load.
+
+The five dispatch ops (`DISPATCH_OPS`) are also held to `DISPATCH_BAR_MS` of server CPU per call
+(`under_dispatch_bar`) and report `io_ops_per_call`: the `open`/`os.listdir`/`os.scandir` audit events of one
+steady call. `--phase quiet|bulk-delete` labels the box state and is stored on the row.
 
 Process time is defined here once, for every reader (C3, C4, the baseline JSON):
 
@@ -24,9 +28,9 @@ held heavy op, then `CONCURRENT_HOOKS` hook calls (the three ops round-robin) th
 `stall_free` is true only when every hook answered; `process_ms_per_call` is the whole-process CPU of the
 burst over the calls answered.
 
-Usage: python -m coordinator_core.benchmarks.hook_ops_process_time [--n N] [--label base|end] [--no-write] [--json]
+Usage: python -m coordinator_core.benchmarks.hook_ops_process_time [--n N] [--label base|end] [--phase quiet|bulk-delete] [--no-write] [--json]
 The default label is `base` while the baseline JSON has no base row, `end` afterwards; a row with the same
-label is replaced. Exit 0 on a completed run; the bar is reported per op (`under_bar`), not enforced.
+label and phase is replaced. Exit 0 on a completed run; the bar is reported per op (`under_bar`), not enforced.
 """
 
 from __future__ import annotations
@@ -65,9 +69,46 @@ STALL_CAP_SECS = 8.0
 OP_GUARD_EDITOR = "hooks.guard_editor_python_direct"
 OP_TASKSTOP = "hooks.taskstop_launch_recorder"
 OP_PREUSE_BASH = "hooks.preuse_bash_dispatch"
-HOOK_OPS = (OP_GUARD_EDITOR, OP_TASKSTOP, OP_PREUSE_BASH)
+OP_PREUSE_WRITE = "hooks.preuse_write_dispatch"
+OP_POSTUSE_ADVISORY = "hooks.postuse_advisory_dispatch"
+OP_PREUSE_SEARCH = "hooks.preuse_search_dispatch"
+#: The five dispatch ops held to `DISPATCH_BAR_MS` and an IO-op bound per call.
+DISPATCH_OPS = (OP_PREUSE_BASH, OP_PREUSE_WRITE, OP_POSTUSE_ADVISORY, OP_PREUSE_SEARCH, OP_GUARD_EDITOR)
+HOOK_OPS = (OP_GUARD_EDITOR, OP_TASKSTOP, OP_PREUSE_BASH, OP_PREUSE_WRITE, OP_POSTUSE_ADVISORY, OP_PREUSE_SEARCH)
+DISPATCH_BAR_MS = 50.0
+PHASES = ("quiet", "bulk-delete")
+_IO_EVENTS = frozenset({"open", "os.listdir", "os.scandir"})
 
 _CLIENT_ARGV = [sys.executable, "-c", "from coordinator_core.warm import entry_seam"]
+
+
+class _IOCounter:
+    """Counts `open`, `os.listdir`, `os.scandir` audit events (any thread) while entered.
+
+    Portable per-call file IO, unlike Windows per-process IO counters, which include pipe traffic.
+    `sys.addaudithook` cannot be removed, so one hook is installed per process and gated on `_active`."""
+
+    _installed = False
+    _active: Optional["_IOCounter"] = None
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    @staticmethod
+    def _hook(event: str, _args: Any) -> None:
+        active = _IOCounter._active
+        if active is not None and event in _IO_EVENTS:
+            active.count += 1
+
+    def __enter__(self) -> "_IOCounter":
+        if not _IOCounter._installed:
+            sys.addaudithook(_IOCounter._hook)
+            _IOCounter._installed = True
+        _IOCounter._active = self
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        _IOCounter._active = None
 
 
 def _write_route_table(root: Path) -> None:
@@ -96,7 +137,12 @@ def _payloads(fx: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
            "session_id": "bench", "cwd": cwd}
     post = {"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": command},
             "tool_response": {"stdout": "ok"}, "session_id": "bench", "cwd": cwd}
-    return {OP_GUARD_EDITOR: pre, OP_TASKSTOP: post, OP_PREUSE_BASH: pre}
+    write = {"hook_event_name": "PreToolUse", "tool_name": "Edit", "session_id": "bench", "cwd": cwd,
+             "tool_input": {"file_path": str(fx["edit"]), "old_string": "old line", "new_string": "new line"}}
+    search = {"hook_event_name": "PreToolUse", "tool_name": "Grep", "session_id": "bench", "cwd": cwd,
+              "tool_input": {"pattern": "old line", "path": str(fx["reports"])}}
+    return {OP_GUARD_EDITOR: pre, OP_TASKSTOP: post, OP_PREUSE_BASH: pre, OP_PREUSE_WRITE: write,
+            OP_POSTUSE_ADVISORY: post, OP_PREUSE_SEARCH: search}
 
 
 def _quantile(ordered: List[float], pct: float) -> float:
@@ -127,8 +173,14 @@ def measure_op(op: str, payload: Dict[str, Any], n: int) -> Dict[str, Any]:
             reentrant_dispatch(op, payload)
 
     amortised = in_process_time_ms(one)
+    io_counts = []
+    for _ in range(max(1, min(n, 5))):
+        with _IOCounter() as io:
+            one()
+        io_counts.append(io.count)
     return {
         "op": op,
+        "io_ops_per_call": max(io_counts),
         "cold_ms": cold["process_ms"],
         "p50_ms": round(statistics.median(ordered), 1),
         "p95_ms": round(_quantile(ordered, 0.95), 1),
@@ -144,6 +196,11 @@ def cold_under_bar(row: Dict[str, Any]) -> bool:
     return row["cold_ms"] < BAR_MS
 
 
+def under_dispatch_bar(row: Dict[str, Any]) -> bool:
+    """True when the op's own per-call server CPU is under `DISPATCH_BAR_MS`; the shared client import is not the op's cost."""
+    return row["server_cpu_ms"] < DISPATCH_BAR_MS
+
+
 def measure_single(n: int, fx: Dict[str, Any]) -> List[Dict[str, Any]]:
     client = measure_client()
     rows = []
@@ -153,6 +210,7 @@ def measure_single(n: int, fx: Dict[str, Any]) -> List[Dict[str, Any]]:
         row["process_ms"] = round(row["server_cpu_ms"] + client["client_ms"], 1)
         row["spawn_count"] = row["spawns"] + client["client_procs"]
         row["under_bar"] = row["process_ms"] < BAR_MS
+        row["under_dispatch_bar"] = under_dispatch_bar(row)
         row["cold_under_bar"] = cold_under_bar(row)
         rows.append(row)
     return rows
@@ -292,10 +350,12 @@ def measure_concurrent(
         "errors": errors[:5],
         "wall_context_max_ms": round(max(waits), 1) if waits else None,
         "under_bar": per_call is not None and per_call < BAR_MS,
+        "under_dispatch_bar": per_call is not None and per_call < DISPATCH_BAR_MS,
     }
 
 
-def run(n: int = 15) -> Dict[str, Any]:
+def run(n: int = 15, phase: str = "quiet") -> Dict[str, Any]:
+    """One measured pass; `phase` is the operator's label for the box state (`bulk-delete` = a bulk delete is running)."""
     from coordinator_core.temp_layout import managed_temp_dir
 
     with managed_temp_dir(prefix="hook-ops-pt-") as td:
@@ -305,7 +365,8 @@ def run(n: int = 15) -> Dict[str, Any]:
         _write_route_table(root)
         single = measure_single(n, fx)
         concurrent_row = measure_concurrent(fx)
-    return {"head": _head(), "n": n, "bar_ms": BAR_MS, "single": single, "concurrent": concurrent_row}
+    return {"head": _head(), "n": n, "phase": phase, "bar_ms": BAR_MS, "dispatch_bar_ms": DISPATCH_BAR_MS,
+            "single": single, "concurrent": concurrent_row}
 
 
 def _next_label(path: Path) -> str:
@@ -317,28 +378,35 @@ def _next_label(path: Path) -> str:
 
 
 def write_row(result: Dict[str, Any], label: str, path: Path = BASELINE_PATH) -> None:
-    """Replace the row carrying `label` in the baseline JSON, or append it."""
+    """Replace the row carrying `label` and the result's `phase` in the baseline JSON, or append it.
+
+    A row without a `phase` (written before phases existed) reads as `quiet`."""
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         doc = {"schema": 1, "bar_ms": BAR_MS, "rows": []}
-    doc["rows"] = [r for r in doc.get("rows", []) if r.get("label") != label] + [{"label": label, **result}]
+    phase = result.get("phase", "quiet")
+    doc["dispatch_bar_ms"] = DISPATCH_BAR_MS
+    doc["rows"] = [r for r in doc.get("rows", [])
+                   if not (r.get("label") == label and r.get("phase", "quiet") == phase)] + [{"label": label, **result}]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
 
 
 def format_report(result: Dict[str, Any]) -> str:
     lines = [
-        f"head={result['head']} n={result['n']} bar={result['bar_ms']:.0f}ms "
-        "(process time = server op CPU + hook client process; never wall)",
-        "%-34s %8s %8s %8s %8s %10s %9s %7s %s"
-        % ("op", "cold_ms", "p50_ms", "p95_ms", "cpu_ms", "client_ms", "total_ms", "spawns", "under_bar"),
+        f"head={result['head']} n={result['n']} phase={result.get('phase', 'quiet')} bar={result['bar_ms']:.0f}ms "
+        f"dispatch_bar={DISPATCH_BAR_MS:.0f}ms (process time = server op CPU + hook client process; never wall)",
+        "%-34s %8s %8s %8s %8s %10s %9s %7s %6s %9s %s"
+        % ("op", "cold_ms", "p50_ms", "p95_ms", "cpu_ms", "client_ms", "total_ms", "spawns", "io_ops",
+           "under_bar", "under_dispatch_bar"),
     ]
     for r in result["single"]:
         lines.append(
-            "%-34s %8.1f %8.1f %8.1f %8.3f %10.1f %9.1f %7.1f %s%s%s"
+            "%-34s %8.1f %8.1f %8.1f %8.3f %10.1f %9.1f %7.1f %6d %9s %s%s%s"
             % (r["op"], r["cold_ms"], r["p50_ms"], r["p95_ms"], r["server_cpu_ms"], r["client_ms"], r["process_ms"],
-               r["spawn_count"], r["under_bar"], "" if cold_under_bar(r) else "  COLD_OVER_BAR",
+               r["spawn_count"], r["io_ops_per_call"], r["under_bar"], r["under_dispatch_bar"],
+               "" if cold_under_bar(r) else "  COLD_OVER_BAR",
                f"  slow_phase={r['slow_phase']}" if r["slow_phase"] else "")
         )
     c = result["concurrent"]
@@ -357,10 +425,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n", type=int, default=15)
     parser.add_argument("--label", default=None)
+    parser.add_argument("--phase", choices=PHASES, default="quiet")
     parser.add_argument("--no-write", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    result = run(n=args.n)
+    result = run(n=args.n, phase=args.phase)
     if not args.no_write:
         write_row(result, args.label or _next_label(BASELINE_PATH))
     print(json.dumps(result, indent=2) if args.json else format_report(result))

@@ -125,7 +125,7 @@ def test_await_pool_result_counts_a_completed_future_as_progress() -> None:
 
 
 def test_await_pool_result_counts_a_completed_future_with_a_repo_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(server, "_drive_verdict", lambda root: None)
+    monkeypatch.setattr(server, "_drive_verdict", lambda root, *_: None)
     fut: concurrent.futures.Future = concurrent.futures.Future()
     fut.set_result({"ok": True})
     assert server._await_pool_result(fut, 5.0, tmp_path) == {"ok": True}
@@ -133,7 +133,7 @@ def test_await_pool_result_counts_a_completed_future_with_a_repo_root(tmp_path: 
 
 
 def test_a_guard_lane_completion_is_not_progress_on_either_wait_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(server, "_drive_verdict", lambda root: None)
+    monkeypatch.setattr(server, "_drive_verdict", lambda root, *_: None)
     for root in (None, tmp_path):
         fut: concurrent.futures.Future = concurrent.futures.Future()
         fut.set_result({"ok": True})

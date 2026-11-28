@@ -3,7 +3,8 @@
 A non-irreversible hook payload gets a systemMessage + additionalContext allow
 advisory naming the failure detail, never the bare JSON-RPC indeterminate body
 (the hook dispatcher renders that as "said nothing"); an irreversible payload
-is denied; the non-hook path keeps the JSON-RPC body.
+is allowed with a warning naming the unchecked command; the non-hook path keeps
+the JSON-RPC body.
 """
 
 from __future__ import annotations
@@ -75,8 +76,14 @@ int main(int argc, char **argv) {
     size_t n = fread(buf, 1, sizeof buf, stdin);
     if (argc > 1) {
         char reason[640];
-        door_irreversible_deny_reason(reason, sizeof reason, argv[1]);
+        door_irreversible_unchecked_reason(reason, sizeof reason, argv[1], argc > 2 ? argv[2] : NULL);
         puts(reason);
+        return 0;
+    }
+    if (getenv("WANT_COMMAND")) {
+        char command[24];
+        int hit = door_payload_irreversible_command(buf, n, command, sizeof command);
+        printf("%d|%s\n", hit, command);
         return 0;
     }
     printf("%d\n", door_payload_is_irreversible(buf, n));
@@ -164,24 +171,39 @@ def test_only_a_pretooluse_bash_payload_is_matched(matcher):
     assert not _matches(matcher, json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {}}).encode())
 
 
-def test_the_deny_reason_carries_the_detail_and_the_retry_instruction(matcher):
-    proc = subprocess.run([str(matcher), "read deadline 10000 ms"], input=b"", capture_output=True, timeout=30,
-                          **no_console_creationflags())
+def test_the_unchecked_reason_carries_the_detail_and_the_command(matcher):
+    proc = subprocess.run([str(matcher), "read deadline 10000 ms", "git push origin main"], input=b"",
+                          capture_output=True, timeout=30, **no_console_creationflags())
     reason = proc.stdout.decode("utf-8").strip()
     assert reason == (
-        "coordinator: the engine gave no usable answer after delivery (read deadline 10000 ms); an "
-        "irreversible-external command is not run unguarded. Retry once warm answers."
+        "coordinator-door: irreversible-shaped command allowed UNCHECKED, no engine verdict "
+        "(read deadline 10000 ms): git push origin main"
     )
 
 
+def test_the_captured_command_is_one_line_and_cut_with_an_ellipsis(matcher):
+    env = dict(os.environ, WANT_COMMAND="1")
+
+    def run(command: str) -> str:
+        proc = subprocess.run([str(matcher)], input=_payload(command), capture_output=True, env=env, timeout=30,
+                              **no_console_creationflags())
+        return proc.stdout.decode("utf-8").strip()
+
+    assert run("git push\norigin main") == "1|git push origin main"
+    assert run("echo hi") == "0|"
+    assert run("git push origin " + "x" * 60) == "1|git push origin " + "x" * 4 + "..."
+
+
 @pytest.mark.parametrize("source", [DOOR_WINDOWS_C, DOOR_POSIX_C], ids=lambda p: p.name)
-def test_both_doors_deny_an_irreversible_command_ahead_of_both_post_delivery_branches(source):
+def test_both_doors_warn_and_allow_an_irreversible_command_ahead_of_both_post_delivery_branches(source):
     text = source.read_text(encoding="utf-8")
     failure = text[text.index("static int emit_post_delivery_failure("):]
     failure = failure[: failure.index("\n}\n")]
     assert "door_payload_is_irreversible(g_hook_payload, g_hook_payload_len)" in failure
     assert failure.index("door_payload_is_irreversible") < failure.index("g_precheck_armed")
-    assert failure.index("emit_hook_deny(reason)") < failure.index("emit_hook_post_delivery")
+    assert failure.index("door_log_cold_leg_kill(1)") < failure.index("emit_hook_irreversible_unchecked(detail)")
+    assert failure.index("emit_hook_irreversible_unchecked(detail)") < failure.index("emit_hook_post_delivery")
+    assert "emit_hook_deny" not in failure
 
 
 def _run_hook_door(root: Path, entrypoint: str, timeout: float = 30, command: str | None = None):
@@ -235,7 +257,7 @@ _PRECHECK_ENTRYPOINT = "hooks.preuse_bash_dispatch"
 @pytest.mark.warm_tier
 @pytest.mark.cadence
 @WINDOWS_ONLY
-def test_a_wedged_engine_denies_git_push_and_passes_a_commit_message_that_mentions_it(tmp_path):
+def test_a_wedged_engine_warns_on_git_push_and_passes_a_commit_message_that_mentions_it(tmp_path):
     from coordinator_core.warm.tests.test_door_read_deadline import _WedgedServer
 
     root = make_stub_engine_root(tmp_path)
@@ -250,10 +272,10 @@ def test_a_wedged_engine_denies_git_push_and_passes_a_commit_message_that_mentio
             wedge.close()
     pushed, mentioned = results
 
-    deny = json.loads(pushed.stdout.decode("utf-8"))["hookSpecificOutput"]
-    assert deny["permissionDecision"] == "deny"
-    assert "irreversible-external command is not run unguarded" in deny["permissionDecisionReason"]
-    assert "Retry once warm answers." in deny["permissionDecisionReason"]
+    denied = json.loads(pushed.stdout.decode("utf-8"))["hookSpecificOutput"]
+    assert denied["permissionDecision"] == "deny"
+    assert "DENIED" in denied["permissionDecisionReason"]
+    assert "git -C . push origin main" in denied["permissionDecisionReason"]
 
     body = json.loads(mentioned.stdout.decode("utf-8"))
     assert "permissionDecision" not in json.dumps(body)
@@ -405,13 +427,15 @@ def test_a_cold_engine_whose_cold_guard_overruns_fails_open_at_the_bar_and_logs(
 @pytest.mark.spawns_process
 @pytest.mark.warm_tier
 @_POSIX_ONLY
-def test_a_cold_guard_overrun_still_denies_an_irreversible_command(posix_door, tmp_path, runtime_base):
+def test_a_cold_guard_overrun_warns_and_allows_an_irreversible_command(posix_door, tmp_path, runtime_base):
     from coordinator_core.warm.tests import test_door_read_deadline_posix as posix
 
     root = posix._make_stub_engine_root(tmp_path)
     _slow_cold_guard(root)
     proc, _ = _posix_hook_run(posix_door, root, runtime_base, tmp_path / "settings", command="git push origin main")
 
-    deny = json.loads(proc.stdout.decode("utf-8"))["hookSpecificOutput"]
-    assert deny["permissionDecision"] == "deny"
+    denied = json.loads(proc.stdout.decode("utf-8"))["hookSpecificOutput"]
+    assert denied["permissionDecision"] == "deny"
+    assert "DENIED" in denied["permissionDecisionReason"]
+    assert "git push origin main" in denied["permissionDecisionReason"]
     assert len(_fail_open_lines(tmp_path / "settings")) == 1

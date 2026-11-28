@@ -119,11 +119,29 @@ def test_paraphrased_register_over_uncovered_turns_is_refused(turns_repo, capsys
     assert (turns_repo / _REL).read_bytes() == before
 
 
+_BACKED = "'\"take a nap, back soon\" rule-out:T9'"
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["conversational, no instruction", "'\"take a nap, back soon\" and nothing else'",
+     "'\"never said in turn 2\" rule-out:T9'"],
+)
+def test_unrelated_turn_without_a_quote_and_backing_is_refused(turns_repo, capsys, reason):
+    rows = f"  - id: a\n    source_text: \"{_PHRASE}\"\n    surface: cli\n    status: open\n"
+    extra = f"unrelated_turns:\n  - turn: 2\n    reason: {reason}\n"
+    (turns_repo / "reg.yaml").write_text(_reg(rows, extra), encoding="utf-8")
+    before = (turns_repo / _REL).read_bytes()
+    assert sa.main(["--register", "reg.yaml", "--write", _REL]) == sa.EXIT_BUSINESS_FAIL
+    assert "turn 2" in capsys.readouterr().out
+    assert (turns_repo / _REL).read_bytes() == before
+
+
 def test_verbatim_row_plus_unrelated_turn_records(turns_repo):
     rows = (
         f"  - id: a\n    source_text: \"{_PHRASE}\"\n    surface: cli\n    status: open\n"
     )
-    extra = "unrelated_turns:\n  - turn: 2\n    reason: conversational, no instruction\n"
+    extra = f"unrelated_turns:\n  - turn: 2\n    reason: {_BACKED}\n"
     (turns_repo / "reg.yaml").write_text(_reg(rows, extra), encoding="utf-8")
     assert sa.main(["--register", "reg.yaml", "--write", _REL]) == 0
 
@@ -147,12 +165,13 @@ def test_register_overlay_from_stdin_drops_waives_and_adds_with_defaults(turns_r
 
     full = f"  - id: a\n    source_text: \"{_PHRASE}\"\n    surface: cli\n    status: open\n"
     full += "  - id: nap\n    source_text: take a nap\n    surface: internal\n    status: open\n"
-    extra = "unrelated_turns:\n  - turn: 2\n    reason: chat\n"
+    extra = f"unrelated_turns:\n  - turn: 2\n    reason: {_BACKED}\n"
     (turns_repo / "reg.yaml").write_text(_reg(full, extra), encoding="utf-8")
     assert sa.main(["--register", "reg.yaml", "--write", _REL]) == 0
 
+    reason = '"take a nap, back soon" rule-out:T9 (restated)'
     overlay = (
-        "drop: [nap]\nunrelated_turns:\n  - turn: 2\n    reason: conversational\n"
+        f"drop: [nap]\nunrelated_turns:\n  - turn: 2\n    reason: '{reason}'\n"
         "rows:\n  - id: b\n    source_text: keep the groom parameters exposed\n"
         "  - id: a\n    surface: ui\n"
     )
@@ -163,7 +182,7 @@ def test_register_overlay_from_stdin_drops_waives_and_adds_with_defaults(turns_r
         ("a", "ui", "open"), ("b", "internal", "open"),
     ]
     assert reg["rows"][1]["claimed_by"] == []
-    assert reg["unrelated_turns"] == [{"turn": 2, "reason": "conversational"}]
+    assert reg["unrelated_turns"] == [{"turn": 2, "reason": reason}]
 
 
 def test_overlay_dropping_an_unknown_row_is_refused(repo, capsys):
@@ -233,7 +252,7 @@ def test_derive_register_reads_powershell_piped_scout_register(turns_repo, monke
     phrase = "use the _shape_ that comes back from the hairless build"
     text = (
         f"register_rows:\r\n  - id: a\r\n    source_text: \"{phrase}\"\r\n    surface: cli\r\n"
-        "verbatim_accounting:\r\n  2: \"unrelated — chat\"\r\n"
+        "verbatim_accounting:\r\n  2: 'unrelated — \"take a nap, back soon\" rule-out:T9'\r\n"
     )
     monkeypatch.setattr("sys.stdin", _ByteStdin(text.encode(encoding)))
     argv = ["--derive-register", "--scout-register", "-", "--write", _REL]

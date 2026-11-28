@@ -73,11 +73,65 @@ def test_dead_pid_never_reported_live(tmp_path: Path, monkeypatch: pytest.Monkey
     assert line["pids"] == [111] and line["dead_pids"] == [222]
 
 
-def test_no_holder_fails_open_and_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _no_fleet(monkeypatch) -> None:
+    monkeypatch.setattr(nomination, "fleet_holder", lambda directory=None, now=None, local_id=None: None)
+
+
+def test_request_with_no_holder_keeps_plain_denial_and_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, None)
-    r = admission_post.post("START", "s1", [os.getpid()], directory=tmp_path)
+    _no_fleet(monkeypatch)
+    r = admission_post.post("REQUEST", "s1", [os.getpid()], directory=tmp_path, declared_peak_mb=512)
     assert r == {"posted": False, "reason": "no_box_holder"}
     assert not (tmp_path / "box").exists()
+
+
+@pytest.mark.parametrize("phase", ["START", "END"])
+def test_no_holder_spools_and_reports_degraded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
+    _holder(monkeypatch, None)
+    _no_fleet(monkeypatch)
+    r = admission_post.post(phase, "s1", [os.getpid()], run="r", directory=tmp_path, now=7.0)
+    assert r["posted"] is False and r["delivered"] is False
+    assert r["spooled"] is True and r["degraded"] is True
+    assert r["reason"] == "no_box_holder" and "spool_error" not in r
+    assert r["holder_live"] is False and r["phase"] == phase and r["pids"] == [os.getpid()]
+    spool = tmp_path / "box" / "admission-spool.jsonl"
+    assert r["path"] == str(spool)
+    (line,) = [json.loads(x) for x in spool.read_text(encoding="utf-8").splitlines()]
+    assert line["phase"] == phase and line["holder_session"] is None and line["ts"] == 7.0
+    assert not admission_post.admission_path(tmp_path).exists()
+
+
+def test_spool_failure_reports_not_spooled_and_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.group_em import admission_spool
+
+    _holder(monkeypatch, None)
+    _no_fleet(monkeypatch)
+    monkeypatch.setattr(admission_spool, "spool_line", lambda line, directory=None: "write_failed:OSError:disk")
+    r = admission_post.post("START", "s1", [], directory=tmp_path)
+    assert r["spooled"] is False and r["degraded"] is True and r["delivered"] is False
+    assert r["spool_error"] == "write_failed:OSError:disk" and r["reason"] == "no_box_holder"
+
+
+def test_record_undelivered_marks_degraded_and_spooled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _holder(monkeypatch, None)
+    _no_fleet(monkeypatch)
+    posted = admission_post.post("START", "s1", [], directory=tmp_path)
+    admission_post.record_undelivered(tmp_path, posted)
+    rec = json.loads((tmp_path / "admission-undelivered.json").read_text(encoding="utf-8"))
+    assert rec["degraded"] is True and rec["spooled"] is True and rec["phase"] == "START"
+    assert "START degraded (spooled), run proceeds: no_box_holder" in capsys.readouterr().err
+
+
+def test_record_undelivered_plain_failure_is_not_degraded(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    admission_post.record_undelivered(tmp_path, {"phase": "START", "reason": "short_write", "path": "p"})
+    rec = json.loads((tmp_path / "admission-undelivered.json").read_text(encoding="utf-8"))
+    assert rec["degraded"] is False and rec["spooled"] is False
+    assert "START undelivered, run proceeds: short_write" in capsys.readouterr().err
+
+
+def test_record_undelivered_not_spooled_wording(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    admission_post.record_undelivered(tmp_path, {"phase": "END", "reason": "no_box_holder", "degraded": True, "spooled": False})
+    assert "END degraded (not spooled), run proceeds: no_box_holder" in capsys.readouterr().err
 
 
 class _DeniedPath:

@@ -13,7 +13,7 @@ import pytest
 
 from coordinator_core.warm import breadcrumb, client, election
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="AF_UNIX stub")
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="AF_UNIX stub")
 
 _MSG = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
 
@@ -82,6 +82,7 @@ def _land_sidecar(value: str) -> None:
     (d / "door.engine-root.txt").write_text(value + "\n")
 
 
+@posix_only
 def test_foreign_sidecar_root_is_foreign_and_goes_cold(
     stub: list, tmp_path: Path
 ) -> None:
@@ -91,6 +92,7 @@ def test_foreign_sidecar_root_is_foreign_and_goes_cold(
     assert stub == []
 
 
+@posix_only
 def test_matching_sidecar_root_still_reaches_the_server(stub: list) -> None:
     _land_sidecar(str(client._engine_clone_root()))
     assert client._configured_root_is_foreign() is False
@@ -98,9 +100,52 @@ def test_matching_sidecar_root_still_reaches_the_server(stub: list) -> None:
     assert len(stub) == 1
 
 
+@posix_only
 def test_endpoint_is_keyed_on_the_sidecar_root(stub: list, tmp_path: Path) -> None:
     baseline = client._endpoint_name("faketoken")
     _land_sidecar(str(tmp_path))
     keyed = client._endpoint_name("faketoken")
     assert keyed != baseline
     assert keyed == str(election.socket_path("faketoken", engine_clone=tmp_path))
+
+
+@pytest.fixture
+def plain_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    home = tmp_path / "settings"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    monkeypatch.setattr(client, "_scratch_sidecar_warned", False)
+    monkeypatch.setattr(client, "_scratch_sidecar_checked", set())
+    return home
+
+
+def _land_in(home: Path, value: str) -> None:
+    (home / "bin").mkdir(parents=True)
+    (home / "bin" / "door.engine-root.txt").write_text(value + "\n")
+
+
+def _scratch_tree(tmp_path: Path) -> Path:
+    (tmp_path / ".git").mkdir()
+    arm = tmp_path / "scratch" / "arm"
+    arm.mkdir(parents=True)
+    return arm
+
+
+def test_scratch_sidecar_warns_once_and_still_returns_the_root(
+    plain_settings: Path, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    arm = _scratch_tree(tmp_path)
+    _land_in(plain_settings, str(arm))
+    assert client._door_sidecar_root() == str(arm)
+    assert client._door_sidecar_root() == str(arm)
+    err = capsys.readouterr().err
+    assert err.count("names a scratch tree") == 1
+
+
+def test_non_scratch_sidecar_does_not_warn(
+    plain_settings: Path, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    _land_in(plain_settings, str(clone))
+    assert client._door_sidecar_root() == str(clone)
+    assert capsys.readouterr().err == ""

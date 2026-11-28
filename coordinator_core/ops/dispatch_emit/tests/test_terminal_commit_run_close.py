@@ -38,7 +38,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
     monkeypatch.setattr(terminal_commit, "CLOSE_JOB_SCRIPT", str(noop))
     monkeypatch.setattr(
-        claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], [])
+        claims, "list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([("handoff", "b.md")], [])
     )
     return {"repo": repo, "script": script, "outbox": outbox}
 

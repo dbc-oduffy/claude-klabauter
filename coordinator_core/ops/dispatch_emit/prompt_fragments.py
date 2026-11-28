@@ -164,9 +164,35 @@ def _chunks(content: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+_LINE_TERMINATOR = re.compile("[\r\n  ]")
+_TERMINATOR_ESCAPE = {"\r": "\\r", "\n": "\\n", " ": "\\u2028", " ": "\\u2029"}
+
+
+def _escape_terminators(content: str) -> str:
+    """``content`` with each raw JS line terminator spelled as its escape; a raw one ends a quoted literal early."""
+    return _LINE_TERMINATOR.sub(lambda m: _TERMINATOR_ESCAPE[m.group()], content)
+
+
+def _escape_literal_terminators(script: str) -> str:
+    """``script`` with every raw line terminator inside a quoted literal spelled as its escape (the value is unchanged)."""
+    if not _LINE_TERMINATOR.search(script):
+        return script
+    out: list[str] = []
+    last = 0
+    for s, e in _scan_literals(script):
+        body = script[s:e]
+        fixed = _escape_terminators(body)
+        if fixed != body:
+            out.append(script[last:s])
+            out.append(fixed)
+            last = e
+    out.append(script[last:])
+    return "".join(out)
+
+
 def _single_quoted_content(src: str, s: int, e: int) -> str:
-    """Literal content re-expressed for single quotes: `\\"` becomes `"` and a bare `'` becomes `\\'`."""
-    content = src[s + 1 : e - 1]
+    """Literal content re-expressed for single quotes: `\\"` becomes `"`, a bare `'` becomes `\\'`, a raw line terminator its escape."""
+    content = _escape_terminators(src[s + 1 : e - 1])
     if src[s] == "'":
         return content
     return "".join('"' if u == '\\"' else "\\'" if u == "'" else u for u in _ESC_UNIT.findall(content))
@@ -344,6 +370,7 @@ def hoist_repeated_fragments(script: str, *, anchor: str) -> str:
 
 
 def _hoist_repeated_fragments(script: str, *, anchor: str) -> str:
+    script = _escape_literal_terminators(script)
     spans = _scan_literals(script)
     per_literal = [_chunks(_single_quoted_content(script, s, e)) for s, e in spans]
     counts = Counter(c for chunks in per_literal for c in chunks if len(c) >= MIN_CHUNK)

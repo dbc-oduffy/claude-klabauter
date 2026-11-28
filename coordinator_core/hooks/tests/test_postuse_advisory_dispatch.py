@@ -587,3 +587,48 @@ def test_handler_does_not_print_the_ems_own_write_or_a_non_write_tool(tmp_path, 
         asyncio.run(pad._handler(params, repo_root=tmp_path))
 
     assert run_write_prints.read(tmp_path, "runW") is None
+
+
+def _abandoned_text(tmp_path, monkeypatch, marker):
+    """The abandoned-run advisory for a gone task whose script is a warp run with `marker` as its halted.json."""
+    import json
+    import time
+
+    tdir = tmp_path / "wfs"
+    tdir.mkdir()
+    monkeypatch.setattr(pad, "_managed_tmpdir", lambda: str(tdir))
+    run_id = "warp-abandon-1"
+    if marker is not None:
+        rd = tmp_path / "state" / "warp" / run_id
+        rd.mkdir(parents=True)
+        (rd / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
+    run_dir = tmp_path / "wfrun" / "subagents"
+    run_dir.mkdir(parents=True)
+    old = time.time() - 7200
+    (run_dir.parent / "journal.jsonl").write_text(
+        json.dumps({"type": "started", "agentId": "a1", "key": "k1", "label": "scout"}) + "\n", encoding="utf-8")
+    (run_dir / "agent-a1.jsonl").write_text("{}\n", encoding="utf-8")
+    for p in (run_dir.parent / "journal.jsonl", run_dir / "agent-a1.jsonl"):
+        os.utime(p, (old, old))
+    rec = {
+        "run_id": "wf_9", "scriptPath": str(tmp_path / "scratch" / "warp" / f"{run_id}.workflow.mjs"), "args": {},
+        "fired_at": time.time() - 3600, "session_id": "sess-9", "task_id": "t9",
+        "tool_use_id": "tu9", "transcript_dir": str(run_dir.parent),
+    }
+    Path(pad._workflow_run_record_path(str(tdir), "sess-9", "t9")).write_text(json.dumps(rec), encoding="utf-8")
+    tp = tmp_path / "session.jsonl"
+    tp.write_text(json.dumps({"content": "Error: No task found with ID: t9"}) + "\n", encoding="utf-8")
+    return pad.workflow_stall_resume_text("sess-9", str(tp), time.time())
+
+
+def test_abandoned_returned_halt_names_the_refire_not_a_resume(tmp_path, monkeypatch):
+    marker = {"status": "halted", "halted": "gate", "next_action": {"op": "engine-ask", "call": "engine-ask {sizing: s.yaml}"}}
+    text = _abandoned_text(tmp_path, monkeypatch, marker)
+    assert "abandoned" in text and "Refire: engine-ask {sizing: s.yaml}" in text
+    assert "resumeFromRunId" not in text
+
+
+@pytest.mark.parametrize("marker", [{"status": "halted", "halted": "usage_limit"}, None])
+def test_abandoned_usage_limit_or_unmarked_run_keeps_the_resume(tmp_path, monkeypatch, marker):
+    text = _abandoned_text(tmp_path, monkeypatch, marker)
+    assert "Resume: Workflow resumeFromRunId=wf_9" in text

@@ -27,6 +27,8 @@ _REDIRECT = {
     "destructive-git-revert": "git revert of named paths, or restore from a ref",
     "block-stash-destruction": "git stash show; keep the stash",
     "block-worktree-creation": "disjoint file scope on the shared tree",
+    "refuse-unrecordable-detached-spawn": "a foreground command, or run_in_background so the harness records it",
+    "block-clone-shaped-cruft":"work in the real working tree, or a per-round publish dir deleted after use",
     "block-whole-filesystem-scan": "a scoped search under the repo",
     "guard-disk-fill": "write under the repo or scratch on a drive with headroom",
     "runaway-find": "a find rooted under the repo with -maxdepth, or example-retrieval-repo",
@@ -41,7 +43,7 @@ _REDIRECT = {
     "check-test-suite-invocation": "a scoped pytest run of named test files, or the EM's scheduled suite leg",
     "guard-subagent-heavy-ue-launch": "return the launch to the EM as a slot leg",
     "block-subagent-destructive-action": "the trash-then-prune op",
-    "guard-uncapped-pytest-plugin": "python -m coordinator_core.testing.scoped_pytest --allow <target> -- <pytest args>",
+    "guard-uncapped-pytest-plugin": "scoped-pytest --allow <target> -- <pytest args>",
 }
 
 #: Deny-only bodies executed away. The sentinel and grant guards policed a door now owned by the

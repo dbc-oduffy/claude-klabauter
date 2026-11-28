@@ -66,11 +66,11 @@ def test_skew_server_attributes_still_resolve_lazily():
     assert skew.lifecycle is lifecycle
 
 
-def test_payload_miss_still_resolves_plugin_root_through_provision_report(monkeypatch):
-    from coordinator_core.subagent_sandbox import provision_report
+def test_payload_miss_still_resolves_plugin_root_through_the_leaf(monkeypatch):
+    from coordinator_core.subagent_sandbox import plugin_root
     from coordinator_core.warm import caller_context
 
-    monkeypatch.setattr(provision_report, "resolve_plugin_root", lambda: "ambient-root")
+    monkeypatch.setattr(plugin_root, "resolve_plugin_root", lambda: "ambient-root")
     ctx = caller_context.resolve_caller_context({"session_id": "s"})
     assert ctx.plugin_root == "ambient-root"
 

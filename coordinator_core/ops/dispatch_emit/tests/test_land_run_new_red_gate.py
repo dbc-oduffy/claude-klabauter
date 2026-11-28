@@ -116,3 +116,14 @@ def test_on_the_warm_request_path_the_gate_never_runs_and_the_landing_proceeds(h
 
     assert out["committed"] is True, out
     assert "warm land budget" in out["new_red_gate"]["advisory"], out
+
+
+def test_tests_could_run_scan_is_a_plain_git_spawn_not_a_capped_job(monkeypatch, tmp_path) -> None:
+    """`git grep` holds no grandchild: it runs through `run_git`, never the ~230ms capped job."""
+    from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+    from coordinator_core.diagnostics import contained_run
+
+    assert cov._plain_git_args(["grep", "-l", "-q"])
+    monkeypatch.setattr(contained_run, "spawn_in_capped_job", lambda *a, **k: (_ for _ in ()).throw(AssertionError("capped job")))
+    done = cov._run([cov._git_exe(), "grep", "-l", "-q", "-e", "x"], tmp_path, 5.0)
+    assert done.returncode in (0, 1, 128)

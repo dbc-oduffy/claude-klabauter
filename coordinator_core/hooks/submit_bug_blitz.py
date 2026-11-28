@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Optional
 
 from coordinator_core.bug_blitz.contract import (
@@ -259,16 +259,40 @@ def _work_root(root: Path, run_id: str) -> str:
     """Where the run's worker clone lives, computed with no spawn and no disk write; "" when it has no safe path.
     The clone is not provisioned here (a checkout would breach this hook's process budget): the fire args carry
     this path and the composed script's first call provisions it (`targeted-test-run provision`)."""
-    from coordinator_core import temp_layout
-    from coordinator_core.bug_blitz.worker_clone import CLONES_DIRNAME
+    from coordinator_core.bug_blitz.worker_clone import _clones_dir
     from coordinator_core.ops._path_guard import safe_id
 
     if not safe_id(run_id):
         return ""
     try:
-        return (temp_layout.coordinator_temp_root(root) / CLONES_DIRNAME / run_id).as_posix()
+        return (_clones_dir(root) / run_id).as_posix()
     except ValueError:
         return ""
+
+
+def _cone_dirs(tests: tuple) -> list[str]:
+    """The top-level directory of each failing test file, in first-seen order without duplicates. A root-level
+    file names none (cone mode always carries root files); an absolute, climbing or option-shaped path is
+    skipped, as `worker_clone.read_cone` refuses those."""
+    out: list[str] = []
+    for test in tests:
+        rel = PurePosixPath(str(test.file).replace("\\", "/"))
+        if rel.is_absolute() or len(rel.parts) < 2 or ".." in rel.parts or ":" in rel.parts[0] or rel.parts[0].startswith("-"):
+            continue
+        if rel.parts[0] not in out:
+            out.append(rel.parts[0])
+    return out
+
+
+def _write_cone(run_dir: Path, tests: tuple) -> None:
+    """Persist the worker clone's sparse cone beside the run's script; no dirs, no file (full checkout)."""
+    from coordinator_core.bug_blitz.worker_clone import CONE_FILE
+
+    dirs = _cone_dirs(tests)
+    if not dirs:
+        return
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / CONE_FILE).write_text("\n".join(dirs) + "\n", encoding="utf-8", newline="\n")
 
 
 def _write_decisions(
@@ -352,6 +376,9 @@ def _evaluate(
         spec = (resolve or _default_resolve)(target_raw, root)
     except Exception as exc:  # the resolve refusal text is the whole message
         return _refuse(f"{exc} [targets: {target_raw}]")
+    # The resolved absolute path, so a relative spelling and its absolute one reach mint and decisions.json alike.
+    if spec.path and Path(spec.path).is_absolute():
+        target_raw = Path(spec.path).as_posix()
     rulings = args.get("rulings") or ()
     applied: list[str] = []
     unmatched: list[str] = []
@@ -361,6 +388,10 @@ def _evaluate(
             parsed = (parse or _default_parse)(spec)
             if not parsed.tests:
                 raise ValueError("no failing test parsed")
+            try:
+                _write_cone(_run_dir(root, stamp), parsed.tests)
+            except OSError as exc:
+                raise ValueError(f"the sparse cone was not written: {exc}") from exc
             minted = (mint or _default_mint)(root, stamp, parsed.tests, target_ref=target_raw)
             if rulings:
                 applied, unmatched = _apply_rulings(root, stamp, [f"{QUEUE_DIR}/{m}.yaml" for m in minted], rulings)

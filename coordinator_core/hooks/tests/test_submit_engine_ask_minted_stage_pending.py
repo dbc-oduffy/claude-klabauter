@@ -78,8 +78,7 @@ def test_direct_start_answers_stage_pending_with_the_staged_twin(repo, tmp_path)
     got = _node(_direct_script(repo), tmp_path, [], [_pending(), {"done": True}])
     starts = _starts(got)
     assert [s["scriptPath"] for s in starts] == [f"{repo.as_posix()}/{RUN_REL}", _twin(repo)]
-    assert starts[0]["args"] == FIRE_ARGS
-    assert starts[1]["args"] == {**FIRE_ARGS, "_stage_loop_host": True}  # a staged twin runs at depth 1 and defers its stage reply to the loop
+    assert all(s["args"] == FIRE_ARGS for s in starts)
     assert got["out"] == {"done": True}
 
 

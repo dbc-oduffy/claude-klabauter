@@ -7,13 +7,20 @@ The per-box last-known cache (``read_last_known`` / ``write_last_known``) lives 
 ``LAST_KNOWN_PATH`` (resolved lazily; ``last_known_path()``).
 ``gpus[]`` rows are the ``gpu_sample`` shape (``index, name, vram_total_mib, vram_used_mib,
 util_pct``); ``disks[]`` rows are ``{mount, total_gb, free_gb, floor_gb}``.
+A box whose cores differ in class declares ``core_classes`` (``{"p": [core idx], "e": [...]}``) in its
+``box.json``; its row then carries ``core_classes`` and ``cores_by_class`` (maxima) and
+``free_cores_by_class`` (use). A box with no declaration carries none of the three: a count only.
+The persisted live snapshot (``live_snapshot_path`` / ``write_live_snapshot`` / ``read_live_snapshot``)
+is what the idle-balance tick reads.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import socket
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -29,7 +36,8 @@ STATE_BUSY = "busy"
 STATES = (STATE_OK, STATE_TIMED_OUT, STATE_UNREACHABLE, STATE_ERROR, STATE_OP_MISSING, STATE_BUSY)
 
 IDENTITY_FIELDS = ("alias", "os")
-MAXIMA_FIELDS = ("cores", "cpu_model", "ram_total_mb", "commit_limit_mb", "gpus", "disks")
+MAXIMA_FIELDS = ("cores", "cpu_model", "ram_total_mb", "commit_limit_mb", "gpus", "disks",
+                 "core_classes", "cores_by_class")
 USE_FIELDS = (
     "cpu_pct",
     "load5",
@@ -37,6 +45,7 @@ USE_FIELDS = (
     "commit_used_mb",
     "vram_used_mib",
     "gpu_util_pct",
+    "free_cores_by_class",
     "sessions",
     "jobs",
     "gpu_slot_holder",
@@ -185,6 +194,63 @@ def write_last_known(boxes: dict, path: Optional[Path] = None) -> None:
     atomic_write_bytes(target, (json.dumps(boxes, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
 
+LIVE_SNAPSHOT_RELPATH = Path("group-em") / "fleet-live-snapshot.json"
+
+
+def live_snapshot_path(home: Optional[Path] = None) -> Path:
+    """Where the persisted fleet live snapshot lives under settings_home()."""
+    return (Path(home) if home is not None else settings_home()) / LIVE_SNAPSHOT_RELPATH
+
+
+def write_live_snapshot(rows: list, now: float, path: Optional[Path] = None) -> None:
+    """Merge ``rows`` (one per box, keyed by ``box``) into the snapshot, each stamped ``observed_at=now``.
+
+    A box this call did not sample keeps its prior entry and its older ``observed_at``, so a
+    ``local_only`` call never erases the far boxes. Atomic; raises OSError on an unwritable target.
+    """
+    from coordinator_core.group_em.atomic_record import LockTimeout, holder_lock
+
+    target = Path(path if path is not None else live_snapshot_path())
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with holder_lock(target, timeout=2.0):
+            try:
+                prior = json.loads(target.read_text("utf-8")).get("boxes", {})
+            except (OSError, ValueError, AttributeError):
+                prior = {}
+            boxes = {k: v for k, v in prior.items() if isinstance(k, str) and isinstance(v, dict)} \
+                if isinstance(prior, dict) else {}
+            for row in rows:
+                if isinstance(row, dict) and isinstance(row.get("box"), str):
+                    boxes[row["box"]] = {"observed_at": now, "row": row}
+            atomic_write_bytes(target, (json.dumps({"boxes": boxes}, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    except LockTimeout as exc:
+        raise OSError(str(exc)) from exc
+
+
+def read_live_snapshot(max_age_s: float, now: Optional[float] = None, path: Optional[Path] = None) -> list:
+    """Every persisted row, each with ``age_s`` (seconds since its sample, else since observed) and
+    ``stale`` (``age_s > max_age_s``); a stale row keeps its state and is never free capacity. A
+    missing or malformed file reads as ``[]``. Never raises.
+    """
+    stamp = time.time() if now is None else now
+    try:
+        data = json.loads(Path(path if path is not None else live_snapshot_path()).read_text("utf-8"))
+        entries = data.get("boxes", {}).values()
+    except (OSError, ValueError, AttributeError):
+        return []
+    out = []
+    for entry in entries:
+        row = entry.get("row") if isinstance(entry, dict) else None
+        if not isinstance(row, dict):
+            continue
+        sampled, seen = row.get("sampled_at"), entry.get("observed_at")
+        base = sampled if isinstance(sampled, (int, float)) and not isinstance(sampled, bool) else seen
+        age = max(0.0, stamp - base) if isinstance(base, (int, float)) and not isinstance(base, bool) else None
+        out.append({**row, "age_s": age, "stale": age is None or age > max_age_s})
+    return sorted(out, key=lambda r: (str(r.get("alias")), str(r.get("box"))))
+
+
 def _host_label(record: dict) -> Optional[str]:
     t = record.get("transport")
     return _label(t.get("host")) if isinstance(t, dict) and t.get("kind") == "ssh" else None
@@ -279,6 +345,116 @@ def known_boxes(home: Optional[Path] = None) -> list:
     return out
 
 
+FREE_CORE_BUSY_PCT = 25.0
+_CORE_GAP_S = 0.1
+_CORE_REUSE_S = (0.2, 120.0)
+_core_prev: Optional[tuple] = None
+
+
+def valid_core_classes(value: object) -> Optional[dict]:
+    """``{"p": [idx...], "e": [idx...]}`` when ``value`` names two or more disjoint non-empty classes of
+    non-negative core indexes; None otherwise (a homogeneous or undeclared box)."""
+    if not isinstance(value, dict):
+        return None
+    out, seen = {}, set()
+    for name, idx in value.items():
+        if not isinstance(name, str) or not isinstance(idx, list) or not idx:
+            return None
+        if any(isinstance(i, bool) or not isinstance(i, int) or i < 0 or i in seen for i in idx):
+            return None
+        seen.update(idx)
+        out[name] = list(idx)
+    return out if len(out) >= 2 else None
+
+
+def read_core_classes(home: Optional[Path] = None) -> Optional[dict]:
+    """This box's declared ``core_classes`` from ``<home>/state/group-em/box.json`` (top level or under
+    ``capability``); None when undeclared. Never guesses a split."""
+    from coordinator_core.group_em import box_registry
+
+    try:
+        data = json.loads(box_registry._identity_path(home).read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    cap = data.get("capability")
+    return valid_core_classes(data.get("core_classes") or (cap.get("core_classes") if isinstance(cap, dict) else None))
+
+
+def _core_times() -> Optional[list]:
+    """Per logical core ``(idle, total)`` cumulative ticks; None on a host with no reader. No spawn."""
+    if os.name == "nt":
+        import ctypes
+
+        class _Perf(ctypes.Structure):
+            _fields_ = [("idle", ctypes.c_int64), ("kernel", ctypes.c_int64), ("user", ctypes.c_int64),
+                        ("dpc", ctypes.c_int64), ("interrupt", ctypes.c_int64), ("count", ctypes.c_ulong)]
+
+        buf = (_Perf * (os.cpu_count() or 1))()
+        got = ctypes.c_ulong()
+        if ctypes.WinDLL("ntdll").NtQuerySystemInformation(8, buf, ctypes.sizeof(buf), ctypes.byref(got)) != 0:
+            return None
+        return [(p.idle, p.kernel + p.user) for p in buf[: got.value // ctypes.sizeof(_Perf)]]
+    try:
+        with open("/proc/stat", "r", encoding="utf-8") as fh:
+            lines = [ln.split() for ln in fh if ln.startswith("cpu") and ln[3:4].isdigit()]
+    except OSError:
+        return None
+    return [(int(f[4]) + int(f[5]), sum(int(x) for x in f[1:9])) for f in lines] or None
+
+
+def read_core_busy_pct() -> Optional[list]:
+    """Busy percent per logical core since the previous call (kept in-process while the engine is warm);
+    a cold call takes a second reading ``_CORE_GAP_S`` later. None when the host has no reader."""
+    global _core_prev
+    cur, at = _core_times(), time.monotonic()
+    if cur is None:
+        return None
+    prev = _core_prev
+    if prev is None or not _CORE_REUSE_S[0] <= at - prev[0] <= _CORE_REUSE_S[1] or len(prev[1]) != len(cur):
+        time.sleep(_CORE_GAP_S)
+        prev, cur, at = (at, cur), _core_times(), time.monotonic()
+        if cur is None or len(prev[1]) != len(cur):
+            return None
+    _core_prev = (at, cur)
+    out = []
+    for (i0, t0), (i1, t1) in zip(prev[1], cur):
+        total = t1 - t0
+        out.append(0.0 if total <= 0 else round(max(0.0, min(100.0, (1 - (i1 - i0) / total) * 100.0)), 1))
+    return out
+
+
+def class_use(core_classes: dict, busy: Optional[list]) -> tuple:
+    """``(cores_by_class, free_cores_by_class)``; a core is free under ``FREE_CORE_BUSY_PCT`` busy.
+    ``free`` is None when ``busy`` does not cover every declared core."""
+    total = {name: len(idx) for name, idx in core_classes.items()}
+    if not isinstance(busy, list) or any(i >= len(busy) for idx in core_classes.values() for i in idx):
+        return total, None
+    return total, {name: sum(1 for i in idx if busy[i] < FREE_CORE_BUSY_PCT) for name, idx in core_classes.items()}
+
+
+def with_core_classes(raw: dict, classes: Optional[dict] = None, busy_reader: Any = None) -> dict:
+    """``raw`` plus ``core_classes``, ``cores_by_class`` and ``free_cores_by_class`` when this box
+    declares a split; the same dict untouched otherwise. Never raises."""
+    try:
+        declared = valid_core_classes(classes) if classes is not None else read_core_classes()
+        if declared is None:
+            return raw
+        busy = (busy_reader or read_core_busy_pct)()
+        total, free = class_use(declared, busy)
+        return {**raw, "core_classes": declared, "cores_by_class": total, "free_cores_by_class": free}
+    except Exception:  # noqa: BLE001 - the plain sample still stands
+        return raw
+
+
+def sample_local() -> dict:
+    """This box's ``capacity_probe.sample()`` plus its per-class cores (``with_core_classes``)."""
+    from coordinator_core.group_em import capacity_probe
+
+    return with_core_classes(capacity_probe.sample())
+
+
 DEFAULT_TIMEOUT_S = 8.0
 CAPACITY_OP = "groupem.capacity_local"
 _BUSY_REASONS = ("box_busy", "rate_limited", "box_lock_unavailable")
@@ -317,11 +493,7 @@ def _far_row(record: dict, timeout: float, invoke: Any) -> dict:
 
 
 def _local_row(local_sample: Any) -> dict:
-    if local_sample is None:
-        from coordinator_core.group_em import capacity_probe
-
-        local_sample = capacity_probe.sample
-    raw = local_sample()
+    raw = (local_sample or sample_local)()
     if not isinstance(raw, dict):
         return {"_fail": STATE_ERROR, "reason": "bad_sample"}
     return {"_row": raw}
@@ -329,7 +501,7 @@ def _local_row(local_sample: Any) -> dict:
 
 def gather(boxes: Optional[list] = None, timeout: float = DEFAULT_TIMEOUT_S, invoke: Any = None,
            local_sample: Any = None, cache_path: Optional[Path] = None, local_id: Optional[str] = None,
-           now: Optional[float] = None) -> list:
+           now: Optional[float] = None, snapshot_path: Optional[Path] = None) -> list:
     """One live row per registered box plus this box, fetched in parallel; never drops a box, never raises.
 
     ``boxes=None`` reads the registry plus the BOX SPECS roster through ``known_boxes`` (one record per
@@ -340,9 +512,9 @@ def gather(boxes: Optional[list] = None, timeout: float = DEFAULT_TIMEOUT_S, inv
     within about one ``timeout``. A box that does not answer in time is ``timed_out``; a refusal by a
     concurrent call is ``busy``; a stamp without the op is ``op_missing``; any other failure is
     ``unreachable``. Non-ok rows carry the box's last-known maxima and ``last_seen`` from the cache plus
-    a ``reason`` key; ok rows refresh the cache (the only write).
+    a ``reason`` key; ok rows refresh the cache (first write); every call merges its rows into the live
+    snapshot (second write, ``write_live_snapshot``; default beside ``cache_path`` when given).
     """
-    import time
     from concurrent.futures import ThreadPoolExecutor, wait
 
     from coordinator_core.group_em import box_registry
@@ -392,6 +564,10 @@ def gather(boxes: Optional[list] = None, timeout: float = DEFAULT_TIMEOUT_S, inv
             row["last_seen"] = row["sampled_at"]
             if not row["alias"]:
                 row["alias"] = box_alias(rec)
+            declared = valid_core_classes((rec.get("capability") or {}).get("core_classes")
+                                          if isinstance(rec.get("capability"), dict) else None)
+            if row["core_classes"] is None and declared is not None:
+                row["core_classes"], row["cores_by_class"] = declared, {k: len(v) for k, v in declared.items()}
             fresh[box_id] = maxima_record(row)
         else:
             lk = cache.get(box_id)
@@ -406,7 +582,13 @@ def gather(boxes: Optional[list] = None, timeout: float = DEFAULT_TIMEOUT_S, inv
             write_last_known(fresh, cache_path)
         except OSError:
             pass  # best-effort: the rows are still returned; only last-known persistence is lost
-    return sorted(rows, key=lambda r: (str(r["alias"]), r["box"]))
+    rows = sorted(rows, key=lambda r: (str(r["alias"]), r["box"]))
+    try:
+        write_live_snapshot(rows, stamp, snapshot_path if snapshot_path is not None else (
+            Path(cache_path).parent / LIVE_SNAPSHOT_RELPATH.name if cache_path is not None else None))
+    except OSError:
+        pass  # best-effort: the live snapshot is a convenience for the idle-balance tick
+    return rows
 
 
 _DOWN = (STATE_TIMED_OUT, STATE_UNREACHABLE)
@@ -434,7 +616,9 @@ def _max_text(row: dict) -> str:
     gpus = [g for g in (row.get("gpus") or []) if isinstance(g, dict)]
     gpu = ", ".join(f"{g.get('name') or '?'} {_gb(g.get('vram_total_mib'))}G" for g in gpus) or "no gpu"
     cores = row.get("cores")
-    return f"{cores if cores is not None else '?'}c {_gb(row.get('ram_total_mb'))}G ram {gpu}"
+    split = row.get("cores_by_class")
+    classes = f" ({'+'.join(f'{n}{k}' for k, n in split.items())})" if isinstance(split, dict) and split else ""
+    return f"{cores if cores is not None else '?'}c{classes} {_gb(row.get('ram_total_mb'))}G ram {gpu}"
 
 
 def _num(v: Any, suffix: str = "") -> str:
@@ -447,7 +631,9 @@ def _now_text(row: dict) -> str:
     vram = row.get("vram_used_mib")
     commit = f"{_gb(row.get('commit_used_mb'))}/{_gb(row.get('commit_limit_mb'))}G"
     jobs = row.get("jobs")
-    return (f"cpu {_num(row.get('cpu_pct'), '%')} free {_gb(row.get('ram_free_mb'))}G commit {commit} "
+    free = row.get("free_cores_by_class")
+    free_text = f" freecores {'/'.join(f'{n}{k}' for k, n in free.items())}" if isinstance(free, dict) and free else ""
+    return (f"cpu {_num(row.get('cpu_pct'), '%')}{free_text} free {_gb(row.get('ram_free_mb'))}G commit {commit} "
             f"vram {'?' if vram is None else _gb(vram)}G gpu {_num(row.get('gpu_util_pct'), '%')} "
             f"sess {_num(row.get('sessions'))} jobs {len(jobs) if isinstance(jobs, list) else '?'}")
 
@@ -455,8 +641,6 @@ def _now_text(row: dict) -> str:
 def render(snapshot: list, now: Optional[float] = None) -> str:
     """The compact table: ``FLEET CAPACITY`` then one line per row (never dropped); a non-ok box prints
     ``unknown (<reason>)`` for NOW and its last-seen age; a ``power it on?`` line follows per down box."""
-    import time
-
     stamp = time.time() if now is None else now
     lines = ["FLEET CAPACITY"]
     for row in snapshot:

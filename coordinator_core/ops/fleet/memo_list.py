@@ -482,7 +482,7 @@ def _enumerate_candidates() -> list:
 
     Receiver/publish-mirror path collision (send-path authority, per-id
     subtraction pattern applied at receiver granularity): a `repos.*` entry
-    whose registered path matches a `publish.mirrors.*.path` (compared via
+    whose registered path matches a `publish.mirrors.*` entry's path (compared via
     `_normalize_registry_path`, not string-similar ids — see that helper's
     docstring) is EXCLUDED from the `receiver` block entirely and surfaces
     only via its `publish_mirror` entry. This mirrors `_enumerate_publish_mirrors`'s

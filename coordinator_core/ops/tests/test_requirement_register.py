@@ -571,7 +571,10 @@ def test_unrelated_turns_waives_a_post_start_turn():
 
 
 def test_unrelated_turn_errors_refuses_unembedded_turn_and_empty_reason():
-    doc = _cov([{"turn": 1, "text": "a"}, {"turn": 2, "text": "b"}])
+    doc = _cov([
+        {"turn": 1, "text": "a"},
+        {"turn": 2, "text": "<agent-message>relayed</agent-message>"},
+    ])
     reg = {rr.UNRELATED_TURNS_KEY: [{"turn": 9, "reason": "r"}, {"turn": 1, "reason": "  "}, {"turn": 2, "reason": "ok"}]}
     errs = rr.unrelated_turn_errors(doc, reg)
     assert len(errs) == 2 and "turn 9" in errs[0] and "turn 1" in errs[1]

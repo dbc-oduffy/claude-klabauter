@@ -389,8 +389,11 @@ def deliver_onto_upstream(
     is at or ahead of tracking, else as an object-only commit on the upstream tip.
 
     Writes the anchor and one push-pending record under `sender_root`'s outbox.
+    A receiver with no push remote lands on its local tip only and writes no
+    push-pending record (nothing to push); `STATUS_NO_REMOTE` is returned only
+    when that local landing is unavailable.
     Returns a non-`ok` outcome (and writes no record) for a collision, a
-    missing remote or base, a clean-pipeline refusal, or a failed anchor.
+    missing base, a clean-pipeline refusal, or a failed anchor.
     """
     receiver_root = Path(receiver_root)
     landing = _receiver_landing.resolve_receiver_landing(receiver_root)
@@ -398,14 +401,15 @@ def deliver_onto_upstream(
         return _fail(STATUS_NO_BASE, "no deliverable branch in the receiver repo (no work/*, HEAD, main or master)")
     branch = landing.ref_relpath[len(_HEADS):]
     remote = resolve_push_remote(receiver_root, branch)
-    if remote is None:
-        return _fail(STATUS_NO_REMOTE, f"no push remote resolvable for {branch!r}", branch=branch)
+    local_only = remote is None
+    if local_only:
+        remote = ""
     common_dir = resolve_git_common_dir(receiver_root)
     base = resolve_base(common_dir, remote, branch)
     if base is None:
         return _fail(
             STATUS_NO_BASE, f"no tracking, local or main/master tip for {branch!r}",
-            remote=remote, branch=branch,
+            remote=remote or None, branch=branch,
         )
     message = Path(msg_file).read_text(encoding="utf-8")
     land_local = _land_on_head_branch if landing.mode == _receiver_landing.MODE_HEAD else _land_on_local_ref
@@ -413,12 +417,14 @@ def deliver_onto_upstream(
         receiver_root, rel_path, content, msg_file,
         remote=remote, branch=branch, message=message,
     )
+    if out is None and local_only:
+        return _fail(STATUS_NO_REMOTE, f"no push remote resolvable for {branch!r}", branch=branch)
     if out is None:
         out = _build_on_base(
             receiver_root, rel_path, content, msg_file, base,
             remote=remote, branch=branch, message=message,
         )
-    if not out.ok or out.record is None:
+    if not out.ok or out.record is None or local_only:
         return out
     written = _memo_push_pending.write_pending(sender_root, out.record)
     return out._replace(record_path=written)

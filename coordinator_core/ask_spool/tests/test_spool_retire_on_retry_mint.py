@@ -9,6 +9,9 @@ import pytest
 from coordinator_core.ask_spool import drain, record
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.hooks.tests import test_submit_engine_ask_real_emit as real
+from coordinator_core.locked_write import LockTimeout
+from coordinator_core.ops.dispatch_emit import run_token
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
 from coordinator_core.ops.dispatch_emit.requirements_ledger import HandoverPending
 
 repo = real.repo
@@ -81,6 +84,56 @@ def test_a_claimed_entry_is_left_to_the_drain_guard(repo):
     assert record.claim(str(repo), spool_id)
     _submit(repo, "toolu_retry", _minting_emit(repo / "retry.workflow.mjs"))
     assert Path(record.entry_path(str(repo), spool_id, record.CLAIMED_SUFFIX)).is_file()
+
+
+def _mint_then_lock_timeout(root: Path):
+    """Stands in for the engine: stages the run dir and its session token, then the emit loses its lock."""
+
+    def emit(_params, _root):
+        stage = root / RECORD_DIR_ROOT / RUN_ID / RUN_STAGE_FILE
+        stage.parent.mkdir(parents=True, exist_ok=True)
+        stage.write_text("{}", encoding="utf-8")
+        run_token.mint(root, RUN_ID, str(root / "scratch" / "x.workflow.mjs"), session_id="sess-real-emit")
+        raise LockTimeout("lock held")
+
+    return emit
+
+
+def test_a_lock_timeout_after_the_mint_retires_the_spooled_twin(repo):
+    _submit(repo, "toolu_first", _unavailable)
+    (spool_id,) = record.list_pending(str(repo))
+
+    env = _submit(repo, "toolu_retry", _mint_then_lock_timeout(repo))
+
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny", env
+    assert record.list_pending(str(repo)) == []
+    assert _withdrawn_header(repo, spool_id)["superseded_by"] == RUN_ID
+    engine = CountingEngine()
+    assert drain.run(str(repo), evaluate=engine)["minted"] == 0 and engine.calls == 0
+
+
+def test_an_emit_failure_that_minted_nothing_keeps_the_spool(repo):
+    _submit(repo, "toolu_first", _unavailable)
+
+    def failing(_params, _root):
+        raise LockTimeout("lock held")
+
+    _submit(repo, "toolu_retry", failing)
+    assert len(record.list_pending(str(repo))) == 1
+
+
+def test_an_overrun_that_minted_retires_the_spooled_twin(repo, monkeypatch):
+    _submit(repo, "toolu_first", _unavailable)
+    (spool_id,) = record.list_pending(str(repo))
+
+    def overran(*_a, **_k):
+        raise mod._EmitOverran("outran after minting", minted=True, run_ids=[RUN_ID])
+
+    monkeypatch.setattr(mod, "_emit_within_budget", overran)
+    _submit(repo, "toolu_retry", _unavailable)
+
+    assert record.list_pending(str(repo)) == []
+    assert _withdrawn_header(repo, spool_id)["superseded_by"] == RUN_ID
 
 
 def test_a_spool_error_never_fails_the_mint(repo, monkeypatch):

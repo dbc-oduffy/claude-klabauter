@@ -126,7 +126,7 @@ def _record(plugin: str) -> Any:
     from coordinator_core.guard_messages.alternative_record import AdaptableOffer, AlternativeRecord
 
     summary = f"BLOCKED: `pytest -p {plugin}` loads an ad-hoc plugin with no process cap."
-    tail = " Use `python -m coordinator_core.testing.scoped_pytest --allow <target> -- <pytest args>`."
+    tail = " Use `scoped-pytest --allow <target> -- <pytest args>`."
     return AlternativeRecord(
         verdict_kind="deny",
         guard_name=GUARD_NAME,
@@ -134,7 +134,7 @@ def _record(plugin: str) -> Any:
         em_text=summary + tail,
         members=(
             AdaptableOffer(
-                template="python -m coordinator_core.testing.scoped_pytest --allow <target> -- <pytest args>",
+                template="scoped-pytest --allow <target> -- <pytest args>",
                 what_to_adapt="the allowed target and the pytest args",
             ),
         ),

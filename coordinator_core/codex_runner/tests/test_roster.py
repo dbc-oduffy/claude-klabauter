@@ -38,6 +38,7 @@ def _patch_harness(monkeypatch) -> None:
         pid=1, start_epoch=1000.0, cwd="/repo", name="a-1",
         messaging_socket_path="/sock/a.sock", status=None)})
     monkeypatch.setattr(hr, "self_record", lambda: None)
+    monkeypatch.setattr(peer_roster, "_process_alive", lambda pid, start_epoch: True)
 
 
 def test_worker_outside_repo_filtered_unless_box_wide(monkeypatch: pytest.MonkeyPatch) -> None:

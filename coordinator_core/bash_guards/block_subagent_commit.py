@@ -6684,6 +6684,8 @@ _CHANNEL_LEG_TO_PARAMS_LEG = {
 #: Prefixes: the typed path is appended, so the deny message can name it.
 _LEG_PARAMS_FILE_MISSING = "leg:run-token-params-file-missing:"
 _LEG_PARAMS_FILE_UNPARSEABLE = "leg:run-token-params-file-unparseable:"
+#: Prefix: the superseding launcher's script path is appended.
+_LEG_PARAMS_SUPERSEDED = "leg:run-token-params-superseded:"
 
 #: Per-leg deny prose. Each names its OWN cause and the single edit that
 #: fixes it; none sends the reader to the pathspec-scope check unless the
@@ -6978,6 +6980,7 @@ def _deny_reason(
         for prefix, cause in (
             (_LEG_PARAMS_FILE_MISSING, "the spawn prompt is unreadable or holds no params block and the params file is missing"),
             (_LEG_PARAMS_FILE_UNPARSEABLE, "the spawn prompt is unreadable or holds no params block and the params file is unparseable"),
+            (_LEG_PARAMS_SUPERSEDED, "the run token is retired by a later launcher of this run, script"),
         ):
             if ownership_reason.startswith(prefix):
                 return (
@@ -7247,11 +7250,31 @@ def _prompt_sourced_params_admit_leg(
         return _LEG_PARAMS_PATH
     if not from_file:
         _, refusal = chan.materialize_from_prompt(git_root, prompt)
-        return None if refusal is None else _CHANNEL_LEG_TO_PARAMS_LEG.get(refusal, _LEG_PARAMS_PATH)
+        if refusal is None:
+            return None
+        leg = _CHANNEL_LEG_TO_PARAMS_LEG.get(refusal, _LEG_PARAMS_PATH)
+        if leg == _LEG_PARAMS_TOKEN:
+            leg = _superseded_leg(git_root, params["run_id"], params["script_path"]) or leg
+        return leg
     rid, tok, script = params["run_id"], params["run_token"], params["script_path"]
-    if not (run_token.halt_admits(git_root, rid, tok, script) or run_token.spent_receipt(git_root, rid, tok, script) is not None):
-        return _LEG_PARAMS_TOKEN
+    if not (run_token.halt_own_token(git_root, rid, tok, script) or run_token.spent_receipt(git_root, rid, tok, script) is not None):
+        return _superseded_leg(git_root, rid, script) or _LEG_PARAMS_TOKEN
     return None
+
+
+def _superseded_leg(git_root: str, run_id: str, script: str) -> Optional[str]:
+    """`_LEG_PARAMS_SUPERSEDED` + the newest launcher's script path when it differs from `script`, else None."""
+    from pathlib import Path
+
+    from coordinator_core.ops.dispatch_emit import ask_contract, halt_resume_record
+
+    try:
+        launcher = halt_resume_record.latest_launcher(ask_contract.record_dir(Path(git_root), run_id))
+    except (OSError, ValueError):
+        return None
+    if launcher is None or launcher["script_path"] == script:
+        return None
+    return _LEG_PARAMS_SUPERSEDED + launcher["script_path"]
 
 
 def _is_terminal_commit_params_file_cmd(cmd_for_scan: str) -> bool:
@@ -7320,7 +7343,7 @@ def _loose_params_file_value(cmd_for_scan: str) -> Optional[str]:
     Covers a redirect or extra flag beside the params file in the one segment: `apply_guard_level`
     can demote the shape's deny, the op then reads the file, and the strict extractor never wrote it.
     Trap: only the file write is widened; the shape verdict is unchanged, and the write still
-    needs the canonical path plus a token `halt_admits` accepts. A command of more than one
+    needs the canonical path plus a token `halt_own_token` accepts. A command of more than one
     segment (pipe, `&&`, `;`) never qualifies, and the path must be absolute.
     """
     tokens = _tokenize_full_command(cmd_for_scan)

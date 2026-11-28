@@ -80,6 +80,7 @@ _SAMPLE_FANOUT = "00"
 _LOOSE_NAME_LEN = 38
 _MIDX_MAGIC = b"MIDX"
 _MIDX_HEADER_LEN = 12
+_MIDX_LOCK_NAME = "multi-pack-index.lock"
 
 
 class StoreHygiene(NamedTuple):
@@ -87,6 +88,8 @@ class StoreHygiene(NamedTuple):
     midx_pack_count: Optional[int]
     loose_dirs_sampled: int
     loose_estimate: int
+    #: `{age_s, pack_count}` while an aged, unheld `multi-pack-index.lock` blocks MIDX writes.
+    stale_midx_lock: Optional[dict] = None
 
 
 def _midx_pack_count(midx_path: Path) -> Optional[int]:
@@ -122,11 +125,13 @@ def status(common_dir: Path) -> StoreHygiene:
     """Hygiene state of `common_dir`'s object store. Never raises on a missing store."""
     objects = Path(common_dir) / "objects"
     pack_dir = objects / "pack"
+    pack_count = _count_suffix(pack_dir, ".idx")
     return StoreHygiene(
-        pack_count=_count_suffix(pack_dir, ".idx"),
+        pack_count=pack_count,
         midx_pack_count=_midx_pack_count(pack_dir / "multi-pack-index"),
         loose_dirs_sampled=1,
         loose_estimate=_loose_in_fanout(objects) * 256,
+        stale_midx_lock=_stale_midx_lock(pack_dir, pack_count),
     )
 
 
@@ -225,10 +230,10 @@ def sweep_orphan_pack_files(common_dir, now: Optional[float] = None) -> int:
     Reaps `_orphan_pack_files`: temp packs, an idx-less `.pack`, a `.rev` without its
     `.pack`, each untouched for ORPHAN_PACK_AGE_S. Live `.pack`/`.idx`/`.rev` triplets,
     young files and unknown names stay. A partner that reappears between the listing and
-    the unlink keeps its file. The caller holds the object-store lock. Unlinks nothing while
-    `pack_deletion_pause` holds or another process holds the fleet maintenance lock."""
-    if pack_deletion_pause.paused():
-        return 0
+    the unlink keeps its file. The caller holds the object-store lock. An aged
+    `multi-pack-index.lock` is reaped even while `pack_deletion_pause` holds (it is no pack);
+    pack files are unlinked only when unpaused. Nothing is unlinked while another process
+    holds the fleet maintenance lock."""
     try:
         with fleet_maintenance_lock.hold(wait_s=0, holder_label="store_hygiene:orphan-sweep"):
             return _sweep_orphan_pack_files_locked(common_dir, now)
@@ -236,11 +241,63 @@ def sweep_orphan_pack_files(common_dir, now: Optional[float] = None) -> int:
         return 0
 
 
+def _lock_unheld(path: Path) -> bool:
+    """True when no process holds `path` open. Spawn-free probe: a rename away and back
+    succeeds only for an unheld file on Windows; POSIX renames an open file, so there age
+    alone is the evidence (a live midx write finishes in milliseconds)."""
+    if os.name != "nt":
+        return True
+    probe = path.with_name(path.name + ".probe")
+    try:
+        os.rename(path, probe)
+    except OSError:
+        return False
+    try:
+        os.rename(probe, path)
+    except OSError:
+        _unlink_quiet(probe)
+    return True
+
+
+def _aged_midx_lock(pack_dir: Path, now: float, probe_held: bool = False) -> Optional[Path]:
+    """The pack dir's `multi-pack-index.lock` when it is a regular file untouched for
+    ORPHAN_PACK_AGE_S, else None. With `probe_held` (the sweep only) a lock some process
+    holds is also None; read-only callers pass False so they never touch the file."""
+    path = pack_dir / _MIDX_LOCK_NAME
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_mtime >= now - ORPHAN_PACK_AGE_S:
+        return None
+    return path if not probe_held or _lock_unheld(path) else None
+
+
+def _stale_midx_lock(pack_dir: Path, pack_count: int) -> Optional[dict]:
+    """`{age_s, pack_count}` for an aged `multi-pack-index.lock`, else None. Age only, write-free:
+    the held probe runs in the sweep alone."""
+    now = time.time()
+    lock = _aged_midx_lock(pack_dir, now)
+    if lock is None:
+        return None
+    try:
+        age = now - lock.stat().st_mtime
+    except OSError:
+        return None
+    return {"age_s": int(age), "pack_count": pack_count}
+
+
 def _sweep_orphan_pack_files_locked(common_dir, now: Optional[float]) -> int:
     pack_dir = Path(common_dir) / "objects" / "pack"
-    names = _pack_dir_names(pack_dir)
+    now = time.time() if now is None else now
     removed = 0
-    for path, partner in _orphan_pack_files(pack_dir, names, time.time() if now is None else now):
+    lock = _aged_midx_lock(pack_dir, now, probe_held=True)
+    if lock is not None:
+        removed += _unlink_quiet(lock)
+    if pack_deletion_pause.paused():
+        return removed
+    names = _pack_dir_names(pack_dir)
+    for path, partner in _orphan_pack_files(pack_dir, names, now):
         if partner and (pack_dir / partner).exists():
             continue
         removed += _unlink_quiet(path)
@@ -260,7 +317,8 @@ def owed_by_threshold(common_dir) -> bool:
         return True
     pack_dir = common_dir / "objects" / "pack"
     names = _pack_dir_names(pack_dir)
-    if _orphan_pack_files(pack_dir, names, time.time()):
+    now = time.time()
+    if _aged_midx_lock(pack_dir, now) is not None or _orphan_pack_files(pack_dir, names, now):
         return True
     return s.pack_count > CONSOLIDATE_MAX_PACKS and len(_small_packs(pack_dir, names)) > CONSOLIDATE_MAX_PACKS
 

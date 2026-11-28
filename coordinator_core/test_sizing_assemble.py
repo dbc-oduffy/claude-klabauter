@@ -34,6 +34,7 @@ Run: cd /Users/example-operator/X/claude-klabauter && python3 -m pytest coordina
 from __future__ import annotations
 
 import itertools
+import pathlib
 
 import pytest
 
@@ -2214,6 +2215,46 @@ def test_express_lane_fires_the_ask_not_a_hand_dispatch() -> None:
 
     assert decision["fire"] == warp_fire.fire_command()
     assert "Dispatch directly" not in decision["next_move"]
+
+
+def _engine_skip_sizing(tmp_path):
+    from coordinator_core.session import record_homes
+
+    (tmp_path / ".git").mkdir()
+    path = pathlib.Path(record_homes.record_path(str(tmp_path), "sizings", "2026-10-02-x.yaml"))
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        'schema: sizing-object\nintent: "Ship the thing"\nestimate:\n  tshirt: XS\n  provisional: true\n'
+        "route: dispatch\ndetents: []\nfork: null\nxl_exit: null\nstatus: draft\n"
+        "premise:\n  provenance: unrecorded\n  evidence: PLACEHOLDER - cite the evidence\n"
+        "deliverable_id: null\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_engine_size_rule_skip_refuses_an_unwired_criterion_and_writes_nothing(tmp_path) -> None:
+    path = _engine_skip_sizing(tmp_path)
+    before = path.read_text(encoding="utf-8")
+    with pytest.raises(sa.SizingAssembleError, match="no wiring path"):
+        sa.write_back(
+            tmp_path, str(path), sa.route(estimate={"tshirt": "XS"}, intent="x"),
+            exit_criterion="Ship it", interaction_mode="ceo",
+        )
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_engine_size_rule_skip_records_a_wired_criterion(tmp_path) -> None:
+    import yaml
+
+    path = _engine_skip_sizing(tmp_path)
+    wired = "`coordinator-invoke sizing.assemble` writes it; `python -m pytest coordinator_core/test_sizing_assemble.py` passes"
+    sa.write_back(
+        tmp_path, str(path), sa.route(estimate={"tshirt": "XS"}, intent="x"),
+        exit_criterion=wired, interaction_mode="ceo",
+    )
+    ec = yaml.safe_load(path.read_text(encoding="utf-8"))["exit_criterion"]
+    assert ec["statement"] == wired and ec["accepted"]["source"] == "engine-size-rule"
 
 
 def test_scaffold_directive_out_is_month_sharded() -> None:

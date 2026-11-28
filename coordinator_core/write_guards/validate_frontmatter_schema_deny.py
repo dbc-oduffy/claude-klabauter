@@ -167,9 +167,11 @@ from coordinator_core.git.repo_root import show_toplevel as _git_show_toplevel
 from coordinator_core.content_root import read_content_root
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.write_guards._case_fold_path import casefold_path, repo_relative
+from coordinator_core.write_guards._schema_cache import cached_load_schemas as _cached_load_schemas
 from coordinator_core.frontmatter.schema_validate import (
     check_plan_tasks_grouping_approval as _check_plan_tasks_grouping_approval,
     load_schemas as _load_schemas,
+    match_glob as _match_glob,
     match_schema as _match_schema,
     parse_frontmatter as _parse_frontmatter,
     parse_yaml as _parse_yaml,
@@ -487,7 +489,9 @@ def _merge_memo_schemas(ctx: _Context, schemas: dict) -> dict:
     applied" guard (Review: code-reviewer — Finding 1 in the source).
     """
     try:
-        memo_schemas = _load_schemas(str(ctx.memo_schemas_dir))
+        memo_schemas = _cached_load_schemas(
+            str(ctx.memo_schemas_dir), lambda d: _load_schemas(d)
+        )
     except Exception:  # noqa: BLE001 — fail-open
         return schemas
 
@@ -1557,6 +1561,31 @@ def _evaluate_handoff_kind_enum(
     return _handoff_kind_off_enum_message(raw_str, enum_values)
 
 
+def _live_handoff_match_for_unrouted_kind(
+    repo_rel: str, frontmatter: Optional[dict], schemas: dict
+) -> Optional[dict]:
+    """The live ``handoff`` schema match for a write `_match_schema` left
+    unrouted because its string `kind` is registered nowhere, when the path
+    sits under the handoff schema's own glob; else ``None``.
+
+    `_match_schema` opts an unregistered-kind file out of glob routing, so
+    without this the off-enum deny never sees a ``state/handoffs/**`` write.
+    ``handoff-archived`` is never selected: only the ``handoff`` glob entry.
+    """
+    if not frontmatter or not isinstance(frontmatter.get("kind"), str):
+        return None
+    schema = schemas.get(_HANDOFF_KIND_SCHEMA_NAME)
+    if not isinstance(schema, dict):
+        return None
+    normalised = repo_rel.replace("\\", "/")
+    for entry in schemas.get("_byGlob") or ():
+        if entry.get("schemaName") == _HANDOFF_KIND_SCHEMA_NAME and _match_glob(
+            entry["glob"], normalised
+        ):
+            return {"schemaName": _HANDOFF_KIND_SCHEMA_NAME, "schema": schema}
+    return None
+
+
 _PLAN_STATUS_SCHEMA_NAME = "plan"
 _NO_PRIOR_PLAN_STATUS = object()
 
@@ -1953,7 +1982,7 @@ def _first_result(
     schema_corpus_retry_record: Dict[str, Any] = {}
     try:
         schemas = _retry_on_transient_read_failure(
-            lambda: _load_schemas(str(ctx.schemas_dir)),
+            lambda: _cached_load_schemas(str(ctx.schemas_dir), lambda d: _load_schemas(d)),
             exists_path=ctx.schemas_dir,
             record=schema_corpus_retry_record,
         )
@@ -2017,6 +2046,8 @@ def _first_result(
         match.get("schemaName"), match.get("schema"), frontmatter
     ):
         match = None
+    if not match:
+        match = _live_handoff_match_for_unrouted_kind(repo_rel, frontmatter, schemas)
     if not match:
         # Second always-WARN finding (see module docstring): the write opens
         # a frontmatter block that does not parse. That is precisely WHY no

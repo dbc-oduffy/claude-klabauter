@@ -410,6 +410,7 @@ def _dispatch_admitted(mode: str, root: Path, repo_root: Path, params: dict, bud
 
 if TYPE_CHECKING:
     from coordinator_core.bounded_io import IoIndeterminate
+    from coordinator_core.ops.dispatch_emit.run_token import HaltWriteIndeterminate
 
 HALT_READ_REFUSED = "halt-read-indeterminate"
 
@@ -421,6 +422,8 @@ def _dispatch_halted_bounded(root: Path, repo_root: Path, params: dict) -> dict:
     from coordinator_core.bounded_io import IoIndeterminate
     from coordinator_core.git import call_io_scope
     from coordinator_core.git.git_state import head_sha
+    from coordinator_core.ops.dispatch_emit import halt_resume_record, run_token
+    from coordinator_core.ops.dispatch_emit.run_token import HaltWriteIndeterminate
 
     head_before: Optional[str] = None
     started = False
@@ -431,14 +434,35 @@ def _dispatch_halted_bounded(root: Path, repo_root: Path, params: dict) -> dict:
             try:
                 head_before = head_sha(root, fresh=True)
                 started = True
-                return _dispatch_mode("halted", root, repo_root, params)
+                with halt_resume_record.write_budget(run_token.HALT_WRITE_DEADLINE_MS):
+                    return _dispatch_mode("halted", root, repo_root, params)
             except IoIndeterminate as exc:
                 if not warmed_again and started and _head_after_stall(root) == head_before:
                     warmed_again = True
                     _await_read_drain(exc.path)
                 else:
                     return _halt_read_reply(root, params, exc, head_before, started)
+            except HaltWriteIndeterminate as exc:
+                return _halt_write_reply(exc)
         _warm_test_leg_checkin(root, params)
+
+
+HALT_WRITE_REFUSED = "halt-write-indeterminate"
+
+
+def _halt_write_reply(exc: "HaltWriteIndeterminate") -> dict:
+    """The reply for a halted landing whose commit landed but whose receipt write stalled."""
+    sha = exc.landed.get("sha")
+    return {
+        "committed": True, "sha": sha, "paths": list(exc.landed.get("paths") or []),
+        "refused": HALT_WRITE_REFUSED, "retry_safe": True, "path": exc.path,
+        "next_action": "re-send the same dispatch.land_run",
+        "error": (
+            f"{HALT_WRITE_REFUSED}: write of {exc.path} outlived its deadline; commit {sha} landed."
+            if exc.started
+            else f"{HALT_WRITE_REFUSED}: write of {exc.path} not started (a write is already outstanding); commit {sha} landed."
+        ),
+    }
 
 
 #: Longest the one halt-read stall retry waits for the stalled worker to finish; a wedged read outlasts it and parks.
@@ -2981,6 +3005,63 @@ def _peer_held_left(peer_held: dict) -> dict:
 
 PEER_CLAIM_LOOKUP_DEADLINE_S = 0.3
 
+_RECENCY_ONLY_BASES = frozenset({"recency-window", "recency-window-mtime"})
+_SPAWN_LINEAGE_HOPS = 4
+
+
+def _spawn_parent(sid: str) -> str:
+    """``parent_session_id`` on ``sid``'s host-session row, exited or not; ``""`` when none is recorded."""
+    import json
+    import uuid
+
+    from coordinator_core.session import external_registry
+
+    try:
+        if str(uuid.UUID(sid)) != sid.lower():
+            return ""
+        for provider in external_registry.PROVIDERS:
+            path = external_registry.registry_dir(provider=provider) / f"{sid.lower()}.json"
+            if not path.is_file():
+                continue
+            row = json.loads(path.read_text(encoding="utf-8"))
+            parent = row.get("parent_session_id") if isinstance(row, dict) and row.get("session_id") == sid.lower() else None
+            return parent if isinstance(parent, str) else ""
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return ""
+
+
+def _spawned_by(sid: str, selves: Collection, cache: dict) -> bool:
+    """True when ``sid``'s recorded parent lineage (at most ``_SPAWN_LINEAGE_HOPS`` hops) reaches one of ``selves``."""
+    if sid in cache:
+        return cache[sid]
+    walked, current, found = [], sid, False
+    for _ in range(_SPAWN_LINEAGE_HOPS):
+        walked.append(current)
+        current = _spawn_parent(current)
+        if not current or current in walked:
+            break
+        if current in selves or cache.get(current):
+            found = True
+            break
+    for hop in walked:
+        cache[hop] = found
+    return found
+
+
+def _foreign_peers(peers, own_sid: str) -> list:
+    """``peers`` less any session whose host-session parent lineage reaches ``own_sid`` (a subagent it spawned)."""
+    cache: dict = {}
+    return [s for s in peers if not _spawned_by(s, {own_sid}, cache)]
+
+
+def _live_pid_backed(liveness, root: Path, sid: str) -> bool:
+    """True when ``sid`` reads live and not on Layer-2 recency alone: a host-session row with a verified pid is pid evidence too."""
+    from coordinator_core.session import external_registry
+
+    live, basis = liveness.session_live_with_basis(sid, str(root))
+    return live and (basis not in _RECENCY_ONLY_BASES or external_registry.lookup(sid) is not None)
+
 
 def _bounded_claim_lookup(claim_index, paths: list, cwd: str) -> dict:
     """`claim_index.lookup` on a daemon thread held to `PEER_CLAIM_LOOKUP_DEADLINE_S` of wall time;
@@ -3053,7 +3134,9 @@ def _peer_held(
     run's declared writes holds over ``paths``; ``minted_before`` is ``_own_run_seniority``'s answer.
     ``declaration_only`` is an out-set: it receives the held paths no live touch claim holds.
     A touch claim by ``own_sid`` or any of ``self_sessions`` (the run's firing session) is self, never a
-    peer; another run's declared writes still hold even from that session, except runs minted under the
+    peer, as is a session whose host-session parent lineage reaches one of them (a subagent the run
+    spawned, exited or not); a claimant live on Layer-2 recency alone, with no verified pid, never holds.
+    Another run's declared writes still hold even from that session, except runs minted under the
     run's submitting session (`_submitter_session`), which are this run's siblings and never hold it.
     A bare declaration never holds a path this run's own checkpoint landed; a live touch claim still
     does. A per-run artifact (`co_declared_settle.is_per_run_artifact`) is never held by a run declaration:
@@ -3072,6 +3155,8 @@ def _peer_held(
             except Exception:  # noqa: BLE001 -- an unresolved caller holds nothing of its own
                 own_sid = None
         found = _bounded_claim_lookup(claim_index, list(paths), str(root))
+        selves = {s for s in (own_sid, *self_sessions) if s}
+        spawn_cache: dict = {}
         for path in paths:
             claimants = found.get(path, [])
             if claim_index.UNANSWERABLE in claimants:
@@ -3080,8 +3165,10 @@ def _peer_held(
             for sid in claimants:
                 if sid == own_sid or sid in self_sessions or not touch_record.kind_blocks_a_peer_commit(kinds.get(sid)):
                     continue
+                if _spawned_by(sid, selves, spawn_cache):
+                    continue
                 try:
-                    live = liveness.session_live(sid, str(root))
+                    live = _live_pid_backed(liveness, root, sid)
                     abandoned = liveness.session_abandoned(sid, str(root)) if live else False
                 except Exception:  # noqa: BLE001 -- indeterminate liveness holds nothing
                     continue
@@ -3743,7 +3830,9 @@ def _new_red_gate(
         "importer_targets": list(result.get("importer_targets") or []), "targets_run": list(result.get("targets_run") or []),
     }
     if result.get("over_budget") or (result.get("status_after") == "fail" and not out["new_red"] and not out["pre_existing"]):
-        detail = result.get("summary") or "; ".join(str(d.get("message")) for d in result.get("failing_detail") or [])
+        detail = result.get("summary") or "; ".join(
+            m for m in (str(d.get("message") or "").strip() for d in result.get("failing_detail") or []) if m
+        ) or "no failure message recorded (see test sidecar)"
         out["advisory"] = f"new-red gate unmeasured: {detail}"[:300]
     return out
 

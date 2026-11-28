@@ -1,17 +1,17 @@
-"""Move a halt's unimportable bytes into the halted record, and put them back on refire.
+"""Record a halt's run-owned bytes in the halted record; the working tree is never written.
 
 Bytes live at `<record_dir>/withheld-blobs/<blob sha1>`, indexed by `<record_dir>/evicted.json`:
-`{path: {"blob": sha1, "head": sha1 | null, "base": sha1 | null}}` (`head` is the blob sha the tree was
-reset to, null when the tree file was removed; `base`, present only when it differs from `head`
-because foreign hunks were kept, is the HEAD blob the reset was taken from). Blob shas come from
-`kept_work.blob_sha`. In process; the caller supplies HEAD bytes from one batched read.
+`{path: {"blob": sha1, "head": sha1}}`. `head` is the blob sha the tree holds after the halt, which is
+the run's own bytes, so it equals `blob`. Other live runs read the tree, so a halt resets nothing. An
+entry written by an older halt may carry `head: null` or a `base` (the tree was reset): `restore` and
+`restore_own_delta` still put those back. Blob shas come from `kept_work.blob_sha`. In process.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Sequence
 
 from coordinator_core.ops.dispatch_emit import tree_write_fence
 from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
@@ -44,125 +44,25 @@ def _read(root: Path, rel: str) -> bytes | None:
         return None
 
 
-def _reset_plan(
-    root: Path, run_id: str | None, rel: str, data: bytes, head: bytes | None
-) -> tuple[bytes | None, str | None]:
-    """`(bytes to leave in the tree, None)`, or `(None, refusal)` when the run's hunks cannot be
-    separated from foreign ones. Bytes None with no refusal means remove the file.
+def evict(root: Path, record_dir: Path, paths: Sequence[str]) -> dict:
+    """Copy each path's tree bytes into `record_dir` and write `evicted.json`; the tree is not touched.
 
-    Hunks are taken over raw bytes (never check-in normalised, or a CRLF tree is one whole-file
-    hunk). Foreign hunks (unattributed or off the run's write print) are kept byte-identical."""
-    from coordinator_core.ops.dispatch_emit import own_hunk_stage, run_hunk_claims
-
-    if run_id is None:
-        return None, "run unknown: hunks unattributable"
-    head_lines = [] if head is None else head.splitlines(keepends=True)
-    tree_lines = data.splitlines(keepends=True)
-    hunks = own_hunk_stage._hunks_of(rel, head_lines, tree_lines)
-    split = run_hunk_claims.own_hunks(
-        root, run_id, rel, hunks, run_hunk_claims.lineage_holders(root, run_id),
-        head_blob=None if head is None else blob_sha(head),
-    )
-    if not split.own:
-        return None, "no hunk attributable to this run"
-    own = set(split.own)
-    foreign = [h for h in hunks if h not in own]
-    if not foreign:
-        return head, None
-    if any(o.overlaps(f) for o in split.own for f in foreign):
-        return None, "run hunk overlaps a foreign hunk"
-    if run_hunk_claims.exceeds_match_bound(head_lines, tree_lines):
-        return None, "diff too coarse to separate run hunks from foreign ones"
-    try:
-        spliced = own_hunk_stage.splice_hunks(
-            rel, head_lines, tree_lines, [(h.old_start, h.old_len, h.new_start, h.new_len) for h in foreign]
-        )
-    except own_hunk_stage.OwnHunkRefused as exc:
-        return None, str(exc)
-    return spliced, None
-
-
-_LINKED = "evict refused, tree kept: import-linked to "
-
-
-def evict(
-    root: Path,
-    record_dir: Path,
-    paths: Sequence[str],
-    head_blobs: Mapping[str, bytes | None],
-    run_id: str | None = None,
-    refused: dict | None = None,
-    units: Sequence[Sequence[str]] = (),
-) -> dict:
-    """Copy each path's tree bytes into `record_dir`, write `evicted.json`, and reset only the run's
-    own hunks of the tree path to HEAD.
-
-    `units` groups paths that import each other. A member that cannot be reset fully to HEAD keeps
-    its unit, including when a splice would retain a foreign import that needs another member's edits.
-    Every reset is computed before any byte moves; a refused unit never touches disk.
-
-    `head_blobs` maps path to its HEAD bytes, or None when HEAD does not track it (the tree path is
-    then removed when wholly the run's). Returns the `evicted.json` mapping. Never touches a path
-    outside `paths`. A path whose run hunks cannot be split from foreign ones (or any path when
-    `run_id` is None) is left untouched and recorded in `refused`; a whole-file write over foreign
-    hunks never happens. `index[path]["head"]` is the sha of the bytes actually left in the tree.
-    With `run_id`, a path whose reset bytes would drop a peer's unlanded hunk (`live_write_guard`) is left
-    untouched and recorded in `refused` as `{path: holder-naming message}`.
+    A path whose tree file is gone is skipped; a re-halt of a path replaces its entry with the bytes
+    now in the tree. Returns the `evicted.json` mapping.
     """
     root, record_dir = Path(root), Path(record_dir)
     index = _load(record_dir)
     blobs = record_dir / BLOBS_DIR
-    planned: dict[str, tuple[bytes, str, bytes | None, bytes | None]] = {}
-    refusals: dict[str, str] = {}
-    claims: dict | None = None
     for rel in paths:
         data = _read(root, rel)
         if data is None:
             continue
-        head = head_blobs.get(rel)
         sha = blob_sha(data)
-        if rel in index and index[rel]["blob"] != sha:
-            # Already evicted once: the tree holds HEAD bytes now, so differing bytes are not ours to drop.
-            continue
-        reset, refusal = _reset_plan(root, run_id, rel, data, head)
-        if refusal:
-            refusals[rel] = f"evict refused, tree kept: {refusal}"
-            continue
-        if run_id is not None:
-            from coordinator_core.ops.dispatch_emit import live_write_guard, sibling_claims
-
-            if claims is None:  # one claim lookup for the whole eviction, not one per path
-                claims = sibling_claims.sibling_run_claims(root, run_id, [sibling_claims._norm(p) for p in paths])
-            refusal = live_write_guard.check_live_write(root, run_id, rel, reset or b"", claims)
-            if refusal:
-                refusals[rel] = refusal
-                continue
-        planned[rel] = (data, sha, head, reset)
-    for unit in units:
-        culprit = next((p for p in unit if p not in planned or planned[p][3] != planned[p][2]), None)
-        if culprit is None:
-            continue
-        reason = refusals.setdefault(culprit, "evict refused, tree kept: import unit requires a full reset")
-        for p in unit:
-            if planned.pop(p, None) is not None and p != culprit:
-                refusals[p] = f"{_LINKED}{culprit} ({reason})"
-    if refused is not None:
-        refused.update(refusals)
-    for rel, (data, sha, head, reset) in planned.items():
         blobs.mkdir(parents=True, exist_ok=True)
         blob_path = blobs / sha
         blob_path.write_bytes(data)
         declare_write(blob_path)
-        reset_sha = None if reset is None else blob_sha(reset)
-        index[rel] = {"blob": sha, "head": reset_sha}
-        base_sha = None if head is None else blob_sha(head)
-        if base_sha != reset_sha:
-            index[rel]["base"] = base_sha  # spliced: the tree keeps foreign hunks, so HEAD's blob is a separate fact
-        target = root / rel
-        if reset is None:
-            target.unlink()
-        else:
-            target.write_bytes(reset)
+        index[rel] = {"blob": sha, "head": sha}
     if index:
         record_dir.mkdir(parents=True, exist_ok=True)
         index_path = record_dir / EVICTED_FILE
@@ -278,14 +178,24 @@ def restore_own_delta(root: Path, record_dir: Path, run_id: str) -> dict:
         return {p: {"status": "skipped", "reason": "unreadable-head"} for p in index}
     common = resolve_git_common_dir(root)
     for rel, entry in sorted(index.items()):
-        reason = tree_write_fence.check_tree_write(
-            rel, owned_paths=owned, base_blob=entry.get("base", entry["head"]), head_blob=heads.get(rel),
-        )
         target = root / rel
-        if not reason and (target.resolve() != target.absolute() or not target.resolve().is_relative_to(root.resolve())):
-            reason = "outside-own-paths"
         delta = deltas.get(rel) if isinstance(deltas, dict) else None
         oid = delta.get("blob") if isinstance(delta, dict) else None
+        try:
+            held = blob_sha(target.read_bytes()) if isinstance(oid, str) else None
+        except OSError:
+            held = None
+        if held is not None and held == oid:
+            result[rel] = {"status": "already-restored"}
+            continue
+        # A current entry's `head` is the run's own parked bytes (== `blob`), not a HEAD blob: it names no
+        # base, so the fence compares HEAD with itself and the `restore-drift` check below carries the guard.
+        base = entry.get("base", heads.get(rel) if entry["head"] == entry["blob"] else entry["head"])
+        reason = tree_write_fence.check_tree_write(
+            rel, owned_paths=owned, base_blob=base, head_blob=heads.get(rel),
+        )
+        if not reason and (target.resolve() != target.absolute() or not target.resolve().is_relative_to(root.resolve())):
+            reason = "outside-own-paths"
         if not reason and (not isinstance(oid, str) or len(oid) != 40 or any(c not in "0123456789abcdef" for c in oid)):
             reason = "missing-own-delta"
         if not reason:

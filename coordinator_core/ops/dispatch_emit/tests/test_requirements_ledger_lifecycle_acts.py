@@ -42,7 +42,7 @@ def _item(rid: str = "R1", remaining=None, **extra):
 
 
 def _verdict(run, **replaced):
-    return {"items": [replaced.get(i.id) or {"id": i.id, "status": "met", "met_by": "a.py", "wired": True} for i in _ledger(run).items]}
+    return {"items": [replaced.get(i.id) or {"id": i.id, "status": "met", "wired": True, "evidence": "verified"} for i in _ledger(run).items]}
 
 
 def test_lifecycle_vocabulary_is_pinned() -> None:
@@ -81,7 +81,7 @@ def test_close_dischargeable(acts, expected) -> None:
 
 
 def test_close_dischargeable_refuses_other_statuses() -> None:
-    assert rl.close_dischargeable({"id": "R1", "status": "met", "met_by": "a.py"}) is False
+    assert rl.close_dischargeable({"id": "R1", "status": "met"}) is False
     assert rl.close_dischargeable({"id": "R1", "status": "not_met", "remaining": ["typecheck"]}) is False
 
 
@@ -108,7 +108,7 @@ def test_judge_still_fails_post_commit_on_a_design_registry_row(run) -> None:
     dc.mint_rows(root, REL, [HIT])
     ledger = _ledger(run)
     design = next(i for i in ledger.items if i.anchor == "design-registry:settings")
-    items = [{"id": i.id, "status": "met", "met_by": "a.py"} for i in ledger.items if i.id != design.id]
+    items = [{"id": i.id, "status": "met", "evidence": "verified"} for i in ledger.items if i.id != design.id]
     items.append(_item(design.id, LIFE))
     out = rl.judge(ledger, {"items": items}, repo_root=root)
     assert not out["pass"] and design.id in [f["id"] for f in out["failures"]]

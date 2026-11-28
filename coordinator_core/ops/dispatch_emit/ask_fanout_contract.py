@@ -70,6 +70,7 @@ class AskSlice:
     estimate: Optional[str] = None
     exit_criterion: Optional[str] = None
     after: tuple[int, ...] = ()
+    after_run: tuple[tuple[str, str], ...] = ()
 
 
 #: XL/XXL fan-out: the submit param, the seam slice's label, and the t-shirts a component / the seam carry.
@@ -461,7 +462,51 @@ ASKS_ITEM_KEYS: tuple[str, ...] = (
     "family",
     "writes",
     "stop_after",
+    "after_run",
 )
+
+AFTER_RUN_KEY = "after_run"
+AFTER_RUN_KINDS = ("run_end", "run_landed")
+# external-constraint: sizing-object.schema.json admits only string values under em_analysis, so the blockers ride as JSON text.
+STAGE_BLOCKERS_KEY = "stage_blockers"
+
+
+def parse_after_run(where: str, value: object) -> tuple[str, str]:
+    """`(kind, run_id)` of an ``asks[i].after_run`` object ``{run_id, kind?}``; kind defaults to ``run_end``.
+
+    Raises ValueError naming ``where``.after_run for a non-object, an extra key, an empty run id or a kind
+    outside ``AFTER_RUN_KINDS``."""
+    key = f"{where}.{AFTER_RUN_KEY}"
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{key} must be an object {{run_id, kind}}")
+    extra = [k for k in value if k not in ("run_id", "kind")]
+    if extra:
+        raise ValueError(f"{key}: unknown key {extra[0]!r}. Accepted: run_id, kind")
+    run_id, kind = value.get("run_id"), value.get("kind", "run_end")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError(f"{key}.run_id must be a non-empty string")
+    if kind not in AFTER_RUN_KINDS:
+        raise ValueError(f"{key}.kind {kind!r} is not one of {', '.join(AFTER_RUN_KINDS)}")
+    return kind, run_id.strip()
+
+
+def encode_stage_blockers(blockers: Iterable[tuple[str, str]]) -> str:
+    """The `em_analysis[STAGE_BLOCKERS_KEY]` value for `(kind, run_id)` pairs; "" when none."""
+    typed = [{"kind": k, "ref": r} for k, r in dict.fromkeys(blockers)]
+    return json.dumps(typed, sort_keys=True) if typed else ""
+
+
+def decode_stage_blockers(analysis: object) -> list[dict]:
+    """The typed `{kind, ref}` blockers a sizing's `em_analysis` carries; [] when absent or malformed."""
+    raw = analysis.get(STAGE_BLOCKERS_KEY) if isinstance(analysis, Mapping) else None
+    try:
+        typed = json.loads(raw) if isinstance(raw, str) and raw else []
+    except ValueError:
+        return []
+    return [
+        {"kind": b["kind"], "ref": b["ref"]}
+        for b in typed if isinstance(b, dict) and b.get("kind") in AFTER_RUN_KINDS and isinstance(b.get("ref"), str) and b["ref"]
+    ] if isinstance(typed, list) else []
 
 
 def unknown_keys_refusal(where: str, supplied: Iterable[str], accepted: Sequence[str]) -> Optional[str]:

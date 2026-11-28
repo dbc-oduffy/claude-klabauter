@@ -15,12 +15,14 @@ Axes:
   peer_hunk_gate.co_declared_peer_holds      every call of that function inside the op, summed
                                              (`attribution.calls` is the per-call split)
   peer_hunk_gate.sibling_spine               every `_sibling_spines` call inside the op, summed
+  land_run.receipts                          the `land_run.receipts` mark to the next leg mark (also the
+                                             `leg:land_run.receipts` row); `--claims N` scales its fixture
 
 `spine_parses` counts yaml loads of a sizing or a plan spine body. `--attribute` adds a cProfile
 top-20 per span to `attribution`.
 
     python coordinator_core/benchmarks/land_run_leg_budget_profile.py [--siblings N] [--tracked N]
-        [--chain N] [--json] [--attribute]
+        [--chain N] [--claims N] [--json] [--attribute]
     python coordinator_core/benchmarks/land_run_leg_budget_profile.py --real-record <run_id> [--halted-scale K] [--cold-parse] [--json]
 
 `--live-siblings N` runs the measured land_run in its own process while N sibling processes land
@@ -63,6 +65,7 @@ from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
@@ -97,6 +100,10 @@ WHOLE_OP = "dispatch.land_run"
 LEG_SCRIPT_READ = "land_run.script_read"
 LEG_INTEGRITY = "land_run.integrity"
 LEG_COMMIT = "land_run.commit"
+LEG_RECEIPTS = "land_run.receipts"  # a `land_deadline.mark`, not a `check`: `_install` meters both
+AXIS_RECEIPTS = LEG_RECEIPTS
+FOREIGN_CLAIM_CLASSES = ("memo-claims", "plan-claims", "row-claims")
+CLAIM_BATON = "claim-baton.md"
 AXIS_READ_TO_INTEGRITY = "land_run.script_read-to-integrity"
 AXIS_HOLDS = "peer_hunk_gate.co_declared_peer_holds"
 AXIS_SPINE = "peer_hunk_gate.sibling_spine"
@@ -192,6 +199,24 @@ def add_siblings(root: Path, count: int) -> list:
         run_token.mint(root, run_id, f"run-sib-{i}.mjs", session_id=f"{i:08x}-0000-4000-8000-000000000000", sizing_rel=sizing_rel)
         ids.append(run_id)
     return ids
+
+
+def add_claims(root: Path, count: int) -> int:
+    """`count` foreign claim dirs (each a `session_id` naming another session) spread round-robin over
+    the memo/plan/row claim classes of `root`'s session hub, plus one handoff claim (and its baton)
+    for the measured session `SELF`. Returns the foreign claim count written."""
+    from coordinator_core.session import core as session_core
+
+    hub = Path(session_core.sessions_dir(str(root)))
+    for i in range(count):
+        cdir = hub / FOREIGN_CLAIM_CLASSES[i % len(FOREIGN_CLAIM_CLASSES)] / f"foreign-{i:06d}"
+        cdir.mkdir(parents=True, exist_ok=True)
+        (cdir / "session_id").write_text(f"{i:08x}-0000-4000-8000-0000000000f0", encoding="utf-8")
+    mine = hub / "handoff-claims" / CLAIM_BATON
+    mine.mkdir(parents=True, exist_ok=True)
+    (mine / "session_id").write_text(SELF, encoding="utf-8")
+    _write(root, f"state/handoffs/{CLAIM_BATON}", "---\nhandoff_id: hnd-claim-baton-000000\ndeliverable_id: dlv-claim-baton-000000\n---\n\nbaton\n")
+    return count
 
 
 class SpineParseCounter:
@@ -336,18 +361,23 @@ class Profiler:
         ]
 
 
-def _install(profiler: Profiler):
+def _install(profiler: Profiler) -> "Callable[[], None]":
     """Patch the seams; returns the undo callable."""
     import yaml
 
     from coordinator_core.ops.dispatch_emit import land_deadline, peer_hunk_gate
 
     spine_name = "_sibling_spines" if hasattr(peer_hunk_gate, "_sibling_spines") else "_spine_writes"
-    real_check, real_holds, real_spine = land_deadline.check, peer_hunk_gate.co_declared_peer_holds, getattr(peer_hunk_gate, spine_name)
+    real_check, real_mark = land_deadline.check, land_deadline.mark
+    real_holds, real_spine = peer_hunk_gate.co_declared_peer_holds, getattr(peer_hunk_gate, spine_name)
     real_safe, real_load, real_init = yaml.safe_load, yaml.load, subprocess.Popen.__init__
 
     def check(leg) -> None:
         real_check(leg)
+        profiler.mark(leg)
+
+    def mark(leg) -> None:
+        real_mark(leg)
         profiler.mark(leg)
 
     inside = []  # yaml.safe_load calls yaml.load: one parse, one count
@@ -370,6 +400,7 @@ def _install(profiler: Profiler):
         return real_init(self, *a, **k)
 
     land_deadline.check = check
+    land_deadline.mark = mark
     peer_hunk_gate.co_declared_peer_holds = profiler.timed(AXIS_HOLDS, real_holds)
     setattr(peer_hunk_gate, spine_name, profiler.timed(AXIS_SPINE, real_spine))
     yaml.safe_load, yaml.load = safe_load, load
@@ -377,6 +408,7 @@ def _install(profiler: Profiler):
 
     def undo() -> None:
         land_deadline.check = real_check
+        land_deadline.mark = real_mark
         peer_hunk_gate.co_declared_peer_holds = real_holds
         setattr(peer_hunk_gate, spine_name, real_spine)
         yaml.safe_load, yaml.load = real_safe, real_load
@@ -459,7 +491,11 @@ def profile_land(root: Path, base: str, *, attribute: bool, call=None, stop_befo
             sum(c["reads"] for c in calls),
         ))
     if legs:
-        rows.extend(leg_rows(prof, *end))
+        leg_axis_rows = leg_rows(prof, *end)
+        rows.extend(leg_axis_rows)
+        receipts = next((r for r in leg_axis_rows if r.axis == LEG_AXIS_PREFIX + LEG_RECEIPTS), None)
+        if receipts is not None:
+            rows.append(AxisRow(AXIS_RECEIPTS, receipts.process_time_ms, receipts.spawns, 0, receipts.attribution, receipts.reads))
     return rows
 
 
@@ -468,16 +504,18 @@ def kill_gate(rows: list) -> bool:
     return any(r.axis == WHOLE_OP and r.process_time_ms > BAR_MS for r in rows)
 
 
-def run(workdir: Path, siblings: int, tracked: int, chain: int, attribute: bool) -> list:
+def run(workdir: Path, siblings: int, tracked: int, chain: int, attribute: bool, claims: int = 0) -> list:
     declare_benchmark_origin()
     _bind_session()
     with ExitStack() as stack:
         root, base = build_land_fixture(workdir, mode="clean", tracked=tracked, chain=chain, stack=stack)
         stack.enter_context(_siblings_live())
         add_siblings(root, siblings)
-        rows = profile_land(root, base, attribute=attribute)
+        add_claims(root, claims)
+        rows = profile_land(root, base, attribute=attribute, legs=True)
     for row in rows:
         row.attribution["siblings"] = siblings
+        row.attribution["claims"] = claims
     return rows
 
 
@@ -871,6 +909,7 @@ def main(argv: list) -> int:
     ap.add_argument("--worker-root", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--worker-base", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--worker-sync", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--claims", type=int, default=0, metavar="N", help="N foreign claim dirs across memo/plan/row claims in the fixture hub, plus one handoff claim for the measured session")
     ap.add_argument("--tracked", type=int, default=DEFAULT_TRACKED)
     ap.add_argument("--chain", type=int, default=DEFAULT_CHAIN)
     ap.add_argument("--json", action="store_true")
@@ -899,7 +938,7 @@ def main(argv: list) -> int:
                 if args.live_siblings:
                     rows = run_live(workdir, args.live_siblings, siblings, args.tracked, args.chain, args.attribute)
                 else:
-                    rows = run(workdir, siblings, args.tracked, args.chain, args.attribute)
+                    rows = run(workdir, siblings, args.tracked, args.chain, args.attribute, args.claims)
         finally:
             from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 

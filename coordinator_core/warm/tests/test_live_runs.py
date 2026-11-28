@@ -546,6 +546,22 @@ def test_a_run_with_a_halt_marker_is_not_live_whatever_its_stage_reads(tmp_path:
     assert not live_runs.run_stage_live(repo, "halted-run", now=NOW)
 
 
+@pytest.mark.parametrize("halted", ["usage_limit", "design_review"])
+def test_a_returned_halt_left_at_staged_with_a_held_token_is_not_live(tmp_path: Path, halted) -> None:
+    """A halted run whose run-stage.json still reads staged and whose token is unspent is over: its refire must not read it live."""
+    repo = tmp_path / "r1"
+    _stranded(repo, "returned-halt", "staged", halted)
+    assert not live_runs.run_is_live(repo, "returned-halt", now=NOW)
+    assert not live_runs.run_stage_live(repo, "returned-halt", now=NOW)
+    assert _handover_live(repo) == []
+
+
+def test_control_a_staged_run_with_a_held_token_and_no_marker_is_live(tmp_path: Path) -> None:
+    repo = tmp_path / "r1"
+    _stranded(repo, "working", "staged")
+    assert live_runs.run_is_live(repo, "working", now=NOW)
+
+
 @pytest.mark.designed_red
 def test_a_closed_run_left_at_staged_is_not_live(tmp_path: Path) -> None:
     repo = tmp_path / "r1"

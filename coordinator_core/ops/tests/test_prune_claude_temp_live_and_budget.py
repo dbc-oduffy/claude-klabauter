@@ -169,3 +169,190 @@ def test_budget_never_takes_a_child_written_within_the_idle_window(tmp_path: Pat
     removed = pct._enforce_scratch_budget(root, 150, now, pct._Budget(None))
     assert removed == 1
     assert sorted(p.name for p in pad.iterdir()) == ["in_flight.bin"]
+
+
+LIVE_PID = 4242
+DEAD_PIDS = (90000001, 90000002, 90000003, 90000004, 90000005, 90000006)
+
+
+class _CountedBudget(pct._Budget):
+    """Latches after a fixed number of checks, so a pass is deterministic whatever the process-time clock."""
+
+    def __init__(self, limit=pct.BUDGET_SECONDS) -> None:
+        super().__init__(limit)
+        self.n = 0
+
+    def check(self) -> bool:
+        self.n += 1
+        if self.limit is not None and self.n >= 25:
+            self.stopped = True
+        return self.stopped
+
+
+def _run_dir(pdir: Path, pid: int, files: int = 6) -> Path:
+    d = pdir / f"{pid}-abc123"
+    for i in range(files):
+        f = d / "sub" / f"f{i}.txt"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x")
+    return d
+
+
+def _pytest_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from coordinator_core.group_em import session_registry
+    from coordinator_core.temp_layout import PYTEST_KEPT_MARKER
+
+    base = tmp_path / "coordinator"
+    pdir = base / "repoA" / "pytest"
+    monkeypatch.setattr(session_registry, "pid_alive", lambda pid: pid == LIVE_PID)
+    monkeypatch.setattr(pct, "fleet_temp_root", lambda: base / "_fleet")
+    monkeypatch.setattr(pct, "default_roots", lambda repo_root="": [])
+    monkeypatch.setattr(pct, "_prune_top_level", lambda cutoff, budget=None, keep=frozenset(): 0)
+    monkeypatch.setattr(pct, "_Budget", _CountedBudget)
+    dead = [_run_dir(pdir, p) for p in DEAD_PIDS]
+    survivors = {
+        "live": _run_dir(pdir, LIVE_PID),
+        "own": _run_dir(pdir, os.getpid()),
+        "kept": _run_dir(pdir, 90000100),
+        "bad": pdir / "not-a-run",
+        "fleet": _run_dir(base / "_fleet" / "pytest", 90000200),
+    }
+    survivors["bad"].mkdir()
+    (survivors["kept"] / PYTEST_KEPT_MARKER).write_text("")
+    return base, pdir, dead, survivors
+
+
+def test_pytest_leg_drains_dead_runs_across_passes_without_a_recursive_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+
+    base, pdir, dead, survivors = _pytest_fixture(tmp_path, monkeypatch)
+    now = time.time()
+
+    def _refuse(*_a, **_k):
+        raise AssertionError("recursive walk on the prune path")
+
+    stamp = base / pct.STAMP_NAME
+    passes = 0
+    with monkeypatch.context() as scoped:
+        scoped.setattr(os, "walk", _refuse)
+        scoped.setattr(shutil, "rmtree", _refuse)
+        while not stamp.exists():
+            passes += 1
+            assert passes < 200
+            pct.prune(now=now, pytest_roots=[base])
+    assert passes > 1
+    assert not any(d.exists() for d in dead)
+    assert not (pdir / ".reap").exists() or not list((pdir / ".reap").iterdir())
+    assert all(p.exists() for p in survivors.values())
+
+
+def test_stamp_is_withheld_while_pytest_backlog_remains(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    base, pdir, dead, _ = _pytest_fixture(tmp_path, monkeypatch)
+    pct.prune(now=time.time(), pytest_roots=[base], budget_seconds=0.001)
+    assert not (base / pct.STAMP_NAME).exists()
+    assert pct.roots_due(pytest_roots=[base])
+
+
+def test_a_latched_main_budget_does_not_block_the_top_level_stamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base, pdir, dead, _ = _pytest_fixture(tmp_path, monkeypatch)
+    for d in dead:
+        for f in sorted(d.rglob("*"), reverse=True):
+            f.unlink() if f.is_file() else f.rmdir()
+        d.rmdir()
+    monkeypatch.setattr(pct, "default_roots", lambda repo_root="": [(base / "_fleet", 1, 7)])
+
+    def _latch(*a, **_k):
+        a[6].stopped = True
+        return 0
+
+    monkeypatch.setattr(pct, "_prune_level", _latch)
+    pct.prune(now=time.time(), pytest_roots=[base])
+    assert (base / pct.STAMP_NAME).exists()
+
+
+def test_roots_due_only_for_a_dead_unmarked_run_or_a_nonempty_reap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base, pdir, dead, survivors = _pytest_fixture(tmp_path, monkeypatch)
+    base.mkdir(exist_ok=True)
+    (base / pct.STAMP_NAME).touch()
+    assert pct.roots_due(pytest_roots=[base])
+    for d in dead:
+        target = pdir / ".reap" / d.name
+        target.parent.mkdir(exist_ok=True)
+        d.rename(target)
+    assert pct.roots_due(pytest_roots=[base])
+    for f in sorted((pdir / ".reap").rglob("*"), reverse=True):
+        f.unlink() if f.is_file() else f.rmdir()
+    assert not pct.roots_due(pytest_roots=[base])
+
+
+def test_an_undeletable_reap_entry_stops_being_due_once_a_pass_has_stamped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base, pdir, dead, _ = _pytest_fixture(tmp_path, monkeypatch)
+    for d in dead:
+        for f in sorted(d.rglob("*"), reverse=True):
+            f.unlink() if f.is_file() else f.rmdir()
+        d.rmdir()
+    stuck = pdir / ".reap" / "stuck"
+    stuck.mkdir(parents=True)
+    old = time.time() - 120
+    os.utime(pdir / ".reap", (old, old))
+    base.mkdir(exist_ok=True)
+    (base / pct.STAMP_NAME).touch()
+    assert not pct.roots_due(pytest_roots=[base])
+    os.utime(pdir / ".reap", None)
+    assert pct.roots_due(pytest_roots=[base])
+
+
+def test_backlog_counts_a_dead_run_whose_kept_marker_expired_not_a_fresh_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.temp_layout import PYTEST_KEPT_MARKER, _KEPT_MAX_AGE_S
+
+    base, pdir, dead, survivors = _pytest_fixture(tmp_path, monkeypatch)
+    for d in dead:
+        for f in sorted(d.rglob("*"), reverse=True):
+            f.unlink() if f.is_file() else f.rmdir()
+        d.rmdir()
+    now = time.time()
+    assert not pct._pytest_backlog([base], now)
+    marker = survivors["kept"] / PYTEST_KEPT_MARKER
+    old = now - _KEPT_MAX_AGE_S - 60
+    os.utime(marker, (old, old))
+    assert pct._pytest_backlog([base], now)
+
+
+def test_reap_dirname_matches_the_sweep() -> None:
+    from coordinator_core.ops.fleet import pytest_basetemp_sweep as sweep
+
+    assert pct._REAP_DIRNAME == sweep.REAP_DIRNAME
+
+
+def test_tombstoning_takes_half_the_pytest_budget_then_the_leg_reads_as_undrained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from coordinator_core.ops.fleet import pytest_basetemp_sweep as sweep
+
+    clock = iter(x * 0.01 for x in range(10_000))
+    monkeypatch.setattr(pct.time, "process_time", lambda: next(clock))
+    ticks = []
+    drained = []
+
+    def tombstone(*, roots, now, check):
+        while not check():
+            ticks.append(1)
+        return len(ticks)
+
+    monkeypatch.setattr(sweep, "tombstone_dead_runs", tombstone)
+    monkeypatch.setattr(sweep, "drain_tombstones", lambda **_k: drained.append(1))
+    budget = pct._Budget(0.12)
+    pct._run_pytest_leg(budget, None, 0.0)
+    assert 0 < len(ticks) < 12
+    assert budget.stopped
+    assert drained == [1]

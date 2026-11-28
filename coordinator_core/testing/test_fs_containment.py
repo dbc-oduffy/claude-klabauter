@@ -224,7 +224,7 @@ def test_pass_and_no_tests_delete_the_minted_dir(tmp_path, monkeypatch, status):
     assert not base.exists()
 
 
-def test_failing_run_is_kept_marked_and_capped_at_three(tmp_path, monkeypatch):
+def test_failing_run_is_kept_marked_and_capped_at_two(tmp_path, monkeypatch):
     import os
 
     cfg, base = _minted(monkeypatch, tmp_path)
@@ -241,7 +241,7 @@ def test_failing_run_is_kept_marked_and_capped_at_three(tmp_path, monkeypatch):
     assert (base / fc._KEPT_MARKER).is_file()
     assert unmarked.is_dir()
     marked = sorted(p.name for p in parent.iterdir() if (p / fc._KEPT_MARKER).exists())
-    assert marked == sorted([base.name, "103-aaaaa3", "102-aaaaa2"])
+    assert marked == sorted([base.name, "103-aaaaa3"])
 
 
 def test_pass_tombstones_a_basetemp_rmtree_could_not_remove(tmp_path, monkeypatch):

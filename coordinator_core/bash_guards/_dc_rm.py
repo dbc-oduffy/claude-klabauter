@@ -74,6 +74,24 @@ from coordinator_core.bash_guards.destructive_rm_support import (
     _rm_is_rm_segment,
 )
 
+_REGENERABLE_CACHE_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
+
+
+def _is_repo_regenerable_cache_dir(resolved: str) -> bool:
+    """True when `resolved` (symlink/`..`-resolved) is a directory whose final component is
+    exactly a regenerable tool cache name and which lies below a directory holding a `.git`
+    entry. Filesystem stats only, no spawn."""
+    cur = resolved.replace("/", os.sep).rstrip(os.sep)
+    if os.path.basename(cur) not in _REGENERABLE_CACHE_DIRS or not os.path.isdir(cur):
+        return False
+    while True:
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return False
+        if os.path.exists(os.path.join(parent, ".git")):
+            return True
+        cur = parent
+
 
 # ---------------------------------------------------------------------------
 # 3. check_destructive_rm -- block-destructive-rm.sh
@@ -440,6 +458,11 @@ def check_destructive_rm(
             # under it is guarded, repo roots and git stores included. Evaluated
             # before every git-store and repo-root deny below.
             if _resolves_under_repo_scratch(tgt_abs):
+                continue
+
+            # A regenerable tool cache inside a repo is not work: the next
+            # run rebuilds it. Exact final-component match, resolved path only.
+            if _is_repo_regenerable_cache_dir(tgt_abs):
                 continue
 
             # A `*.lock` file under the git store holds no committed data: git

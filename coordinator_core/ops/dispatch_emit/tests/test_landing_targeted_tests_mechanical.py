@@ -218,6 +218,13 @@ def test_failing_ids_drop_a_summary_line_and_keep_node_ids_and_collection_errors
 @pytest.mark.spawns_process
 def test_landing_overlay_verdict_never_names_a_summary_line_as_a_failing_id(tmp_path, monkeypatch):
     import subprocess
+    import tempfile
+
+    session_temp = tmp_path / "session-temp"
+    session_temp.mkdir()
+    for name in ("TEMP", "TMP", "TMPDIR"):
+        monkeypatch.setenv(name, str(session_temp))
+    monkeypatch.setattr(tempfile, "tempdir", None)
 
     from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
     from coordinator_core.ops.dispatch_emit.tests.test_land_run_clean_overlay_verify import READER, _repo
@@ -234,3 +241,12 @@ def test_landing_overlay_verdict_never_names_a_summary_line_as_a_failing_id(tmp_
     out = cov.verify(root, "run1", head, [READER])
 
     assert not out.failing and f"--tests {_SUMMARY}" not in out.detail, out
+
+
+def test_a_zero_collected_verdict_is_typed_and_its_cause_names_argv_cwd_and_interpreter():
+    verdict = {"tests_run": 0, ltt.ZERO_RUN_CAUSE_KEY: ltt.ZERO_RUN_COLLECTION,
+               "pytest_argv": [["-rfE", "t/test_a.py"]], "interpreter": "py-x", "cwd": "wd-y"}
+    assert ltt.is_zero_collected(verdict)
+    cause = ltt.zero_collected_cause(verdict)
+    assert "-rfE t/test_a.py" in cause and "interpreter: py-x" in cause and "cwd: wd-y" in cause
+    assert not ltt.is_zero_collected({**verdict, "tests_run": 3})

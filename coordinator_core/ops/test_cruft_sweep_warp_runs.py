@@ -104,3 +104,62 @@ def test_citation_followed_by_hyphenated_word_still_protects(tmp_path: Path) -> 
     (tmp_path / "docs" / "n.md").write_text("see ask-20260101T000000-aaaaaa-notes here")
     assert _sweep(tmp_path) == (0, 0)
     assert run.exists()
+
+
+def _blobs(run: Path) -> Path:
+    blobs = run / "withheld-blobs"
+    blobs.mkdir()
+    (blobs / "a4cc").write_text("y" * 20)
+    (run / "manifest.json").write_text("{}")
+    return blobs
+
+
+def test_terminal_run_drops_prompts_and_blobs_keeps_manifest_and_outcome(tmp_path: Path) -> None:
+    old = _run(tmp_path, "old", outcome_age_days=8)
+    blobs = _blobs(old)
+    fresh = _run(tmp_path, "fresh", outcome_age_days=6)
+    fresh_blobs = _blobs(fresh)
+    b, n = cruft_sweep.sweep_warp_prompts(tmp_path, now=time.time(), dry_run=False, quiet=True)
+    assert n == 2 and b >= 30
+    assert not (old / "prompts").exists() and not blobs.exists()
+    assert (old / "manifest.json").exists() and (old / RUN_OUTCOME_FILE).exists()
+    assert (fresh / "prompts").exists() and fresh_blobs.exists()
+
+
+def test_open_run_blobs_kept(tmp_path: Path) -> None:
+    open_ = _run(tmp_path, "open")
+    blobs = _blobs(open_)
+    assert cruft_sweep.sweep_warp_prompts(tmp_path, now=time.time(), dry_run=False, quiet=True) == (0, 0)
+    assert blobs.exists() and (open_ / "prompts").exists()
+
+
+def test_tracked_subdir_is_kept_untracked_sibling_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    old = _run(tmp_path, "old", outcome_age_days=30)
+    blobs = _blobs(old)
+    monkeypatch.setattr(cruft_sweep, "_tracked_warp_subdirs", lambda root: {("old", "withheld-blobs")})
+    _, n = cruft_sweep.sweep_warp_prompts(tmp_path, now=time.time(), dry_run=False, quiet=True)
+    assert n == 1
+    assert blobs.exists() and not (old / "prompts").exists()
+
+
+def test_unreadable_index_deletes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    old = _run(tmp_path, "old", outcome_age_days=30)
+    monkeypatch.setattr(cruft_sweep, "_tracked_warp_subdirs", lambda root: None)
+    assert cruft_sweep.sweep_warp_prompts(tmp_path, now=time.time(), dry_run=False, quiet=True) == (0, 0)
+    assert (old / "prompts").exists()
+
+
+def test_tracked_subdirs_come_from_the_index_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.git import git_state
+
+    run = _run(tmp_path, "old", outcome_age_days=30)
+    blobs = _blobs(run)
+    monkeypatch.setattr(cruft_sweep, "git_dir", lambda root: str(tmp_path / ".git"))
+    monkeypatch.setattr(
+        git_state,
+        "read_index_paths",
+        lambda root: frozenset({"state/warp/old/withheld-blobs/a4cc", "state/warp/old/manifest.json", "src/x.py"}),
+    )
+    assert cruft_sweep._tracked_warp_subdirs(tmp_path) == {("old", "withheld-blobs")}
+    _, n = cruft_sweep.sweep_warp_prompts(tmp_path, now=time.time(), dry_run=False, quiet=True)
+    assert n == 1 and blobs.exists() and not (run / "prompts").exists()

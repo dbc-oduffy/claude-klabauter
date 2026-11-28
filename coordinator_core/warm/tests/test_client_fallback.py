@@ -726,9 +726,8 @@ def test_broken_pipe_after_delivery_is_not_resent_for_a_mutation(
 
     monkeypatch.setattr(client, "_open_pipe", _open)
     _assert_indeterminate(client.try_warm_dispatch(_MUTATING_MSG))
-    # A reconcile poll (warm.request_status) opens its own pipe; only a second send of the op is a resend.
-    sends = [f for f in opens if f.written and not any(b"warm.request_status" in w for w in f.written)]
-    assert len(sends) == 1, "a delivered mutation must not be re-sent"
+    sent = [f for f in opens if any(_MUTATING_MSG["method"].encode() in w for w in f.written)]
+    assert len(sent) == 1, "a delivered mutation must not be re-sent"
 
 
 def test_broken_pipe_before_delivery_still_re_opens(

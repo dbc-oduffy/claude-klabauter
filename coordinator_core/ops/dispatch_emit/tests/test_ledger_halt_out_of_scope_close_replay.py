@@ -146,6 +146,16 @@ def repo(tmp_path, monkeypatch):
     return root, sha, launches
 
 
+def _hold_pm_ruling(root, rel) -> None:
+    """The PM's ruling words on the register as a PM-verbatim row, so `out_of_scope` of the PM-origin R1 has its ruling."""
+    row = {
+        rr.ROW_ID: "R9", rr.ROW_TEXT: WORDS, rr.ROW_ANCHOR: "pm_verbatims turn 2", rr.ROW_SURFACE: rl.ROW_SURFACE,
+        rr.ROW_STATUS: rr.STATUS_DEFERRED, rr.ROW_CLAIMED_BY: [],
+        rr.ROW_RULING: {rr.RULING_SOURCE: "pm", rr.RULING_QUOTE: WORDS, rr.RULING_REF: "R7", rr.RULING_ON: "2026-10-16"},
+    }
+    rl._mutate_register(root, rel, lambda rows: [*rows, row])
+
+
 def _register(root: Path) -> dict:
     return {r["id"]: r for r in rr.read_register((root / SIZING).read_text(encoding="utf-8")).rows}
 
@@ -156,6 +166,7 @@ def _run_job(root: Path) -> dict:
 
 def _drive(root: Path, sha: str) -> dict:
     """Steps 1 to 4 of the replay; returns the op's reply."""
+    _hold_pm_ruling(root, SIZING)
     revised = rl._handler({"run_id": RUN, "verbatim": WORDS, "out_of_scope": ["R1"]}, repo_root=root)
     assert revised["ok"] and revised["withheld"] == ["R1"]
     assert _register(root)["R1"]["status"] == "deferred"
@@ -235,6 +246,7 @@ def test_without_a_review_record_the_stamp_and_flip_fail_while_the_rest_lands(re
 
 def test_a_ruled_out_row_owes_no_credit_but_an_unruled_blocking_row_still_does(repo):
     root, _, _ = repo
+    _hold_pm_ruling(root, SIZING)
     rl._handler({"run_id": RUN, "verbatim": WORDS, "out_of_scope": ["R1"]}, repo_root=root)
     assert op._standing_halt_problem(root, RUN, {}) is None
 

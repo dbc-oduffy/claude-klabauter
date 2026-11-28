@@ -287,13 +287,19 @@ def _resolve_outputs(
 ) -> tuple[list[Path], Optional[str]]:
     if outputs is None:
         found = sorted(p for p in scratch.iterdir() if p.is_file())
+        segment_files: list[Path] = []
         for name in segment_dirs:
             seg = scratch / name
             if not seg.is_dir():
                 if name in halted:
                     continue
                 return [], f"segment output dir missing: {name!r}"
-            found.extend(sorted(p for p in seg.iterdir() if p.is_file()))
+            segment_files.extend(sorted(p for p in seg.iterdir() if p.is_file()))
+        # A segmented run whose segments yielded nothing (every leg halted) has no source: root
+        # strays alone never make a deliverable.
+        if segment_dirs and not segment_files:
+            return [], f"no output files under any segment dir of {str(scratch)!r}: {segment_dirs!r}"
+        found.extend(segment_files)
         if not found:
             return [], f"no output files directly under {str(scratch)!r}"
         return found, None
@@ -610,11 +616,20 @@ def _close_archived(
     pre_drop: Optional[bytes] = None
     group_runs = meta.get("group_runs")
     block_note: Optional[str] = None
+    open_rows: list = []
     if meta.get("sizing_rel") and not group_runs:
+        from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
+        from coordinator_core.ops.requirement_register import open_register_rows
+
         try:
-            pre_drop = drop_research_block(worktree, meta["sizing_rel"])
-        except ResearchSizingRefused as exc:
-            return _err(f"sizing research block not dropped: {exc}")
+            open_rows = open_register_rows(worktree, meta["sizing_rel"])
+        except SizingFireRefused as exc:
+            return _err(f"sizing register not read: {exc}")
+        if not open_rows:
+            try:
+                pre_drop = drop_research_block(worktree, meta["sizing_rel"])
+            except ResearchSizingRefused as exc:
+                return _err(f"sizing research block not dropped: {exc}")
 
     # Trap: a retry after the extended trail was written but the commit refused finds equal bytes
     # and resolves the earlier close commit (same subject), leaving the extension uncommitted.
@@ -669,7 +684,7 @@ def _close_archived(
             return _err(f"commit refused: {exc}", paths=commit_rel)
     dropped = pre_drop is not None
     note = {"research_block": block_note} if block_note is not None else {}
-    if dropped or (meta.get("sizing_rel") and not group_runs):
+    if dropped or (meta.get("sizing_rel") and not group_runs and not open_rows):
         released_runs = _release_build_sibling(worktree, run_id, trail_rel, meta.get("sizing_rel"))
         if released_runs is not None:
             note["released_runs"] = [r.run_id for r in released_runs]
@@ -687,6 +702,17 @@ def _close_archived(
     }
     if peer_files:
         shared["peer_files"] = peer_files
+    if open_rows:
+        from coordinator_core.ops.dispatch_emit.ask_compose import HALT_CRITERION_NOT_MET
+        from coordinator_core.warp_fire import fire_command
+
+        shared.update(
+            exit_code=1,
+            deliverable=False,
+            halted=HALT_CRITERION_NOT_MET,
+            open_rows=open_rows,
+            next_action={"op": "engine-ask refire", "fire": fire_command(meta["sizing_rel"])},
+        )
     if local:
         return {
             **shared,
@@ -946,6 +972,18 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         "group_runs": group_runs, "topic": topic,
         "session_id": str(params.get("session_id") or "") or resolve_current_session_id(worktree),
     }
+    rag_verdict = _rag_gate(worktree, run_id, meta["session_id"])
+    halted_by = rag_verdict.get("halted_by") if rag_verdict else None
+    if halted_by:
+        _stamp_rag_use(worktree, run_id, rag_verdict)
+        halt = {
+            "exit_code": 0, "committed": False, "halted": halted_by.get("halted"),
+            "halted_by": halted_by, "rag_use": rag_verdict,
+            "next_action": f"re-run stage {run_id} with example-retrieval-repo ({halted_by.get('halted')})",
+        }
+        if halted_segments is not None:
+            halt["halted_segments"] = halted_segments
+        return halt
     local_root_raw = params.get("local_root")
     result = _close_committed(
         worktree, scratch, run_id, topic_slug, outputs, segment_dirs, meta,
@@ -953,7 +991,43 @@ def _close_sync(worktree: Path, params: dict) -> dict:
     )
     if open_claims and result.get("exit_code") == 0:
         result["open"] = open_claims
+    if result.get("committed") is True and not result.get("halted"):
+        if rag_verdict:
+            result["rag_use"] = rag_verdict
+            _stamp_rag_use(worktree, run_id, rag_verdict)
+        from coordinator_core.ops.dispatch_emit import ask_contract
+
+        ask_contract.stamp_closed_research_asks(worktree, run_id, sizing_rel)
     return result
+
+
+def _rag_gate(worktree: Path, run_id: str, session_id: str) -> Optional[dict]:
+    """The workers' example-retrieval-repo-use verdict, or None when the gate does not apply (tier none).
+
+    An unreadable transcript is ``transcript_unreadable`` without ``halted_by``: unknown never halts.
+    """
+    from coordinator_core.ops.dispatch_emit import rag_use, stage_rag_gate_op
+
+    try:
+        verdict = stage_rag_gate_op._handler(
+            {"repo_root": str(worktree), "run_id": run_id, "session_id": session_id, "stage": "research"},
+            worktree,
+        )
+    except Exception as exc:  # noqa: BLE001 -- unknown is never zero and never halts
+        verdict = {
+            "verdict": rag_use.TRANSCRIPT_UNREADABLE, "rag_calls": 0, "per_worker": [],
+            "reason": f"verdict failed: {type(exc).__name__}: {exc}",
+        }
+    return None if verdict.get("verdict") == "not_applicable" else verdict
+
+
+def _stamp_rag_use(worktree: Path, run_id: str, verdict: dict) -> None:
+    """Write the verdict into the run's existing stage record; a run with no ``run-stage.json`` gets none."""
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    prior = ask_contract.read_run_stage(worktree, run_id)
+    if prior and prior.get("stage") in ask_contract.RUN_STAGES:
+        ask_contract.stamp_run_stage(worktree, run_id, prior["stage"], rag_use=verdict)
 
 
 @register_op("research.close")

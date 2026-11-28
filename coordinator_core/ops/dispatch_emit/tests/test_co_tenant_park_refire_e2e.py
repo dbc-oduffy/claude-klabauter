@@ -63,7 +63,7 @@ def test_the_refire_survives_the_waiters_token_being_discarded_by_its_halt(tmp_p
     assert args["sizing"] == SIZING and args[RESUME_RUN_ID_ARG] == WAITER
 
 
-def test_halted_owner_is_a_typed_cause_naming_its_refire_and_nothing_is_spooled(tmp_path, capsys):
+def test_halted_holder_is_the_typed_cause_naming_the_peer_run_and_nothing_is_spooled(tmp_path, capsys):
     root = _repo(tmp_path)
     run_token.mint(root, WAITER, "w.mjs", marker=True, session_id="waiter-sess", sizing_rel=SIZING)
     run_dir = root / "state" / "warp" / OWNER
@@ -75,7 +75,7 @@ def test_halted_owner_is_a_typed_cause_naming_its_refire_and_nothing_is_spooled(
     assert _export(root) == 2
 
     line = _typed(capsys)
-    assert line["cause"] == "co_tenant_dependency_on_halted_run" and line["owner"] == OWNER
-    assert line["owner_refire"] == "coordinator-invoke engine-ask OWNER"
+    assert line["cause"] == "co_tenant_dependency" and line["owner"] is None and line["peer_runs"] == [OWNER]
+    assert "owner_refire" not in line
     assert stage_wait.read(root, WAITER) is None
     assert _spooled_args(root) == []

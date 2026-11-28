@@ -706,3 +706,89 @@ def test_fleet_holder_remote_tie_goes_to_the_session_the_local_holder_names(
     _publish(record_dir, "box-a", [_gem_row("sid-other", "group-em-01")])
     _publish(record_dir, "box-b", [_gem_row("sid-local", "group-em-02")])
     assert _fleet(record_dir)["session_id"] == "sid-local"
+
+
+@pytest.fixture
+def far_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    home = tmp_path / "settings-home"
+    home.mkdir()
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    return home
+
+
+def _register_far(box_id: str, host: str) -> None:
+    from coordinator_core.group_em import box_registry
+
+    box_registry.register(
+        f"/far/{box_id}", {}, box_id=box_id,
+        transport={"kind": "ssh", "host": host, "invoke": "/far/bin/coordinator-invoke"},
+    )
+
+
+def _far_runner(replies: dict, calls: list):
+    """A box_transport runner answering per ssh host with an `identity` payload, or failing."""
+    import subprocess
+
+    def run(argv, timeout):
+        host = argv[-2]
+        calls.append((host, argv[-1], timeout))
+        reply = replies[host]
+        if reply is None:
+            return subprocess.CompletedProcess(argv, 255, "", "unreachable")
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"identity": reply}), "")
+
+    return run
+
+
+def _identity(state: str = "live", sid: str = "sid-far", name: str = "group-em-92") -> dict:
+    return {"state": state, "holder": {"session_id": sid, "name": name}, "source": "box"}
+
+
+def test_who_fleet_local_record_wins_and_no_far_call_is_made(
+    repo_root, record_dir, far_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _register_far("box-far", "far-host")
+    nomination.claim(repo_root, "sid-local", directory=record_dir)
+    calls: list = []
+    out = nomination.who_fleet(repo_root, record_dir, _far_runner({"far-host": _identity()}, calls))
+    assert out["session_id"] == "sid-local" and not out.get("remote")
+    assert calls == []
+
+
+def test_who_fleet_falls_back_to_the_live_far_group_em(repo_root, record_dir, far_home) -> None:
+    _register_far("box-far", "far-host")
+    calls: list = []
+    out = nomination.who_fleet(repo_root, record_dir, _far_runner({"far-host": _identity()}, calls))
+    assert out["session_id"] == "sid-far" and out["peer_name"] == "group-em-92"
+    assert out["box_id"] == "box-far" and out["remote"] is True and out["live"] is True
+    assert [c[0] for c in calls] == ["far-host"] and "groupem.standing" in calls[0][1]
+
+
+def test_who_fleet_is_none_when_no_far_box_names_a_live_holder(repo_root, record_dir, far_home) -> None:
+    _register_far("box-a", "host-a")
+    _register_far("box-b", "host-b")
+    _register_far("box-c", "host-c")
+    runner = _far_runner({"host-a": None, "host-b": _identity("ended"), "host-c": _identity("vacant")}, [])
+    assert nomination.who_fleet(repo_root, record_dir, runner) is None
+
+
+def test_who_fleet_with_no_registered_far_box_is_none_and_spawns_nothing(
+    repo_root, record_dir, far_home
+) -> None:
+    calls: list = []
+    assert nomination.who_fleet(repo_root, record_dir, _far_runner({}, calls)) is None
+    assert calls == []
+
+
+def test_who_fleet_reads_every_box_and_the_lowest_live_box_id_wins(repo_root, record_dir, far_home) -> None:
+    _register_far("box-b", "host-b")
+    _register_far("box-a", "host-a")
+    _register_far("box-dead", "host-dead")
+    calls: list = []
+    runner = _far_runner(
+        {"host-a": _identity(sid="sid-a"), "host-b": _identity(sid="sid-b"), "host-dead": None}, calls
+    )
+    out = nomination.who_fleet(repo_root, record_dir, runner, timeout=3.0)
+    assert out["box_id"] == "box-a" and out["session_id"] == "sid-a"
+    assert sorted(c[0] for c in calls) == ["host-a", "host-b", "host-dead"]
+    assert {c[2] for c in calls} == {3.0}

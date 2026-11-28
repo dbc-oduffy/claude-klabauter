@@ -19,8 +19,10 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from coordinator_core.group_em import box_hold, box_load, capacity_admit, fleet_live, gpu_sample
+from coordinator_core.group_em import box_hold, box_load, capacity_admit, capacity_record, fleet_live, gpu_sample
 from coordinator_core.telemetry import host_sampler
+
+_VERDICT_KEYS = ("saturated", "mem_critical", "paused")
 
 DEFAULT_DISK_FLOOR_GB = 50.0
 TOP_N = 5
@@ -396,6 +398,7 @@ _DEFAULT_READERS: dict = {
     "editor_slot_holder": None,
     "top_cpu": _top_cpu,
     "top_ram": _top_ram,
+    "verdicts": capacity_record.local_verdicts,
 }
 
 
@@ -440,6 +443,12 @@ def sample(now: Optional[float] = None, readers: Optional[dict] = None) -> dict:
     for name in ("top_cpu", "top_ram"):
         value = read(name, [])
         row[name] = value if isinstance(value, list) else []
+    # The stamped saturation and memory-governor verdicts ride the row to the G-EM box, which cannot
+    # read this box's root; a key not in fleet_live.FIELDS is not on the row and is skipped.
+    verdicts = read("verdicts", {})
+    for name in _VERDICT_KEYS:
+        if name in row and isinstance(verdicts, dict):
+            row[name] = verdicts.get(name)
     row["maxima_source"] = "live"
     row["sampled_at"] = stamp
     row["last_seen"] = stamp

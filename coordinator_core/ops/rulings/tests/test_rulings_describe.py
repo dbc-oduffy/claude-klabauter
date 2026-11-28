@@ -11,12 +11,13 @@ from coordinator_core.contract.op_contract import build_contract
 from coordinator_core.op_scopes import _OP_KEY_SCOPE
 from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
-OPS = ("rulings.index", "rulings.search", "rulings.gate", "rulings.coverage")
+OPS = ("rulings.index", "rulings.search", "rulings.gate", "rulings.coverage", "deferral.challenge")
 _REPLY_TOKENS = {
     "rulings.index": ("rulings", "applied", "refused"),
     "rulings.search": ("matches",),
     "rulings.gate": ("GateReply", "coordinator:apm"),
     "rulings.coverage": ("covered", "prose_only", "dangling"),
+    "deferral.challenge": ("verdicts", "flag_em", "flag_ref"),
 }
 
 
@@ -34,6 +35,7 @@ def test_classes_and_scopes_pin_both_sides():
     assert OP_CLASSIFICATION["rulings.index"] is OpClass.MUTATING
     for op in ("rulings.search", "rulings.gate", "rulings.coverage"):
         assert OP_CLASSIFICATION[op] is OpClass.COMPUTE_ONLY
+    assert OP_CLASSIFICATION["deferral.challenge"] is OpClass.MUTATING
     for op in OPS:
         assert _OP_KEY_SCOPE[op] == "common_dir"
 

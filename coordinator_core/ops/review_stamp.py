@@ -1646,12 +1646,14 @@ def refresh_register_rows(plan_path: Path, repo_root: Path, record: Optional[Dic
     except ValueError:
         return None
     judged = {"criterion": dict(record["criterion"])}
-    if register_gate(repo_root, plan_rel, judged) is not None:
+    rel = record["record_path"]
+    if register_gate(repo_root, plan_rel, judged, verdict_covers_unclaimed=True) is not None:
         return None
-    written = register_writeback(repo_root, plan_rel, judged, str(record.get("head_sha") or ""))
+    written = register_writeback(
+        repo_root, plan_rel, judged, str(record.get("head_sha") or ""), verdict_ref=rel
+    )
     if "register_sizing" not in written:
         return None
-    rel = record["record_path"]
     return {"status": "rejudged", "reason": f"register rows refreshed per {rel}", **written}
 
 
@@ -1710,7 +1712,7 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     except ValueError:
         return {"status": "unchanged", "reason": f"{plan_path} is outside {repo_root}; register gate cannot run"}
     judged = {"criterion": dict(result)}
-    gap = register_gate(repo_root, plan_rel, judged)
+    gap = register_gate(repo_root, plan_rel, judged, verdict_covers_unclaimed=True)
     if gap is not None:
         return {"status": "unchanged", "reason": f"judge result {rel}: {gap}"}
 
@@ -1719,7 +1721,7 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     stamp["criterion"] = {"status": "met", "observation": observation, "sidecar": rel}
     _write_stamp(plan_path, split, stamp)
     out = {"status": "rejudged", "reason": f"criterion met per {rel}"}
-    out.update(register_writeback(repo_root, plan_rel, judged, str(record.get("head_sha") or "")))
+    out.update(register_writeback(repo_root, plan_rel, judged, str(record.get("head_sha") or ""), verdict_ref=rel))
     return out
 
 

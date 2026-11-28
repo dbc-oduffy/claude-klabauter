@@ -181,6 +181,67 @@ def test_search_calls_and_rag_uptake_ratio(tmp_path: Path) -> None:
         "searching_agents": 3, "rag_agents": 1, "fallback_agents": 0, "ratio": 1 / 3}
 
 
+def test_grep_calls_counts_wrapped_and_subshell_segments(tmp_path: Path) -> None:
+    blocks = [
+        _bash("w1", 'bash -c "grep x f"'),
+        _bash("w2", "sh -c 'cd d && rg x'"),
+        _bash("w3", "(grep x f)"),
+        _bash("w4", "echo `grep x f`"),
+        _bash("w5", "echo $(rg x)"),
+        _bash("w6", 'bash -c "ls"'),
+        _bash("w7", "bash script.sh"),
+        _bash("w8", "git -C /some/repo grep x"),
+    ]
+    (tmp_path / "agent-w.jsonl").write_text(
+        json.dumps(_tool_msg("m1", "r1", blocks, _u(1, 1, 0, 0))) + "\n", encoding="utf-8")
+    _journal(tmp_path, [("w", "w")])
+    assert scan_run(str(tmp_path))["agents"][0]["grep_calls"] == 6
+
+
+def test_grep_calls_counts_any_pipeline_segment_and_rag_errors(tmp_path: Path) -> None:
+    rag = "mcp__project-rag__project_symbol"
+    blocks = [
+        {"type": "tool_use", "id": "t1", "name": "Grep", "input": {}},
+        {"type": "tool_use", "id": "t2", "name": "Glob", "input": {}},
+        _bash("t3", "cat a.py | grep foo"),
+        _bash("t4", "cd x && rg foo"),
+        _bash("t5", "git grep foo"),
+        _bash("t6", "FOO=1 find . -name x"),
+        _bash("t7", "ls"),
+        _bash("t8", "pytest -k find; echo grep"),
+        _bash("t9", "echo " + "a" * 100 + " | grep x"),
+        _tu("t10", rag), _tu("t11", rag),
+    ]
+    lines = [_tool_msg("m1", "r1", blocks, _u(1, 1, 0, 0)), _result("t10", True), _result("t11", False)]
+    (tmp_path / "agent-g.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    _journal(tmp_path, [("g", "g")])
+    res = scan_run(str(tmp_path))
+    row = res["agents"][0]
+    assert row["grep_calls"] == 7
+    assert row["search_calls"] == 2
+    assert row["rag_calls"] == 2 and row["rag_errors"] == row["rag_failed"] == 1
+    assert res["run_total"]["grep_calls"] == 7 and res["run_total"]["rag_calls"] == 2
+
+
+def test_acceptance_fixture_grep_4_rag_1_error_1(tmp_path: Path) -> None:
+    blocks = [
+        {"type": "tool_use", "id": "a1", "name": "Grep", "input": {}},
+        {"type": "tool_use", "id": "a2", "name": "Glob", "input": {}},
+        _bash("a3", "ls | grep x"),
+        _bash("a4", "rg y"),
+        _tu("a5", "mcp__project-rag__project_symbol"),
+    ]
+    lines = [_tool_msg("m1", "r1", blocks, _u(1, 1, 0, 0)), _result("a5", True)]
+    (tmp_path / "agent-q.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    _journal(tmp_path, [("q", "q")])
+    res = scan_run(str(tmp_path))
+    row = res["agents"][0]
+    assert (row["grep_calls"], row["rag_calls"], row["rag_errors"]) == (4, 1, 1)
+    assert res["run_total"]["grep_calls"] == 4 and res["run_total"]["rag_calls"] == 1
+
+
 def _result(tid, is_error):
     return {"type": "user", "message": {"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": tid, "is_error": is_error, "content": "x"}]}}
@@ -233,6 +294,70 @@ def test_rag_failures_split_by_kind(tmp_path: Path) -> None:
     _journal(tmp_path, [("s", "s")])
     row = scan_run(str(tmp_path))["agents"][0]
     assert (row["rag_failed"], row["rag_timeouts"], row["rag_refused"]) == (3, 1, 1)
+
+
+def test_backpressure_and_call_deadline_count_as_timeouts(tmp_path: Path) -> None:
+    rag = "mcp__project-rag__project_symbol"
+
+    def res(tid, text):
+        return {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": tid, "is_error": True, "content": text}]}}
+    lines = [
+        _tool_msg("m1", "r1", [_tu("a", rag), _tu("b", rag)], _u(1, 1, 0, 0)),
+        res("a", "call_deadline exceeded"),
+        res("b", [{"type": "text", "text": "Backpressure: all lanes cut"}]),
+    ]
+    (tmp_path / "agent-s.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    _journal(tmp_path, [("s", "s")])
+    row = scan_run(str(tmp_path))["agents"][0]
+    assert (row["rag_calls"], row["rag_failed"], row["rag_timeouts"]) == (2, 2, 2)
+
+
+def test_agent_type_rag_positions_and_rag_empty(tmp_path: Path) -> None:
+    eng = "mcp__project-rag__project_engine_examples"
+    sym = "mcp__project-rag__project_symbol"
+
+    def res(tid, content, is_error=False):
+        return {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": tid, "is_error": is_error, "content": content}]}}
+    lines = [
+        _tool_msg("m1", "r1", [_tu("a", "Read", "/x"), _tu("b", eng), _tu("c", sym)], _u(1, 1, 0, 0)),
+        res("b", '{"results": []}'),
+        res("c", ""),
+        _tool_msg("m2", "r2", [_tu("d", eng), _tu("e", eng), _tu("f", eng)], _u(1, 1, 0, 0)),
+        res("d", [{"type": "text", "text": "ue-addon: source not indexed"}]),
+        res("e", '{"results": [{"path": "x"}]}'),
+        res("f", "boom", is_error=True),
+    ]
+    (tmp_path / "agent-u.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    (tmp_path / "agent-u.meta.json").write_text(
+        json.dumps({"agentType": "coordinator:code-reviewer"}), encoding="utf-8")
+    _agent(tmp_path, "n", [("m1", "r1", OPUS, _u(1, 1, 0, 0))])
+    _journal(tmp_path, [("u", "u"), ("n", "n")])
+    by_id = {a["agent_id"]: a for a in scan_run(str(tmp_path))["agents"]}
+    u = by_id["u"]
+    assert u["agent_type"] == "coordinator:code-reviewer"
+    assert u["rag_positions"] == [1, 2, 3, 4, 5]
+    assert u["rag_empty"] == 2
+    assert u["rag_failed"] == 1
+    assert by_id["n"]["agent_type"] is None
+    assert (by_id["n"]["rag_positions"], by_id["n"]["rag_empty"]) == ([], 0)
+
+
+def test_ue_calls_counts_addon_tools_and_engine_band_inputs(tmp_path: Path) -> None:
+    blocks = [
+        {"type": "tool_use", "id": "e1", "name": "mcp__project-rag__project_engine_examples", "input": {}},
+        {"type": "tool_use", "id": "e2", "name": "mcp__project-rag__project_semantic_search", "input": {"band": "engine-source"}},
+        {"type": "tool_use", "id": "e3", "name": "mcp__project-rag__project_semantic_search", "input": {"bands": ["project", "Engine-api"]}},
+        {"type": "tool_use", "id": "e4", "name": "mcp__project-rag__project_semantic_search", "input": {"band": "project"}},
+    ]
+    (tmp_path / "agent-e.jsonl").write_text(
+        json.dumps(_tool_msg("m1", "r1", blocks, _u(1, 1, 0, 0))) + "\n", encoding="utf-8")
+    _journal(tmp_path, [("e", "e")])
+    row = scan_run(str(tmp_path))["agents"][0]
+    assert (row["rag_calls"], row["ue_calls"]) == (4, 3)
 
 
 def test_rag_uptake_ratio_none_without_searchers(tmp_path: Path) -> None:

@@ -374,18 +374,30 @@ def test_ask_excluded_path_names_no_row(tmp_path: Path) -> None:
     assert "E1" not in rows
 
 
-def test_ask_excluded_supplied_write_refused(tmp_path: Path) -> None:
-    from coordinator_core.ops.dispatch_emit.sizing_xs_mint import AskExcludedWriteError
-
+def test_ask_excluded_supplied_write_is_reported_as_a_conflict(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "global-doctrine/CLAUDE.md", "a/b.py")
     sizing = _ledger_sizing(("do not touch global-doctrine", "open"))
-    with pytest.raises(AskExcludedWriteError, match="global-doctrine/CLAUDE.md"):
-        mint_xs_spine(
-            sizing, sizing_rel=SIZING_REL, writes=["a/b.py", "global-doctrine/CLAUDE.md"],
-            out_dir=tmp_path / "out", repo_root=repo,
-        )
+    conflicts: list[dict[str, str]] = []
+    mint_xs_spine(
+        sizing, sizing_rel=SIZING_REL, writes=["a/b.py", "global-doctrine/CLAUDE.md"],
+        out_dir=tmp_path / "out", repo_root=repo, conflicts=conflicts,
+    )
+    assert conflicts == [
+        {"path": "global-doctrine/CLAUDE.md", "sentence": "ask excludes: global-doctrine", "status": "conflict"}
+    ]
     _, rows = _rows_by_id(tmp_path, sizing, ["a/b.py"], repo)
     assert rows["X1"]["writes"] == ["a/b.py"]
+
+
+def test_conditional_wait_reports_no_conflict(tmp_path: Path) -> None:
+    repo = _repo_with(tmp_path / "repo", "global-doctrine/CLAUDE.md", "a/b.py")
+    sizing = _ledger_sizing(("until the peer lands, do not touch global-doctrine", "open"))
+    conflicts: list[dict[str, str]] = []
+    mint_xs_spine(
+        sizing, sizing_rel=SIZING_REL, writes=["a/b.py", "global-doctrine/CLAUDE.md"],
+        out_dir=tmp_path / "out", repo_root=repo, conflicts=conflicts,
+    )
+    assert conflicts == []
 
 
 def test_plans_only_ledger_body_stays_in_x1(tmp_path: Path) -> None:

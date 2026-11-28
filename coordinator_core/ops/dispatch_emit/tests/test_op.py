@@ -767,6 +767,46 @@ def test_writes_needing_check_passes_dotdot_and_absolute_through(tmp_path):
     assert kept == ["src/../sibling/z.py", "../sibling/w.py", absolute]
 
 
+def _named_pipeline_script(tmp_path, monkeypatch, *, served: bool) -> str:
+    import yaml
+
+    from coordinator_core.bash_guards import _rag_serving
+    from coordinator_core.ops.dispatch_emit import op as op_module
+
+    monkeypatch.setattr(_rag_serving, "serves_repo", lambda cwd=None: served)
+    content = tmp_path / "content"
+    pipelines = content / "pipelines" / "dr"
+    pipelines.mkdir(parents=True)
+    stage = {
+        "id": "plan", "agent_type": "coordinator:research-scout", "model": "haiku",
+        "template": "t.md", "output": "{{scratch_dir}}/plan.md", "fan_out": "none",
+    }
+    doc = {"schema_version": 1, "pipeline": "ragp", "inputs": {"brief": "required"}, "stages": [stage]}
+    (pipelines / "ragp.manifest.yaml").write_text(yaml.safe_dump(doc), encoding="utf-8")
+    (pipelines / "t.md").write_text("work from {{brief}}", encoding="utf-8")
+    monkeypatch.setattr(op_module, "read_content_root", lambda: "doe")
+    monkeypatch.setattr(op_module, "content_root_for", lambda _root: content)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "brief.md").write_text("research X", encoding="utf-8")
+    reply = op_module._dispatch_emit(
+        {"pipeline": "ragp", "brief": "brief.md", "target_root": str(repo), "session_id": "sess-1"}
+    )
+    return Path(reply["path"]).read_text(encoding="utf-8")
+
+
+def test_named_pipeline_emit_opens_with_the_prefetch_stage_on_a_served_repo(tmp_path, monkeypatch):
+    script = _named_pipeline_script(tmp_path, monkeypatch, served=True)
+    assert script.count("label: 'rag-prefetch'") == 1
+    assert "let _ragBlock = '';" in script
+
+
+def test_named_pipeline_emit_on_an_unserved_repo_emits_no_prefetch(tmp_path, monkeypatch):
+    script = _named_pipeline_script(tmp_path, monkeypatch, served=False)
+    assert "rag-prefetch" not in script
+    assert "_ragBlock" not in script
+
+
 def test_run_checks_memoized_returns_fresh_list_per_call():
     from coordinator_core.ops.dispatch_emit import op
 

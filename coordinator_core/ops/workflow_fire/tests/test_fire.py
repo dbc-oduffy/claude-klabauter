@@ -854,20 +854,21 @@ def test_a_running_record_with_a_matching_pid_birth_is_still_live(repo, notify):
 
 
 @pytest.mark.parametrize("notify", [True, False])
-def test_a_launch_whose_birth_was_access_denied_stays_live_while_its_pid_lives(repo, notify):
+def test_a_launch_whose_birth_was_access_denied_is_dead_and_frees_its_slot(repo, monkeypatch, notify):
     path = _running_on_disk(repo, "9" * 32, pid_birth=None, pid_birth_denied=True)
+    monkeypatch.setattr(fire, "_pid_birth", lambda pid: None)
 
-    assert fire.count_live_fires(str(repo), notify=notify) == 1
-    assert fire._read_record(path)["state"] == "running"
+    assert fire.count_live_fires(str(repo), notify=notify) == 0
+    assert fire._read_record(path)["state"] != "running"
 
 
 @pytest.mark.parametrize("notify", [True, False])
-def test_a_live_pid_whose_current_birth_is_unreadable_stays_live(repo, monkeypatch, notify):
+def test_a_live_pid_whose_current_birth_is_unreadable_is_dead_and_frees_its_slot(repo, monkeypatch, notify):
     path = _running_on_disk(repo, "8" * 32, pid_birth=psutil.Process().create_time() - 100.0)
     monkeypatch.setattr(fire, "_pid_birth", lambda pid: None)
 
-    assert fire.count_live_fires(str(repo), notify=notify) == 1
-    assert fire._read_record(path)["state"] == "running"
+    assert fire.count_live_fires(str(repo), notify=notify) == 0
+    assert fire._read_record(path)["state"] != "running"
 
 
 def test_fire_workflow_marks_a_launch_whose_birth_read_is_access_denied(repo, script, monkeypatch):

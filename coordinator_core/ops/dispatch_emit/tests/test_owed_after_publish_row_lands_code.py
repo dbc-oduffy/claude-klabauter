@@ -46,7 +46,7 @@ def _ledger():
 
 def _verdict():
     return {"items": [
-        {"id": "R1", "status": "met", "met_by": "a.py", "wired": True},
+        {"id": "R1", "status": "met", "wired": True},
         {"id": "R2", "status": "not_met", "withheld_by": "C2"},
     ]}
 
@@ -112,7 +112,7 @@ def repo(tmp_path, monkeypatch):
     rl.revise(root, RUN, verbatim="and the box-slot measurement")
     monkeypatch.setattr(cr, "_actual_loe", lambda r, s: "S")
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     return root
 
@@ -137,7 +137,7 @@ def test_em_performed_owed_row_lands_the_code_and_stays_open_owed_after_publish(
 
 def test_a_row_withheld_by_an_unowed_id_still_refuses_ledger_unmet(repo):
     verdict = {"items": [
-        {"id": "R1", "status": "met", "met_by": "a.py", "wired": True},
+        {"id": "R1", "status": "met", "wired": True},
         {"id": "R2", "status": "not_met", "withheld_by": "C9"},
     ]}
     out = land_run._handler(_params(verdict), repo_root=repo / ".git")

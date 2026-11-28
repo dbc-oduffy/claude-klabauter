@@ -48,7 +48,7 @@ def test_adhoc_plugin_run_is_denied_by_the_guard(cmd) -> None:
 def test_adhoc_plugin_run_is_denied_box_degrading_through_the_dispatcher() -> None:
     reason = _reason("python -m pytest -p myplugin tests/")
     assert f"`{NAME}`" in reason
-    assert "scoped_pytest" in reason
+    assert "scoped-pytest" in reason
 
 
 @pytest.mark.parametrize(

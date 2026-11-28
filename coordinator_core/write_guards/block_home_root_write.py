@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from coordinator_core.machine_profile import apply_guard_level
-from coordinator_core.write_guards._home_root import DENY_REASON, creates_home_root_entry
+from coordinator_core.write_guards._home_root import creates_home_root_entry, deny_reason
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -32,7 +32,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": DENY_REASON,
+                    "permissionDecisionReason": deny_reason(path),
                 }
             },
         )

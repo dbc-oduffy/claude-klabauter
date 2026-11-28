@@ -51,7 +51,7 @@ def _fixture(tmp_path, monkeypatch, ruling_run, *, source_anchor=None, ask_text=
     monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
     monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     monkeypatch.setattr(
-        claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], [])
+        claims, "list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([("handoff", "b.md")], [])
     )
     monkeypatch.setattr(close_background, "_launch_close_review", lambda ctx: True)
     return repo, script

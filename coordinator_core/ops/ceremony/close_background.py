@@ -1462,12 +1462,25 @@ def _scratch_reap(ctx: JobContext) -> LegResult:
         refused += len(reply["refused"])
         if reply["held"]:
             held.append(rid)
-    if not seen:
+    swept, sweep_error = _sweep_run_scratch_roots()
+    if not seen and not swept and not sweep_error:
         return LegResult("not-applicable", "no scratch ledger or warp dir for the run")
-    detail = f"scratch-reap: removed {removed}, kept {kept}, refused {refused}"
+    detail = f"scratch-reap: removed {removed}, kept {kept}, refused {refused}, run-scratch swept {swept}"
     if held:
         detail += f"; held: {', '.join(held)}"
+    if sweep_error:
+        detail += f"; run-scratch sweep failed: {sweep_error}"
     return _leg("ran", detail, ctx)
+
+
+def _sweep_run_scratch_roots() -> tuple[int, str]:
+    """Claims `run_scratch.sweep` removed under the scratch and build roots (dead owner, excess keep)."""
+    from coordinator_core import run_scratch
+
+    try:
+        return len(run_scratch.sweep_boxes()), ""
+    except Exception as exc:  # noqa: BLE001
+        return 0, f"{type(exc).__name__}: {exc}"
 
 
 def _clean_clone_proof(ctx: JobContext) -> LegResult:

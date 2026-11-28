@@ -77,10 +77,13 @@ class DeadlineStop(Exception):
         self.phase = phase
 
 
+#: Twin of `submit_engine_ask._DOOR_HOOK_READ_DEADLINE_S`, held here so the cold Bash chain does not
+#: import that module's closure for one number. Pinned equal by test_preuse_phases.py.
+_DOOR_HOOK_READ_DEADLINE_S = 8.0
+
+
 @functools.lru_cache(maxsize=1)
 def _door_deadline_s() -> float:
-    from coordinator_core.hooks.submit_engine_ask import _DOOR_HOOK_READ_DEADLINE_S
-
     return float(_DOOR_HOOK_READ_DEADLINE_S)
 
 

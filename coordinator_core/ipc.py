@@ -1123,6 +1123,47 @@ _dispatch_op_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar
     "coordinator_core_ipc_dispatch_op", default=None
 )
 
+#: True while `dispatch_from_hook` drives `dispatch_message` by hand with no event loop: a sync handler runs
+#: inline (in a context copy) instead of under `asyncio.to_thread` + `wait_for`. The op's own deadline
+#: (`dispatch_abandon.DEADLINE`, checked by the guard phases) still binds; the per-request `wait_for`
+#: abandon does not, because the door kills the cold child at its own wall bound.
+_INLINE_SYNC_HANDLER: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "coordinator_core_ipc_inline_sync_handler", default=False
+)
+
+#: True once the inline branch has called the handler. `dispatch_from_hook` falls back to `loop_pool.run`
+#: only while this is False; once True a suspension is an error, never a re-dispatch.
+_INLINE_HANDLER_STARTED: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "coordinator_core_ipc_inline_handler_started", default=False
+)
+
+
+def _sync_handler_registered(op_name: str, envelope: dict) -> bool:
+    """True when `op_name` resolves to a sync handler (loads only the owning op module)."""
+    import inspect
+
+    try:
+        handler = get_op_handler(op_name, envelope)
+    except Exception:  # noqa: BLE001 -- any lookup failure takes the loop path, which reports it
+        return False
+    return handler is not None and not inspect.iscoroutinefunction(handler)
+
+
+def _drive_without_loop(coro: Any) -> Any:
+    """Run a coroutine that never suspends to completion on the calling thread; raises
+    _InlineSuspended (coroutine closed) if it yields to an event loop. The handler may have run
+    partway, so the caller reports the error and never re-dispatches."""
+    try:
+        coro.send(None)
+    except StopIteration as done:
+        return done.value
+    coro.close()
+    raise _InlineSuspended("dispatch suspended on an event loop in inline mode")
+
+
+class _InlineSuspended(RuntimeError):
+    """An inline-driven dispatch yielded to an event loop after starting."""
+
 
 #: A pool worker binds a dict here before dispatch; the chokepoint copies a
 #: `hooks.preuse_*` op's `slow_phase`/`spans` row fields into it so the worker
@@ -1657,57 +1698,31 @@ def resolve_caller_cwd(msg: dict) -> Optional[Path]:
 # elsewhere as frozen/non-extensible without a bilateral cross-repo memo;
 # this key is engine-internal plumbing, not a new envelope field.
 #
-# Recording reuses `session.scope.touch(sid, path, cwd)` verbatim — the
-# existing, already-tested, already-fail-open, already-mtime-disciplined
-# primitive every other writer of `touched.txt` shares (see that function's
-# own docstring for why a second dialect must never be inlined at a new call
-# site). This module adds NO second recorder — only identity resolution
-# (`session.core.resolve_session_id`, the substrate's canonical 4-tier
-# resolver — no new identity source) and pre-touch validation of the
-# declared paths (containment + on-disk existence), since a self-reported
-# path is untrusted handler input, not a hook-verified tool-call path.
+# Recording writes each owning repo's declared paths with ONE
+# `touch_record.append_events` call, every path normalised by
+# `session.scope.normalize_touch_path` (the one shared dialect). Identity is
+# `session.core.attributable_session_id`; a self-reported path is untrusted
+# handler input, so it is validated (on-disk file, owning repo) first.
 #
 # Fail-open, unconditionally: a failure anywhere in this recording path
 # (unresolvable identity, an unreadable/unwritable session dir, a malformed
 # declared path) must never fail the op that already succeeded — see
 # `_record_self_reported_touches`'s own try/except shape.
 #
-# Cross-repo containment (2026-08-04 F1 fix, staff-eng REQUIRES_CHANGES):
-# a declared path is recorded ONLY when it resolves inside the CALLER's own
-# `_origin_worktree` repo — never the declared path's own containing repo.
-# An earlier version anchored containment on the declared path itself so
-# that `queue.append`'s central `queue_scope` and `queue.promote`'s
-# coordinator-content-repo central-root writes (genuinely outside the caller's own
-# worktree) could still be recorded. That was unsound and was reproduced
-# live: a session id is a REPO-LOCAL namespace key, not a portable identity,
-# and `session.scope.touch()` lazily calls `session.core.init()`, so
-# recording into a foreign repo MATERIALIZES a real session dir there under
-# the caller's sid, with a fresh `last_activity` that reads as a live peer
-# for the next 30 minutes (Layer-2 liveness). That phantom peer then
-# subtracts against the TARGET repo's own sessions in `compute_scope` Step
-# 3 — reproduced stealing a live native session's own claimed file — and
-# independently perturbs the target repo's tier-4 sentinel resolution
-# (`live_count >= 2` -> ambiguous), which can leave a sibling repo's own
-# session unable to resolve its own id.
-# shell-doc-ok: the backticked comparison above is a Python boolean
-# expression quoted from this module's own sentinel logic, not a shell
-# version constraint.
-# See
-# `_resolve_declared_touch_root_and_path`'s docstring for the containment
-# check itself.
+# trap: a session id is a REPO-LOCAL namespace key. Recording into a foreign
+# repo must never materialise a session there: `core.ensure_session` and any
+# `meta.json` / `last_activity` write in a foreign repo make the caller's sid
+# read as a live peer, which steals a live native session's claim in
+# `compute_scope` and can make that repo's tier-4 sentinel resolution
+# ambiguous.
 #
-# Consequence, deliberate: a declared path outside the caller's own repo is
-# SKIPPED — never recorded, never written cross-repo. `queue.promote`'s
-# writes into the coordinator-content-repo central root therefore stay unclaimed orphans
-# at that sink. This is the CORRECT outcome, not a regression — no claim is
-# always safer than a WRONG claim, and a wrong claim here actively harms a
-# sibling repo claude-klabauter does not own. Do not "fix" this back to declared-path
-# anchoring; the coordinator-content-repo side has its own adoption path
-# (`--include-orphans`) for exactly this residual.
-#
-# Every skip is logged (never silent — see `_record_self_reported_touches`),
-# since a silently-dropped declaration is indistinguishable from "nothing
-# was ever wrong" to an operator debugging a missing claim.
+# invariant: a declared path is recorded under the caller's sid in its OWNING
+# repo (no-spawn `.git` ancestor walk). In the caller's own repo it is always
+# recorded. In a foreign repo it is recorded ONLY when no other live session
+# there already claims it (`claim_index.lookup` + `liveness.session_live`,
+# read once per repo per batch); a claimed path is skipped and counted per
+# repo under `_TOUCH_SKIPPED_CLAIMED_KEY` in the op's reply. A foreign repo's
+# `meta.json` is never created or rewritten. Every skip is logged.
 #
 # Known residual — linked-worktree containment mismatch (2026-08-05 review,
 # not yet fixed): `caller_repo_root` above is derived from `git_root(sid_cwd)`
@@ -1729,63 +1744,25 @@ from coordinator_core.session.declared_writes import (  # noqa: E402
 )
 from coordinator_core.locked_write import LockTimeout, held_lock  # noqa: E402
 
-# Cap on the number of paths a single declaration may carry (2026-08-04 F4
-# fix). Re-measured 2026-08-14 (C4, docs/plans/2026-08-14-cli-authored-writes-
-# get-claimed.md), AFTER C1 (touch() forwards `root`, engaging
-# normalize_touch_path's zero-spawn arm) and C2 (one held_lock acquire per
-# batch, not per path) landed — both prior figures in this comment's history
-# (a ~9-10ms/24ms warm/cold estimate, and a since-superseded ~402ms/path
-# pre-C1 measurement) were wrong at the time they were written and are
-# superseded by this one; do not average across them.
-#
-# Method: 20 end-to-end trials of `_record_self_reported_touches` (this
-# module's own recorder — includes the one `held_lock` batch acquire, NOT
-# just `normalize_touch_path` in isolation) against 16 real tracked files in
-# this repo. Measured on this machine with ~130-135 concurrent
-# claude.exe/node.exe processes live (`tasklist`-counted immediately before
-# and after the run) — consistent with the documented load norm
-# (docs/wiki/machine-load-norm.md: 50-70 concurrent LLMs average, floor two
-# dozen), not an idle-box number.
-#
-# Result: mean 56.8ms, median 49.9ms, p90 73.2ms, max 148.9ms for the full
-# 16-path batch (per-path mean ~3.6ms). Against the 300ms MUTATING target
-# (`coordinator_core/benchmarks/budget-manifest.json`,
-# `defaults.MUTATING.target_ms` — marked `_provisional`, DR-276: the manifest
-# is not a runtime ceiling, so treat 300ms itself as not yet settled), even
-# the observed max leaves ~150ms of headroom for the handler's own work and
-# a colder start than any of these 20 trials hit. 16 stays: it costs well
-# under half the (provisional) budget at the measured tail, and a handler
-# legitimately writing more than 16 files in one call is off the shape this
-# contract was designed for (a single-write-primitive self-report, per the
-# module contract above) and should be revisited rather than raising the
-# cap. Excess entries are dropped (log-and-truncate), never silently.
-#
-# Invariant: 16 is the bound of a batch that declares none. A larger batch is
-# declared by its caller through `_SCOPE_TOUCH_MAX_PATHS_KEY`, never granted by
-# raising this number.
-_MAX_DECLARED_TOUCH_PATHS = 16
+# invariant: no declared path is ever dropped by count. Cost is bounded by
+# repo count (one `held_lock` and one `append_events` per owning repo); a
+# single path line over `touch_record.MAX_ENCODED_LINE_LEN` is dropped alone
+# by `append_events`' own RETAIN rule.
 
-#: Reserved result key a caller sets to the bound of its own multi-file batch;
-#: popped by `_record_self_reported_touches` and never on the wire.
-_SCOPE_TOUCH_MAX_PATHS_KEY = "_scope_touch_max_paths"
+#: Reply key naming the per-repo count of foreign paths skipped because a live
+#: session there already claims them: `{<repo root>: <count>}`, set only when
+#: a count is nonzero.
+_TOUCH_SKIPPED_CLAIMED_KEY = "_touch_skipped_claimed"
 
-#: Highest bound a batch may declare.
-_DECLARED_TOUCH_BOUND_CEILING = 48
-
-#: Sub-second, bounded acquire timeout for the ONE `touched.txt` batch lock
-#: `_record_self_reported_touches` takes per dispatch (C2,
-#: docs/plans/2026-08-14-cli-authored-writes-get-claimed.md) — see that
-#: function's own comment for why one acquire covers the whole
-#: `_MAX_DECLARED_TOUCH_PATHS`-bounded batch rather than one per path.
-#: Matches `session.scope._ATOMIC_APPEND_LOCK_TIMEOUT_SECS`'s per-call default; kept
-#: as a separate constant because the two call sites (batch vs. single-path)
-#: are independent tuning knobs even though they share a starting value
-#: today.
+#: Bounded acquire timeout for the one batch lock taken per owning repo.
 _TOUCH_BATCH_LOCK_TIMEOUT_SECS = 0.2
 
 
 def _resolve_declared_touch_root_and_path(
-    raw_path: object, sid_cwd: Optional[str], caller_repo_root: Optional[str]
+    raw_path: object,
+    sid_cwd: Optional[str],
+    caller_repo_root: Optional[str],
+    repo_memo: Optional[dict] = None,
 ) -> tuple:
     """Validate one `_SCOPE_TOUCH_PATHS_KEY` entry.
 
@@ -1801,28 +1778,15 @@ def _resolve_declared_touch_root_and_path(
     ACTUALLY-WROTE requirement is unenforceable here — this function cannot
     know what a handler really wrote, only what it claims) — treat it
     accordingly: skip (never raise) on anything that is not a non-empty
-    string, resolves outside the CALLER's own repo, is not an existing
-    regular file, or the caller's own repo root is itself unresolvable.
+    string, has no owning git repo, is not an existing regular file, or the
+    caller's own repo root is itself unresolvable.
 
-    Repo containment is resolved from the CALLER's OWN `_origin_worktree`
-    (`caller_repo_root`, precomputed ONCE per dispatch by the caller from
-    `sid_cwd` — never re-derived per path, both for cost (F4) and so every
-    declared path in one call is judged against the same anchor), NOT from
-    the declared path's own containing repo. See this module's
-    `_SCOPE_TOUCH_PATHS_KEY` contract comment (F1 fix, 2026-08-04) for why
-    anchoring on the declared path itself was unsound and reproduced live —
-    in short, a session id is a repo-local namespace key, and recording a
-    claim in a repo the caller has no standing in can steal a live native
-    session's own file and corrupt that repo's session-liveness resolution.
-    The returned `repo_root` (== `caller_repo_root`) is threaded through to
-    `session.scope.touch()`'s `cwd` param so the claim lands in the
-    caller's own `.coordinator-local/coordinator-sessions/<sid>/touched.txt` — the one a
-    same-repo `scoped_git_commit` call will actually read. `_record_self_
-    reported_touches` ALSO forwards it as `touch()`'s `root` param: it was
-    resolved via `core.git_root` and realpath'd above, satisfying
-    `normalize_touch_path`'s "MUST be the worktree root itself"
-    precondition, so this call site can engage the zero-spawn fast arm
-    instead of re-deriving the root itself per declared path.
+    The returned `repo_root` is the path's OWNING repo: `caller_repo_root`
+    (precomputed ONCE per dispatch, realpath'd) when the path sits inside it,
+    else the nearest ancestor holding a `.git` entry found by a no-spawn walk,
+    memoised per parent directory in `repo_memo`. A path with no owning repo
+    is skipped. See this module's `_SCOPE_TOUCH_PATHS_KEY` contract comment
+    for what the recorder does with a foreign `repo_root`.
 
     Only a FILE may be declared, never a directory (F2 fix, 2026-08-04): a
     directory reaches `commit_pipeline.explicit_stage`'s `git add -- <dir>`
@@ -1849,20 +1813,147 @@ def _resolve_declared_touch_root_and_path(
         anchor = raw_path
 
     abs_path = os.path.realpath(anchor)
-    if abs_path != caller_repo_root and not abs_path.startswith(caller_repo_root + os.sep):
-        return None, f"outside the caller's own repo ({caller_repo_root})"
     if not os.path.isfile(abs_path):
         return (
             None,
             "not an existing regular file (directories are rejected; a "
             "path that was never actually written cannot be verified)",
         )
-    return (caller_repo_root, abs_path), None
+    if abs_path.startswith(caller_repo_root + os.sep):
+        return (caller_repo_root, abs_path), None
+    owner = _owning_repo_root_no_spawn(os.path.dirname(abs_path), repo_memo)
+    if not owner:
+        return None, "no owning git repo found above the path"
+    return (owner, abs_path), None
+
+
+def _owning_repo_root_no_spawn(parent: str, memo: Optional[dict]) -> Optional[str]:
+    """Nearest ancestor of `parent` holding a `.git` entry (realpath'd), or `None`.
+
+    Pure `os.path` walk, no git spawn; every directory visited is memoised in
+    `memo` so a batch pays one walk per distinct directory chain.
+    """
+    if memo is None:
+        memo = {}
+    visited = []
+    current = parent
+    owner: Optional[str] = None
+    while True:
+        if current in memo:
+            owner = memo[current]
+            break
+        visited.append(current)
+        if os.path.lexists(os.path.join(current, ".git")):
+            owner = current
+            break
+        up = os.path.dirname(current)
+        if up == current:
+            break
+        current = up
+    for seen in visited:
+        memo[seen] = owner
+    return owner
+
+
+def _foreign_claimed_paths(sid: str, root: str, rel_paths: list) -> set:
+    """Subset of `rel_paths` that a live session other than `sid` already claims in repo `root`.
+
+    One `claim_index.lookup` for the whole list plus one `session_live` per
+    distinct claimant; an unanswerable lookup counts as claimed. Raises on a
+    read failure so the caller records nothing for that repo.
+    """
+    from coordinator_core.session import claim_index, liveness
+
+    claimants = claim_index.lookup(rel_paths, cwd=root)
+    live: Dict[str, bool] = {}
+    claimed = set()
+    for rel in rel_paths:
+        for other in claimants.get(rel, ()):
+            if other == sid:
+                continue
+            if other == claim_index.UNANSWERABLE:
+                claimed.add(rel)
+                break
+            if other not in live:
+                live[other] = liveness.session_live(other, root)
+            if live[other]:
+                claimed.add(rel)
+                break
+    return claimed
+
+
+def _record_repo_batch(
+    sid: str, root: str, abs_paths: list, own: bool, skipped_claimed: Dict[str, int]
+) -> None:
+    """Append every path in `abs_paths` to `sid`'s touch record in repo `root` as one `append_events`.
+
+    `own` is the caller's repo: it gets `ensure_session` and a `last_activity`
+    refresh. A foreign repo gets neither, and a path a live peer there already
+    claims is skipped and counted in `skipped_claimed[root]`.
+    """
+    from pathlib import Path
+
+    from coordinator_core.session import core as _session_core
+    from coordinator_core.session import scope as _scope
+    from coordinator_core.session import touch_record as _touch_record
+
+    sdir = _session_core.session_dir(sid, root)
+    if not sdir:
+        return
+    rels: Dict[str, str] = {}
+    for abs_path in abs_paths:
+        rel = _scope.normalize_touch_path(abs_path, root, root)
+        if rel is not None:
+            rels.setdefault(rel, abs_path)
+    if not own and rels:
+        claimed = _foreign_claimed_paths(sid, root, list(rels))
+        for rel in claimed:
+            _log().info(
+                "coordinator_core.ipc: skipped self-reported touch %r for "
+                "session %r: claimed by a live session in %s", rel, sid, root,
+            )
+            del rels[rel]
+        if claimed:
+            skipped_claimed[root] = len(claimed)
+    if not rels:
+        return
+    if own:
+        _session_core.ensure_session(sid, root, sessions_base=os.path.dirname(sdir))
+    sink = Path(sdir) / _scope._TOUCH_RECORD_FILENAME
+    events = [
+        {
+            "session_id": sid,
+            "agent_id": None,
+            "verb": _touch_record.VERB_TOUCH,
+            "path": rel,
+            "kind": _touch_record.KIND_WRITE,
+        }
+        for rel in rels
+    ]
+    locked = False
+    try:
+        with held_lock(
+            Path(os.path.abspath(str(sink))),
+            anchor_root=Path(os.path.realpath(root)),
+            timeout=_TOUCH_BATCH_LOCK_TIMEOUT_SECS,
+        ):
+            _touch_record.append_events(sink, events)
+            locked = True
+    except (LockTimeout, RuntimeError, ValueError, OSError) as exc:
+        _log().debug(
+            "coordinator_core.ipc: batch touch lock unavailable, appending "
+            "unlocked: %s", exc,
+        )
+    if not locked:
+        _touch_record.append_events(sink, events)
+    if own:
+        _session_core.update_meta_field(sdir, "last_activity", _session_core.now_iso())
 
 
 def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> object:
     """Strip `_SCOPE_TOUCH_PATHS_KEY` from `result` (if present) and record a
-    `session.scope.touch()` claim for each validated declared path.
+    `KIND_WRITE` touch event for every validated declared path, one atomic
+    append per owning repo.
 
     MUST be called exactly once, on every dispatch path, before the wire
     envelope is built — see the module-level contract comment above this
@@ -1871,26 +1962,22 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
     wire (fail-open covers recording, never the strip).
 
     `sid_cwd` (the dispatching request's `_origin_worktree`, when present)
-    anchors BOTH session-identity resolution (`session.core.resolve_session_id`'s
-    tier-4 sentinel-file fallback reads THIS session's own repo) AND, as of
-    the F1 fix (2026-08-04), per-path repo containment — every declared path
-    is judged against the CALLER's own repo, never the declared path's own
-    containing repo; see `_resolve_declared_touch_root_and_path`'s docstring
-    and this module's `_SCOPE_TOUCH_PATHS_KEY` contract comment for why.
+    anchors session-identity resolution and the caller's own repo; see this
+    module's `_SCOPE_TOUCH_PATHS_KEY` contract comment for the foreign-repo
+    rule.
 
-    Every declaration this function skips (cap overflow, containment
-    failure, not-a-file, ...) is logged — never silently dropped — so an
-    operator debugging a missing claim (or auditing a cross-repo attempt)
-    has something to grep for.
+    Every declaration this function skips (no owning repo, not-a-file,
+    claimed by a live session in a foreign repo, ...) is logged — never
+    silently dropped. Foreign paths skipped as claimed are also counted per
+    repo in `result[_TOUCH_SKIPPED_CLAIMED_KEY]`.
 
-    Returns `result` unchanged (same object, mutated in place when the key
-    was present) — never raises; never fails the op.
+    Returns `result` (same object, mutated in place) — never raises; never
+    fails the op.
     """
     if not isinstance(result, dict):
         return result
 
     declared = result.pop(_SCOPE_TOUCH_PATHS_KEY, None)
-    declared_bound = result.pop(_SCOPE_TOUCH_MAX_PATHS_KEY, None)
     if declared is None:
         return result
     try:
@@ -1898,8 +1985,6 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
             return result
 
         from coordinator_core.session import core as _session_core
-        from coordinator_core.session import scope as _scope
-        from coordinator_core.session import touch_record as _touch_record
 
         # AC8 (docs/plans/2026-08-30-the-c-door-sends-the-callers-session-
         # identity.md) - this resolution MINTS: the id chosen here names the
@@ -1924,42 +2009,18 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
         if not sid:
             return result
 
-        bound = _MAX_DECLARED_TOUCH_PATHS
-        if declared_bound is not None:
-            if (
-                isinstance(declared_bound, int)
-                and not isinstance(declared_bound, bool)
-                and 1 <= declared_bound <= _DECLARED_TOUCH_BOUND_CEILING
-            ):
-                bound = declared_bound
-            else:
-                _log().warning(
-                    "coordinator_core.ipc: session %r declared an unusable "
-                    "touch bound %r (need an int from 1 to %d) — the default "
-                    "cap of %d applies",
-                    sid, declared_bound, _DECLARED_TOUCH_BOUND_CEILING, bound,
-                )
-
-        if len(declared) > bound:
-            _log().warning(
-                "coordinator_core.ipc: session %r declared %d touch paths, "
-                "exceeding the cap of %d — recording only the first %d, "
-                "dropping the remaining %d",
-                sid, len(declared), bound, bound, len(declared) - bound,
-            )
-            declared = declared[:bound]
-
         caller_repo_root: Optional[str] = None
         if sid_cwd:
             root = _session_core.git_root(sid_cwd)
             if root:
                 caller_repo_root = os.path.realpath(root)
 
+        repo_memo: dict = {}
         resolved_paths = []
         for raw_path in declared:
             try:
                 resolved, skip_reason = _resolve_declared_touch_root_and_path(
-                    raw_path, sid_cwd, caller_repo_root
+                    raw_path, sid_cwd, caller_repo_root, repo_memo
                 )
                 if resolved is None:
                     _log().info(
@@ -1976,86 +2037,32 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
                     raw_path, exc,
                 )
 
-        def _record_touches() -> None:
-            for path_repo_root, abs_path in resolved_paths:
-                try:
-                    _scope.touch(
-                        sid, abs_path, path_repo_root, root=path_repo_root,
-                        kind=_touch_record.KIND_WRITE, refresh_activity=False,
-                    )
-                except Exception as exc:
-                    _log().debug(
-                        "coordinator_core.ipc: self-reported touch failed for "
-                        "%r: %s",
-                        abs_path, exc,
-                    )
-            # One last_activity meta.json rewrite for the whole batch, not one
-            # per path (the rewrite was ~half of each touch's cost).
-            # Paths may resolve to different repo roots (each its own session
-            # dir), so refresh once per distinct root.
-            try:
-                for batch_root in dict.fromkeys(r for r, _ in resolved_paths):
-                    batch_sdir = _session_core.session_dir(sid, batch_root)
-                    if batch_sdir:
-                        _session_core.update_meta_field(
-                            batch_sdir, "last_activity", _session_core.now_iso()
-                        )
-            except Exception as exc:
-                _log().debug(
-                    "coordinator_core.ipc: batch last_activity refresh failed: "
-                    "%s", exc,
-                )
-
         if not resolved_paths:
             return result
 
-        # C2 (docs/plans/2026-08-14-cli-authored-writes-get-claimed.md):
-        # acquire the batch lock ONCE for the whole declared-path batch,
-        # here at the recorder, rather than once per path inside
-        # `session.scope.touch()` — to bound worst-case latency (one
-        # acquire instead of up to `_MAX_DECLARED_TOUCH_PATHS`). This lock
-        # exists ONLY to bound that latency, never to avoid a nested
-        # acquire: `scope.touch` takes no lock of its own to re-enter (its
-        # vestigial `lock=` parameter was traced by AC11 and deleted
-        # 2026-08-27 — C4/AC17 had already removed the dedup-scan region it
-        # once serialized, and `touch_record.append_event`'s single atomic
-        # append needs no app-level lock). Every resolved path in
-        # one call shares the same `caller_repo_root`
-        # (`_resolve_declared_touch_root_and_path` enforces single-repo
-        # containment against the caller's own repo — see its docstring),
-        # so they also share one record-sink target and one lock, keyed on
-        # the SAME `touch-record.jsonl` seam `scope.touch`/`touch_record`
-        # use, not the retired `touched.txt` dialect.
-        from pathlib import Path
+        by_root: Dict[str, list] = {}
+        for path_repo_root, abs_path in resolved_paths:
+            by_root.setdefault(path_repo_root, []).append(abs_path)
 
-        locked = False
-        touched_path: Optional[Path] = None
-        anchor_repo_root = resolved_paths[0][0]
-        try:
-            sdir = _session_core.session_dir(sid, anchor_repo_root)
-            if sdir:
-                touched_path = Path(sdir) / _scope._TOUCH_RECORD_FILENAME
-        except Exception as exc:
-            _log().debug(
-                "coordinator_core.ipc: could not resolve session dir for "
-                "batch touch lock: %s", exc,
-            )
-        if touched_path is not None:
+        skipped_claimed: Dict[str, int] = {}
+        for batch_root, abs_paths in by_root.items():
             try:
-                with held_lock(
-                    Path(os.path.abspath(str(touched_path))),
-                    anchor_root=Path(os.path.realpath(anchor_repo_root)),
-                    timeout=_TOUCH_BATCH_LOCK_TIMEOUT_SECS,
-                ):
-                    _record_touches()
-                    locked = True
-            except (LockTimeout, RuntimeError, ValueError, OSError) as exc:
-                _log().debug(
-                    "coordinator_core.ipc: batch touch lock unavailable, "
-                    "degrading to per-path locking: %s", exc,
+                _record_repo_batch(
+                    sid, batch_root, abs_paths, batch_root == caller_repo_root,
+                    skipped_claimed,
                 )
-        if not locked:
-            _record_touches()
+            except Exception as exc:
+                _log().debug(
+                    "coordinator_core.ipc: self-reported touch batch failed "
+                    "for repo %r: %s", batch_root, exc,
+                )
+        if skipped_claimed:
+            result[_TOUCH_SKIPPED_CLAIMED_KEY] = skipped_claimed
+            _log().warning(
+                "coordinator_core.ipc: session %r skipped foreign touch paths "
+                "already claimed by a live session there: %s",
+                sid, skipped_claimed,
+            )
     except Exception as exc:
         _log().debug(
             "coordinator_core.ipc: self-reported touch recording failed: %s", exc
@@ -2347,13 +2354,17 @@ def _run_handler_absorbing_base(handler, params, repo_root) -> Any:
     site imports it lazily. By the time this runs the dispatcher has already
     imported it, so the statement is a ``sys.modules`` dict lookup.
     """
-    import asyncio
     import time
 
+    # TRAP: not `import asyncio` -- the inline hook seam (`_INLINE_SYNC_HANDLER`) runs this with no event
+    # loop, and importing asyncio there is the ~45ms the seam exists to skip. Nothing can raise its
+    # CancelledError in a process that never loaded asyncio.
+    _aio = _sys.modules.get("asyncio")
+    _cancelled = (_aio.CancelledError,) if _aio is not None else ()
     cpu_start = time.thread_time()
     try:
         return handler(params, repo_root=repo_root)
-    except (Exception, asyncio.CancelledError):
+    except (Exception, *_cancelled):
         raise
     except BaseException as exc:
         raise _EscapedBaseException(exc) from exc
@@ -2539,8 +2550,6 @@ async def _dispatch_message_impl(msg: dict) -> dict:
         On success: {"jsonrpc": "2.0", "id": id_, "result": <handler return value>}
         On error:   {"jsonrpc": "2.0", "id": id_, "error": {"code": <int>, "message": <str>}}
     """
-    import asyncio
-
     id_ = msg.get("id")
 
     # Step 2: Validate jsonrpc version field (JSON-RPC 2.0 §4).
@@ -2818,7 +2827,29 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     _op_cpu_token = _op_cpu_secs_var.set(_op_cpu)
     _completed_after_backstop: Optional[dict] = None
     try:
-        if inspect.iscoroutinefunction(handler):
+        if _INLINE_SYNC_HANDLER.get() and not inspect.iscoroutinefunction(handler):
+            # No loop, no worker thread, no wait_for: `dispatch_from_hook` drives this coroutine by hand.
+            # A raised handler error becomes the same envelope the threaded branch returns.
+            _INLINE_HANDLER_STARTED.set(True)
+            try:
+                result = contextvars.copy_context().run(
+                    _run_handler_absorbing_base, handler, params, op_repo_key
+                )
+            except Exception as exc:
+                _log().error(
+                    "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
+                    exc_info=True,
+                )
+                if isinstance(exc, _EscapedBaseException):
+                    exc = exc.wrapped
+                return {
+                    "jsonrpc": "2.0",
+                    "id": id_,
+                    "error": _handler_exception_error(exc),
+                }
+        elif inspect.iscoroutinefunction(handler):
+            import asyncio
+
             try:
                 result = await asyncio.wait_for(
                     _await_handler_absorbing_base(
@@ -2847,6 +2878,8 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     "error": _handler_exception_error(exc),
                 }
         else:
+            import asyncio
+
             _late = None if _await_on_breach else LATE_COMPLETION.get()
             if _late is None:
                 _fut = asyncio.ensure_future(
@@ -2939,9 +2972,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
         #
         # DR-276: fold anything the handler declared via `declare_write()` into the
         # same key, so the two declaration styles converge before the single
-        # recorder runs. Order is preserved and duplicates are dropped here rather
-        # than in the recorder, which caps at _MAX_DECLARED_TOUCH_PATHS and would
-        # otherwise spend cap budget on repeats.
+        # recorder runs. Order is preserved and duplicates are dropped here.
         if _declared_writes and isinstance(result, dict):
             merged = list(result.get(_SCOPE_TOUCH_PATHS_KEY) or []) + list(_declared_writes)
             deduped = list(dict.fromkeys(merged))
@@ -3825,7 +3856,6 @@ def dispatch_from_hook(
           (STRUCTURAL_PIN_ERROR / INTERNAL_ERROR) — an error response always surfaces as
           HookDispatchError, never as a bare traceback escaping this function un-wrapped.
     """
-    import asyncio
     import time as _time
 
     envelope = _hook_envelope(op_name, params, origin_worktree)
@@ -3838,9 +3868,25 @@ def dispatch_from_hook(
 
     _corr_id = new_correlation_id()
     try:
-        from coordinator_core import loop_pool
+        response = None
+        if _sync_handler_registered(op_name, envelope):
+            _token = _INLINE_SYNC_HANDLER.set(True)
+            _started_token = _INLINE_HANDLER_STARTED.set(False)
+            try:
+                response = _drive_without_loop(
+                    dispatch_message(envelope, caller=_caller, corr_id=_corr_id)
+                )
+            except _InlineSuspended as exc:
+                # A handler that already ran is never re-dispatched (it may have written).
+                if _INLINE_HANDLER_STARTED.get():
+                    raise HookDispatchError(op_name, INTERNAL_ERROR, str(exc)) from exc
+            finally:
+                _INLINE_HANDLER_STARTED.reset(_started_token)
+                _INLINE_SYNC_HANDLER.reset(_token)
+        if response is None:
+            from coordinator_core import loop_pool
 
-        response = loop_pool.run(dispatch_message(envelope, caller=_caller, corr_id=_corr_id))
+            response = loop_pool.run(dispatch_message(envelope, caller=_caller, corr_id=_corr_id))
     finally:
         process_ms = (_time.process_time() - process_start) * 1000.0
         request_repo = resolve_request_repo(envelope) or resolve_caller_cwd(envelope)

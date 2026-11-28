@@ -48,7 +48,7 @@ SIZING = "state/sizings/20260101-a.yaml"
 PLAN = "docs/plans/p.md"
 REPORT = "reports/C1.md"
 CRLF = "\r\n"
-_MET = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}, {"id": "R2", "status": "met", "met_by": "a.py", "wired": True}]}
+_MET = {"items": [{"id": "R1", "status": "met", "wired": True}, {"id": "R2", "status": "met", "wired": True}]}
 
 
 def _git(root: Path, *args: str) -> str:
@@ -97,7 +97,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     session_core.init(SELF, cwd=str(root))
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     return root

@@ -113,3 +113,38 @@ def test_stopped_marker_path_builds_and_validates(tmp_path: Path) -> None:
     for session, task in (("s/1", "t"), ("s", "../t"), ("", "t"), ("s", "t t")):
         with pytest.raises(ValueError):
             stall.stopped_marker_path(str(tmp_path), session, task)
+
+
+def _warp_run(root: Path, run_id: str, marker: dict | None) -> str:
+    if marker is not None:
+        d = root / "state" / "warp" / run_id
+        d.mkdir(parents=True)
+        (d / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
+    return str(root / "scratch" / "warp" / f"{run_id}.workflow.mjs")
+
+
+_NEXT = {"op": "engine-ask", "call": "engine-ask {sizing: state/sizings/x.yaml}"}  # shape of a marker's next_action
+
+
+def test_returned_halt_names_the_marker_refire_not_a_resume(tmp_path: Path) -> None:
+    script = _warp_run(tmp_path, "warp-r1", {"status": "halted", "halted": "gate", "next_action": _NEXT})
+    out = stall.render_resume_call("wf_1", script, None, task_id="t1")
+    assert out == _NEXT["call"] and "resumeFromRunId" not in out
+    assert stall.halted_refire_call(script.replace("/", "\\")) == _NEXT["call"]
+
+
+def test_returned_halt_without_next_action_names_the_sizing_fire_call(tmp_path: Path) -> None:
+    script = _warp_run(tmp_path, "warp-r2", {"status": "halted", "halted": "gate", "sizing_rel": "state/sizings/x.yaml"})
+    out = stall.render_resume_call("wf_1", script, None)
+    assert "state/sizings/x.yaml" in out and "resumeFromRunId" not in out
+
+
+@pytest.mark.parametrize("marker", [
+    {"status": "halted", "halted": "usage_limit", "next_action": _NEXT},
+    {"status": "resumed", "halted": "gate", "next_action": _NEXT},
+    None,
+])
+def test_usage_limit_resumed_and_unmarked_runs_keep_the_resume(tmp_path: Path, marker) -> None:
+    script = _warp_run(tmp_path, "warp-r3", marker)
+    out = stall.render_resume_call("wf_1", script, None)
+    assert out == f'Workflow({{scriptPath: {json.dumps(script)}, resumeFromRunId: "wf_1"}})'

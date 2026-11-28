@@ -1518,11 +1518,14 @@ def _publish_row_destination_roots(session_root: str) -> List[str]:
     """Resolved destination trees of the rows in THIS repo's
     `setup/publish-targets.portable` whose source is this repo.
 
-    A row's destination sigil (`publish-mirror:<key>` or `repo:<key>`) resolves
-    through the machine-local registry; a `plugin-source:` source names another
-    repo and is skipped. Unresolvable rows contribute nothing."""
+    A row's destination sigil resolves `repo:<key>` through the machine-local
+    registry and `publish-mirror:<key>` to the open publish round's
+    `mirror-<key>` clone; a `plugin-source:` source names another repo and is
+    skipped. Unresolvable rows contribute nothing."""
+    from coordinator_core import publish_round
     from coordinator_core.machine_resolver import registry_get
 
+    round_mirrors = {p.name: str(p) for p in publish_round.live_round_mirrors()}
     portable = Path(session_root).joinpath(*_PORTABLE_TARGETS_RELPATH)
     roots: List[str] = []
     for line in portable.read_text(encoding="utf-8").splitlines():
@@ -1536,12 +1539,11 @@ def _publish_row_destination_roots(session_root: str) -> List[str]:
         if not key:
             continue
         if kind == "publish-mirror":
-            registry_key = "publish.mirrors.%s.path" % key
+            dest = round_mirrors.get(publish_round.MIRROR_PREFIX + key)
         elif kind == "repo":
-            registry_key = "repos.%s" % key
+            dest = registry_get("repos.%s" % key)
         else:
             continue
-        dest = registry_get(registry_key)
         resolved = _resolve_and_casefold(dest) if dest else None
         if resolved:
             roots.append(resolved)

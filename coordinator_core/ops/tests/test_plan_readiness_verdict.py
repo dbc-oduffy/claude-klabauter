@@ -839,25 +839,11 @@ def test_anchor_premises_key_absent_pulls_as_undeclared(tmp_path):
         "anchor_premises:\n  - id: AP1\n    claim: c\n    check: {command: 'python -c 1', expect: '1'}\n",
     ],
 )
-def test_anchor_without_a_screenable_check_pulls_as_unchecked(tmp_path, block):
+def test_anchor_without_a_screenable_check_is_a_note_naming_it_not_a_pull(tmp_path, block):
     reply = op._handler({"plan": REL}, _anchor_plan(tmp_path, block))
-    assert (reply["verdict"], reply["pull_class"]) == ("pulled", "mechanical")
-    assert reply["blocking"] == []
-    (repair,) = reply["mechanical_repairs"]
-    assert (repair["kind"], repair["target"]) == ("anchor-check-not-evaluable", "AP1")
-
-
-def test_unevaluable_anchor_repair_hint_names_the_form_the_applier_kind_and_re_offer(tmp_path):
-    from coordinator_core.ops import _anchor_check
-    from coordinator_core.ops.plan_apply_mechanical_repairs import REPAIR_ANCHOR_CHECK
-
-    block = "anchor_premises:\n  - id: AP1\n    claim: c\n    check: {command: 'python -c 1', expect: '1'}\n"
-    reply = op._handler({"plan": REL}, _anchor_plan(tmp_path, block))
-    (repair,) = reply["mechanical_repairs"]
-    text = repair["instruction"]
-    assert _anchor_check.GRAMMAR in text and f"repair kind {REPAIR_ANCHOR_CHECK}" in text
-    assert "<ref> -- <path>" in text and "expect 0" in text and "offered again" in text
-    assert op._ANCHOR_FIX_KIND == REPAIR_ANCHOR_CHECK
+    assert reply["verdict"] == "ready" and reply["pull_class"] == "none"
+    assert reply["blocking"] == [] and reply["mechanical_repairs"] == []
+    assert "AP1" in reply["reason"] and "unchecked" in reply["reason"]
 
 
 def test_r32_anchor_with_an_unevaluable_check_does_not_block_in_the_checker_lane(tmp_path):
@@ -1269,3 +1255,20 @@ def test_incomplete_premise_check_review_without_rows_still_pulls():
     out = op.readiness_verdict(_gate(PASS, verdict="PREPPED"), None, _INCOMPLETE_REVIEW, None, None)
     assert out["verdict"] == "judgment"
     assert out["pull_class"] == "none"
+
+
+def _anchor_class(kind: str) -> dict:
+    return {"status": "DEFECT", "kind": kind, "mechanical": False, "repair": None}
+
+
+def test_not_prepped_gate_with_only_an_anchor_defect_and_no_finding_is_judgment():
+    gate = {**_gate(), "classes": {"ANCHOR": _anchor_class("anchor-check-mismatch")}}
+    out = op.readiness_verdict(gate, None, [])
+    assert out["verdict"] == "judgment"
+    assert out["pull_class"] == "none"
+
+
+def test_not_prepped_gate_with_only_an_unevaluable_anchor_stays_ready():
+    gate = {**_gate(), "classes": {"ANCHOR": _anchor_class("anchor-check-unevaluable")}}
+    out = op.readiness_verdict(gate, None, [])
+    assert out["verdict"] == "ready"

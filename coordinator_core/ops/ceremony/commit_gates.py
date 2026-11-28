@@ -2,58 +2,32 @@
 coordinator_core.ops.ceremony.commit_gates -- native ports of the deleted
 `check-workstream-complete-deletion-blocks.sh` and `dirty-tree-gate.sh`.
 
-These gates ARE invoked on the commit path: `ceremony.commit_v2` imports
-`_pre_commit_gates` from this module and calls it before landing a commit.
-`deletion_block_gate` also has a standalone CLI entry point in `main()`
-below, reached by `coordinator/bin/check-workstream-complete-deletion-blocks`
-(registered in `authz/dispatchable.py`).
+`ceremony.commit_v2` imports `_pre_commit_gates` from here and calls it before landing a
+commit. `deletion_block_gate` also has a CLI entry in `main()`, reached by
+`coordinator/bin/check-workstream-complete-deletion-blocks` (registered in
+`authz/dispatchable.py`). `commit_v2` is a zero-spawn committer: measure a gate in-process
+before widening it.
 
-`commit_v2` is a zero-spawn committer: measure a gate in-process before widening it.
+Gates report (never raise): a typed outcome with a diagnostics list.
 
-Two gates, both pure-Python classification over `git` state (routed through
-`git_native`'s single Windows-safe subprocess choke point):
-
-  deletion_block_gate() -- validates the composed commit message's
-      "Deleted (Step 2.67):" / "Kept (Step 2.67):" blocks (see
-      `commit_message.compose_message`) against staged reality:
+  deletion_block_gate() -- validates the composed message's "Deleted (Step 2.67):" /
+      "Kept (Step 2.67):" blocks (see `commit_message.compose_message`):
         Assertion-1 -- every Deleted-claimed path is staged for deletion.
-        Assertion-2 -- every Kept-claimed path exists at HEAD or in the
-                        staged set.
-        Assertion-3 (the inverse check) -- staged deletions present but
-                        no Step 2.67 block at all is a fail (the EM forgot
-                        to account for them).
-      Scoped to `gate_paths` -- NOT the whole index -- so a concurrent
-      sibling session's own staged deletion outside `gate_paths` can never
-      trip Assertion-3 through this caller.
-      Skip-gate-when-empty: an empty `gate_paths` AND no Step 2.67 block in
-      the message is a legitimate no-deletions session -- skipped entirely,
-      not scored as an ambiguous pass.
+        Assertion-2 -- every Kept-claimed path exists at HEAD or in the staged set.
+        Assertion-3 -- staged deletions with no Step 2.67 block at all is a fail.
+      Scoped to `gate_paths`, never the whole index, so a sibling session's staged
+      deletion cannot trip Assertion-3. An empty `gate_paths` and no Step 2.67 block is
+      skipped, not scored as a pass.
 
-Both gates report (never raise) -- callers get a typed outcome with a
-diagnostics list, mirroring the bash originals' "print diagnostics, set exit
-code" shape rather than a Python exception flow; the caller decides how to
-surface a failed gate to the op's result envelope.
-
-Negative-spec (hard-won, preserved from the bash originals):
-  - deletion_block_gate() does NOT re-derive gate_paths -- the caller is the
-    sole source; this module only reads it.
-  - Neither gate shells out to bash, node, or awk -- all parsing is native
-    Python string/regex work; every git read routes through
+Negative-spec:
+  - deletion_block_gate() does NOT re-derive gate_paths; the caller is the sole source.
+  - No gate shells out to bash, node, or awk; every git read routes through
     `git_native._git`, never a bare `subprocess.run`.
-  - The em-dash split in Kept-block parsing uses a literal Python string
-    (U+2014, three UTF-8 bytes 0xE2 0x80 0x94) -- Python has no BSD-awk vs
-    gawk octal-vs-hex portability landmine to reproduce.
-  - `tracked_at_head` (the Kept-claim existence check) is intentionally left
-    UNSCOPED to `gate_paths` -- it is a HEAD snapshot, not staged state, and
-    the bash original scopes only the staged reads. It is, however, scoped
-    to `parsed.kept_claimed` itself: both legs of Assertion-2 route through
-    `coordinator_core.git.git_state` (`read_index` for the staged set,
-    `head_blobs(cwd, parsed.kept_claimed)` for HEAD membership -- a
-    targeted lookup over the handful of Kept-claimed paths, never `git`'s
-    own unscopeable `ls-tree -r HEAD` walk over the whole tree) with no
-    `git` spawn at all. Both reads are issued only when the parsed message
-    actually carries a Kept-claim, since no other assertion consumes
-    either set.
+  - The em-dash split in Kept-block parsing uses a literal U+2014 string.
+  - `tracked_at_head` is UNSCOPED to `gate_paths` (a HEAD snapshot, not staged state) but
+    scoped to `parsed.kept_claimed`: both Assertion-2 legs read through
+    `coordinator_core.git.git_state` (`read_index`, `head_blobs`) with no `git` spawn, and
+    only when the message carries a Kept-claim.
 """
 
 from __future__ import annotations
@@ -1718,7 +1692,7 @@ def landed_names_gate(
     """Refuse a changed `.py` naming (`alias.attr`, literal `getattr`) something only the worktree has.
 
     Wraps `landed_names.uncommitted_name_refusals` over the same landed reader as
-    `import_closure_gate`. A checker that cannot decide passes with one diagnostic (DR-402).
+    `import_closure_gate`. A checker that cannot decide passes with one diagnostic.
     """
     candidates = [p for p in gate_paths if p.endswith(".py")]
     if not candidates:

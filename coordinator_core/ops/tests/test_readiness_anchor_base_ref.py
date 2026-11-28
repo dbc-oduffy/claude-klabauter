@@ -1,6 +1,7 @@
 """plan.readiness_verdict base ref, end to end through the registered handler: a premise true at a
 ref but absent from the tree reads RESOLVES under a `base_ref` param or a `workflow.revise` run
-marker, reads the tree (CONTRADICTED) with neither, and costs one cat-file spawn for N anchors.
+marker, reads HEAD (CONTRADICTED, tree-only hits uncommitted) with neither, and costs one cat-file spawn
+per check batch for N anchors.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 REL = "docs/plans/2026-10-29-fixture.md"
 SIZING = "state/sizings/2026-10-29-baseref.yaml"
 RUN = "ask-20261029T000000-abc123"
+_TWO_BATCHES = 2  # one cat-file batch from the prep gate's anchor dry-run, one from readiness; independent of anchor count
 
 _SPINE = """- id: C1
   title: Ship it
@@ -143,7 +145,7 @@ def test_refire_with_no_marker_reads_the_premise_at_the_predecessors_run_base(wo
     verdicts = _verdicts(reply)
     assert {v["verdict"] for v in verdicts.values()} == {"RESOLVES"}
     assert reply["anchor_base_ref"] == {"ref": sha, "source": "run"}
-    assert spawns == 1
+    assert spawns == _TWO_BATCHES
 
 
 def test_a_run_marker_outranks_the_recorded_run_base(world, monkeypatch):
@@ -156,12 +158,12 @@ def test_a_run_marker_outranks_the_recorded_run_base(world, monkeypatch):
     assert _verdicts(reply)["AP1"]["verdict"] == "CONTRADICTED"
 
 
-def test_a_halt_record_without_a_full_run_base_leaves_the_tree_read(world, monkeypatch):
+def test_a_halt_record_without_a_full_run_base_reads_head(world, monkeypatch):
     root, sha = world
     _halted_run(root, RUN, run_base_sha=sha[:7])
     reply, spawns = _call(root, monkeypatch)
     assert _verdicts(reply)["AP1"]["verdict"] == "CONTRADICTED"
-    assert "anchor_base_ref" not in reply and spawns == 0
+    assert reply["anchor_base_ref"] == {"ref": "HEAD", "source": "head"} and spawns == _TWO_BATCHES
 
 
 def test_param_outranks_the_run_marker(world, monkeypatch):
@@ -174,19 +176,31 @@ def test_param_outranks_the_run_marker(world, monkeypatch):
     assert _verdicts(reply)["AP1"]["verdict"] == "CONTRADICTED"
 
 
-def test_no_base_ref_reads_the_tree_with_no_cat_file_spawn(world, monkeypatch):
+def test_no_base_ref_reads_head_in_one_batch_per_check(world, monkeypatch):
     root, _ = world
     reply, spawns = _call(root, monkeypatch)
     assert _verdicts(reply)["AP1"]["verdict"] == "CONTRADICTED"
-    assert "anchor_base_ref" not in reply
-    assert spawns == 0
+    assert reply["anchor_base_ref"] == {"ref": "HEAD", "source": "head"}
+    assert spawns == _TWO_BATCHES
 
 
-def test_all_anchors_cost_one_cat_file_spawn_under_a_base_ref(world, monkeypatch):
+def test_a_first_fire_tree_only_anchor_is_uncommitted_not_resolved(world, monkeypatch):
+    root, _ = world
+    (root / "a.py").write_text("needle\n", encoding="utf-8")
+    reply, _ = _call(root, monkeypatch)
+    ap1 = _verdicts(reply)["AP1"]
+    assert ap1["verdict"] != "RESOLVES" and "uncommitted, not landed" in ap1["observed"]
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "lands needle")
+    reply, _ = _call(root, monkeypatch)
+    assert _verdicts(reply)["AP1"]["verdict"] == "RESOLVES"
+
+
+def test_all_anchors_cost_one_cat_file_spawn_per_batch_under_a_base_ref(world, monkeypatch):
     root, sha = world
     reply, spawns = _call(root, monkeypatch, base_ref=sha)
     assert {v["verdict"] for v in _verdicts(reply).values()} == {"RESOLVES"}
-    assert spawns == 1
+    assert spawns == _TWO_BATCHES
 
 
 def test_an_unreadable_base_ref_is_not_a_tree_fallback(world, monkeypatch):

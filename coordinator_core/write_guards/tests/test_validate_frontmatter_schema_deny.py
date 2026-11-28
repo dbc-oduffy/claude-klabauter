@@ -45,6 +45,7 @@ import yaml
 
 from coordinator_core.frontmatter.schema_validate import compute_grouping_digest
 from coordinator_core.testing.content_root import content_root_and_present
+from coordinator_core.write_guards import _schema_cache as schema_cache
 from coordinator_core.write_guards import validate_frontmatter_schema_advisory as advisory_guard
 from coordinator_core.write_guards import validate_frontmatter_schema_deny as guard
 from coordinator_core.win_portability import no_console_creationflags
@@ -59,6 +60,13 @@ _content_root, _doe_present = content_root_and_present()
 # residue and is explicitly not the route for this file --
 # coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
+
+@pytest.fixture(autouse=True)
+def _fresh_schema_cache():
+    schema_cache.clear()
+    yield
+    schema_cache.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -1724,6 +1732,16 @@ class TestHandoffKindOffEnumUnconditionalDeny:
         assert "not-a-real-kind" in reason
 
         assert advisory_guard.check(payload) is None, "advisory must stand down in lockstep"
+
+    def test_off_enum_kind_outside_handoff_glob_is_not_denied(self, tmp_path):
+        """The unrouted-kind fallback is scoped to the handoff glob: the same
+        off-enum `kind` under another path never reaches the D3 deny."""
+        other = tmp_path / "docs" / "notes"
+        other.mkdir(parents=True)
+        fp = other / "off-enum.md"
+        fp.write_text(self._VALID_FM.format(kind="not-a-real-kind"), encoding="utf-8")
+        payload = _payload("Edit", str(fp), str(tmp_path), old_string="body", new_string="body2")
+        assert guard.check(payload) is None
 
     def test_absent_kind_stays_valid(self, tmp_path):
         """An ABSENT `kind` is valid (the emitter injects the

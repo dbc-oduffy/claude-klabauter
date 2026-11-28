@@ -10,11 +10,11 @@ from coordinator_core.ops.dispatch_emit.tests.test_requirements_ledger_design_ro
 
 
 def _item(item_id, **extra):
-    return {"id": item_id, "status": "met", "met_by": "a.py", "wired": True, "command": "consumer --run", "observed": "ok", **extra}
+    return {"id": item_id, "status": "met", "wired": True, "command": "consumer --run", "observed": "ok", "evidence": "verified", **extra}
 
 
 def _verdict(ledger, target, **extra):
-    items = [{"id": i.id, "status": "met", "met_by": "a.py"} for i in ledger.items if i is not target]
+    items = [{"id": i.id, "status": "met", "evidence": "verified"} for i in ledger.items if i is not target]
     return {"items": [*items, _item(target.id, **extra)]}
 
 

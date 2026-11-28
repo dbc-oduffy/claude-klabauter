@@ -188,6 +188,36 @@ def test_review_runner_reaches_installed_engine_without_python_on_path(tmp_path,
     assert result.stdout.strip() == expected
 
 
+def test_bootstrap_child_env_carries_engine_root_but_never_engine_site(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from coordinator_core.ops.workflow_fire import worker_preamble
+
+    settings = tmp_path / "settings"
+    site = settings / "engine-site"
+    site.mkdir(parents=True)
+    (site / ".engine-site-stamp").write_text(f"{sys.version_info.major}.{sys.version_info.minor}\n")
+    (site / "probe_env.py").write_text(
+        "import os, subprocess, sys\n"
+        "assert any(p == os.environ['COORDINATOR_ENGINE_ROOT'] for p in sys.path)\n"
+        "assert any(p.endswith('engine-site') for p in sys.path)\n"
+        "child = subprocess.run([sys.executable, '-c', 'import sys, coordinator_core; print(\"|\".join(sys.path))'],\n"
+        "                       capture_output=True, text=True, check=True).stdout.strip()\n"
+        "print(os.environ['PYTHONPATH'] + '@@' + os.environ['COORDINATOR_ENGINE_ROOT'] + '@@' + child)\n"
+    )
+    root = Path(worker_preamble.__file__).resolve().parents[3]
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    result = subprocess.run(
+        [sys.executable, "-P", "-c", worker_preamble._BOOTSTRAP, str(root), str(settings), "probe_env"],
+        capture_output=True, text=True, timeout=30, cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    pythonpath, engine_root, child_path = result.stdout.strip().split("@@")
+    assert pythonpath == engine_root == str(root)
+    assert str(site) not in pythonpath.split(os.pathsep)
+    assert str(site) not in child_path.split("|")
+
+
 @pytest.mark.parametrize("backend", ("claude", *WORKER_BACKENDS))
 def test_review_commands_bind_the_loaded_engine_at_delivery(backend, monkeypatch):
     from pathlib import Path

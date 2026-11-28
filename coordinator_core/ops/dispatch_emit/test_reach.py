@@ -6,22 +6,18 @@ the index and object store in process and spawn nothing."""
 
 from __future__ import annotations
 
+import bisect
 import hashlib
+import marshal
+import os
 import re
 import struct
+import sys
 from pathlib import Path, PurePosixPath
 from typing import Collection, Dict, Iterable, List, Optional, Sequence, Set
 
 from coordinator_core.ops.dispatch_emit.landing_reach import seeds_for_landing as seeds_for_landing
-from coordinator_core.git import commit
 from coordinator_core.git.git_dir import resolve_git_dir
-from coordinator_core.git.git_index import (
-    IndexParseError,
-    _read_index_bytes_with_retry,
-    parse_index_identity,
-    scoped_status,
-)
-from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.pyimports import ImportRecord, module_name_for_file, resolve_relative_module
 
 DEFAULT_DEPTH = 3
@@ -38,7 +34,7 @@ class _IndexView:
     paths. `starts` is `None` when the index is not a plain v2/v3 file (callers fall back to
     `parse_index_identity`)."""
 
-    __slots__ = ("raw", "names", "starts", "unmerged", "special")
+    __slots__ = ("raw", "names", "starts", "unmerged", "special", "ordered", "py")
 
     def __init__(self, raw: bytes, names: frozenset, starts: Optional[Dict[str, int]], unmerged: Set[str]):
         self.raw = raw
@@ -46,6 +42,8 @@ class _IndexView:
         self.starts = starts
         self.unmerged = unmerged
         self.special = [p for p in names if p.endswith("conftest.py") or "fixtures/" in p]
+        self.ordered = list(starts) if starts is not None else sorted(names)
+        self.py: Optional[Dict[str, tuple]] = None
 
     def sha(self, rel: str) -> str:
         start = self.starts[rel]  # type: ignore[index]
@@ -91,6 +89,132 @@ def _scan_index(raw: bytes) -> Optional[tuple]:
 
 _VIEW_CACHE: Dict[str, tuple] = {}
 _MODULE_MAP_CACHE: Dict[int, tuple] = {}
+_ORDERED: Dict[int, tuple] = {}
+_PY_TABLES: Dict[str, tuple] = {}
+
+_CACHE_VERSION = 2  # bump with any change to a persisted body's shape
+_NS = 10**9
+_TRAILER = 20
+
+
+def _cache_file(root: Path, name: str) -> Path:
+    """Per-repo derived data lives in the git dir: never tracked, never a drive-root path."""
+    return resolve_git_dir(root) / "closure-cache" / name
+
+
+_MAGIC = b"MKC" + bytes([_CACHE_VERSION, sys.version_info[0], sys.version_info[1]])
+
+
+def _blob_store(path: Path, key: bytes, obj: dict) -> None:
+    """Best-effort atomic write of `magic + key + marshal(obj)`; a cache that cannot be written is a miss."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(_MAGIC + key + marshal.dumps(obj))
+        os.replace(tmp, path)
+    except (OSError, ValueError):
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def _blob_load(path: Path, key: bytes = b"") -> Optional[dict]:
+    """The object a `_blob_store` wrote under the same `key` and interpreter, else `None`. The key is
+    compared before the body is read, so a stale file costs a header read."""
+    prefix = _MAGIC + key
+    try:
+        with open(path, "rb") as f:
+            if f.read(len(prefix)) != prefix:
+                return None
+            obj = marshal.loads(f.read())
+    except (OSError, ValueError, EOFError, TypeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _index_trailer(index_path: Path) -> Optional[bytes]:
+    """The index's own SHA-1 trailer: it changes whenever any entry does."""
+    try:
+        with open(index_path, "rb") as f:
+            f.seek(-_TRAILER, os.SEEK_END)
+            return f.read(_TRAILER)
+    except OSError:
+        return None
+
+
+_PY_ENTRY = struct.Struct(">QI20s")
+
+
+def _py_table(view: "_IndexView") -> Dict[str, bytes]:
+    """`{path: packed (mtime_ns, size, blob sha)}` of tracked `.py` entries, from the index's stat
+    data. Packed bytes load several times faster than tuples."""
+    raw = view.raw
+    out: Dict[str, bytes] = {}
+    for name, start in view.starts.items():  # type: ignore[union-attr]
+        if name.endswith(".py") and name not in view.unmerged:
+            sec, nsec = struct.unpack_from(">II", raw, start + 8)
+            out[name] = _PY_ENTRY.pack(sec * _NS + nsec, struct.unpack_from(">I", raw, start + 36)[0], raw[start + 40:start + 60])
+    return out
+
+
+def _register_ordered(view: "_IndexView") -> None:
+    _ORDERED.clear()
+    _ORDERED[id(view.names)] = (view.names, view.ordered)
+
+
+def _register_py_table(root: Path, view: "_IndexView", index_stat: os.stat_result) -> None:
+    if view.py is not None:
+        _PY_TABLES[str(root)] = (view.py, index_stat.st_mtime_ns // _NS)
+
+
+def _view_from_cache(root: Path, index_path: Path, st: os.stat_result) -> Optional["_IndexView"]:
+    """The persisted view of the index whose trailer and size match, or `None`. Skips the 17 MB read
+    and the per-entry scan; `starts` stays `None`, so a caller needing blob shas rereads the index."""
+    trailer = _index_trailer(index_path)
+    if trailer is None:
+        return None
+    body = _blob_load(_cache_file(root, "index-view.bin"), struct.pack(">Q", st.st_size) + trailer)
+    if body is None:
+        return None
+    try:
+        names = body["names"]
+        view = _IndexView.__new__(_IndexView)
+        view.raw = b""
+        view.names = frozenset(names)
+        view.starts = None
+        view.unmerged = set()
+        view.special = body["special"]
+        view.ordered = names
+        view.py = body["py"]
+        _MODULE_MAP_CACHE.clear()
+        _MODULE_MAP_CACHE[id(view.names)] = (view.names, body["modules"])
+    except (KeyError, TypeError):
+        return None
+    _register_ordered(view)
+    _register_py_table(root, view, st)
+    return view
+
+
+def _persist_view(root: Path, view: "_IndexView", st: os.stat_result) -> None:
+    view.py = _py_table(view)
+    _register_py_table(root, view, st)
+    trailer = _index_trailer(resolve_git_dir(root) / "index")
+    if trailer is None or len(view.raw) < _TRAILER or view.raw[-_TRAILER:] != trailer:
+        return
+    body = {"names": view.ordered, "special": view.special, "py": view.py, "modules": _module_map(view.names)}
+    _blob_store(_cache_file(root, "index-view.bin"), struct.pack(">Q", len(view.raw)) + trailer, body)
+
+
+def has_tracked_prefix(tracked: Collection[str], prefix: str) -> bool:
+    """Whether any tracked path starts with `prefix`: a bisect over the index order when `tracked` is
+    a view's own name set, a scan otherwise."""
+    hit = _ORDERED.get(id(tracked))
+    if hit is not None and hit[0] is tracked:
+        ordered = hit[1]
+        i = bisect.bisect_left(ordered, prefix)
+        return i < len(ordered) and ordered[i].startswith(prefix)
+    return any(p.startswith(prefix) for p in tracked)
 
 
 def _index_view(root: Path, *, exact: bool = False) -> _IndexView:
@@ -103,10 +227,19 @@ def _index_view(root: Path, *, exact: bool = False) -> _IndexView:
     try:
         st = index_path.stat()
     except OSError:
+        from coordinator_core.git.git_index import parse_index_identity
+
         return _IndexView(b"", frozenset(parse_index_identity(root)), None, set())
     stamp = (st.st_size, st.st_mtime_ns)
     if hit is not None and hit[0] == stamp and not exact:
         return hit[1]
+    if not exact:
+        light = _view_from_cache(root, index_path, st)
+        if light is not None:
+            _VIEW_CACHE[key] = (stamp, light)
+            return light
+    from coordinator_core.git.git_index import _read_index_bytes_with_retry, parse_index_identity
+
     raw = _read_index_bytes_with_retry(index_path)
     if raw is None:
         return _IndexView(b"", frozenset(), None, set())
@@ -118,6 +251,9 @@ def _index_view(root: Path, *, exact: bool = False) -> _IndexView:
         view = _IndexView(raw, frozenset(parse_index_identity(root)), None, set())
     else:
         view = _IndexView(raw, frozenset(scanned[0]), scanned[0], scanned[1])
+        if not exact:
+            _persist_view(root, view, st)
+    _register_ordered(view)
     _VIEW_CACHE[key] = (stamp, view)
     return view
 
@@ -164,24 +300,88 @@ def _scan_imports(text: str) -> List[ImportRecord]:
     return records
 
 
+_RECORD_STORE: Dict[str, Dict[bytes, tuple]] = {}
+_RECORD_DIRTY: Set[str] = set()
+_CONTENT_KEY = b"\0"  # prefix of a content-hash key for a worktree file that differs from its index blob
+_MAX_CONTENT_KEYED = 4096
+
+
+def _record_store(root: Path | str, key: str) -> Dict[bytes, tuple]:
+    """Import records by blob sha, persisted across processes: a blob's imports never change."""
+    store = _RECORD_STORE.get(key)
+    if store is None:
+        store = _RECORD_STORE[key] = {}
+        obj = _blob_load(_cache_file(Path(root), "import-records.bin"))
+        if obj is not None:
+            store.update(obj)
+    return store
+
+
+def flush_record_cache(root: Path | str) -> None:
+    """Persist records parsed since the last flush, merged over the file and pruned to the blobs the
+    current index still holds."""
+    root = Path(root)
+    key = str(root)
+    if key not in _RECORD_DIRTY:
+        return
+    _RECORD_DIRTY.discard(key)
+    table = _PY_TABLES.get(key)
+    if table is None:
+        return
+    path = _cache_file(root, "import-records.bin")
+    merged: Dict[bytes, tuple] = dict(_blob_load(path) or {})
+    merged.update(_RECORD_STORE.get(key, {}))
+    live = {entry[-20:] for entry in table[0].values()}
+    kept = {k: rec for k, rec in merged.items() if k in live}
+    edits = [k for k in merged if len(k) > _TRAILER and k[:1] == _CONTENT_KEY and k not in live][-_MAX_CONTENT_KEYED:]
+    kept.update((k, merged[k]) for k in edits)
+    _blob_store(path, b"", kept)
+
+
 def _records_for(root: Path, rel: str) -> List[ImportRecord]:
-    """Import records of `rel`, reused while the file's size and mtime are unchanged."""
-    path = root / rel
+    """Import records of `rel`, reused while the file's size and mtime are unchanged; a file whose
+    stat matches its index entry (and is not racily clean) is keyed by its blob sha and reused across
+    processes."""
+    root_key = os.fspath(root)
+    key = f"{root_key}/{rel}"
     try:
-        st = path.stat()
+        st = os.stat(key)
     except OSError:
         return []
     stamp = (st.st_size, st.st_mtime_ns)
-    key = str(path)
     hit = _RECORD_CACHE.get(key)
     if hit is not None and hit[0] == stamp:
         return hit[1]
+    table = _PY_TABLES.get(root_key)
+    packed = table[0].get(rel) if table is not None else None
+    store_key = None
+    if packed is not None:
+        mtime_ns, size, sha = _PY_ENTRY.unpack(packed)
+        if mtime_ns == st.st_mtime_ns and size == st.st_size and mtime_ns // _NS < table[1]:
+            store_key = sha
+    if store_key is not None:
+        cached = _record_store(root, root_key).get(store_key)
+        if cached is not None:
+            records = [ImportRecord(*t) for t in cached]
+            _RECORD_CACHE[key] = (stamp, records)
+            return records
     try:
-        data = path.read_bytes()
+        with open(key, "rb") as f:
+            data = f.read()
     except OSError:
         return []
+    if store_key is None and table is not None:
+        store_key = _CONTENT_KEY + hashlib.sha1(data).digest()
+        cached = _record_store(root, root_key).get(store_key)
+        if cached is not None:
+            records = [ImportRecord(*t) for t in cached]
+            _RECORD_CACHE[key] = (stamp, records)
+            return records
     records = _scan_imports(data.decode("utf-8", errors="replace")) if b"import" in data else []
     _RECORD_CACHE[key] = (stamp, records)
+    if store_key is not None:
+        _record_store(root, root_key)[store_key] = tuple(tuple(r) for r in records)
+        _RECORD_DIRTY.add(root_key)
     return records
 
 
@@ -198,9 +398,11 @@ def _resolved_imports(rel: str, records: Iterable[ImportRecord]):
 
 def _imported_modules(
     root: Path, rel: str, modules: Dict[str, str], *, text: Optional[str] = None,
+    records: Optional[List[ImportRecord]] = None,
 ) -> Set[str]:
     """Repo paths of the tracked modules `rel` imports (a from-import also tries each name as a submodule)."""
-    records = _records_for(root, rel) if text is None else _scan_imports(text)
+    if records is None:
+        records = _records_for(root, rel) if text is None else _scan_imports(text)
     found: Set[str] = set()
     for base, names in _resolved_imports(rel, records):
         candidates = [base, *(f"{base}.{name}" for name in names)]
@@ -213,10 +415,14 @@ def _imported_modules(
 
 def _package_inits(rel: str, tracked: Collection[str]) -> Set[str]:
     out: Set[str] = set()
-    for parent in PurePosixPath(rel).parents:
-        init = f"{parent.as_posix()}/__init__.py" if parent.as_posix() != "." else "__init__.py"
+    parent = rel
+    while "/" in parent:
+        parent = parent.rpartition("/")[0]
+        init = f"{parent}/__init__.py"
         if init in tracked:
             out.add(init)
+    if "__init__.py" in tracked:
+        out.add("__init__.py")
     return out
 
 
@@ -264,6 +470,8 @@ def reach_paths(root: Path | str, seeds: Iterable[str], depth: int = DEFAULT_DEP
 
 
 def _worktree_blob(root: Path, rel: str) -> Optional[str]:
+    from coordinator_core.git import commit
+
     try:
         data = (root / rel).read_bytes()
     except OSError:
@@ -278,6 +486,9 @@ def _worktree_blob(root: Path, rel: str) -> Optional[str]:
 def foreign_dirt(root: Path | str, reach: Iterable[str], landing: Sequence[str]) -> Dict[str, str]:
     """`{path: HEAD blob sha}` for tracked `reach` paths outside `landing` whose index or worktree
     differs from HEAD (a path absent at HEAD maps to forty zeros). Untracked paths are not dirt."""
+    from coordinator_core.git.git_index import IndexParseError, parse_index_identity, scoped_status
+    from coordinator_core.git.git_state import read_tree_spine
+
     root = Path(root)
     landed = {p.replace("\\", "/") for p in landing}
     candidates = sorted({p.replace("\\", "/") for p in reach} - landed)

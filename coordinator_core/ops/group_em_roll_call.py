@@ -177,17 +177,21 @@ def _send_reply(box: dict, p: dict) -> dict:
 def _groupem_roll_call_reply(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "groupem.roll_call_reply" handler.
 
-    Params: roll_call_id (str, required), session_key (str, required), goals (list, required):
-    one `{goal_id, target, measured_now, gap, next_lever, expected_gain, owner, eta (ISO date),
-    blocked_on?: {what, owner, date}}` per goal; priority_goal_id (str, required; one of the
-    reply's goal_ids, else refused); activity (any JSON, optional; log only); origin_box (str,
+    Params: roll_call_id (str, required), session_key (str, optional; the caller's own session
+    when absent), goals (list, optional): one `{goal_id, target, measured_now, gap, next_lever,
+    expected_gain, owner, eta (ISO date), blocked_on?: {what, owner, date}}` per goal;
+    priority_goal_id (str, required with goals; one of the reply's goal_ids, else refused); jobs
+    (list: id, pid, cores, hard stop), queued (list) and eta (str): the minimal reply, at least one
+    of goals, jobs, queued, eta; activity (any JSON, optional; log only); origin_box (str,
     optional): the issuing box named in the ask; without it and without a local record, each other
     registered box is tried in turn and the first non-miss reply is returned. When it is a
-    registered box other than this one the call runs there through `box_transport.invoke_remote`
-    and its reply is returned
-    (`unknown_origin_box` when unregistered, `forward_unsupported_transport` for a non-ssh row,
-    `forward_failed:<reason>` otherwise). `forwarded_by` (str) marks the issuing-side leg of a
-    forward: its `session_key` must be a far addressee of the record, else `not_an_addressee`.
+    registered box other than this one and no local record exists, the call runs there through
+    `box_transport.invoke_remote` and its reply is returned (`unknown_origin_box` when
+    unregistered); a forward with no path (`forward_unsupported_transport`,
+    `forward_failed:<reason>`) stores the reply on this box instead, `origin_box` kept on it, and
+    returns the stored dict plus `stored_locally: true` and `forward_reason`. `forwarded_by` (str)
+    marks the issuing-side leg of a forward: its `session_key` must be a far addressee of the
+    record, else `not_an_addressee`.
 
     Returns the `upsert_reply` dict: `{ok, result: stored | unchanged, late}` or
     `{ok: False, reason: "unknown_roll_call"}`. A reply failing the per-goal check (missing field,
@@ -199,15 +203,27 @@ def _groupem_roll_call_reply(params: dict, repo_root: Optional[Path] = None) -> 
     p = params if isinstance(params, dict) else {}
     op = "groupem.roll_call_reply"
     rc_id = _checked_id(op, _required(op, p, "roll_call_id"))
-    session_key = _required(op, p, "session_key")
     origin = _str(op, p, "origin_box")
     forwarded_by = _str(op, p, "forwarded_by")
-    if origin is not None and forwarded_by is None:
+    record = roll_call.load_record(rc_id)
+    session_key = _str(op, p, "session_key")
+    if session_key is None:
+        session_key = _own_session_key(op, record is None)
+        p = {**p, "session_key": session_key}
+    if origin is not None and forwarded_by is None and record is None:
         from coordinator_core.group_em import box_registry
 
         if not box_registry.same_box(origin, box_registry.local_box_id()):
-            return _forward_reply(origin, p)
-    record = roll_call.load_record(rc_id)
+            forwarded = _forward_reply(origin, p)
+            reason = forwarded.get("reason")
+            if forwarded.get("ok") is not False or not (
+                isinstance(reason, str) and reason.startswith("forward_")
+            ):
+                return forwarded
+            return _store_reply(rc_id, session_key, p, forwarded_by, create=True, origin_box=origin) | {
+                "stored_locally": True,
+                "forward_reason": reason,
+            }
     if forwarded_by is not None:
         if record is not None:
             far_keys = {row.get("key") for row in record.get("addressees", {}).get("far", [])}
@@ -217,17 +233,45 @@ def _groupem_roll_call_reply(params: dict, repo_root: Optional[Path] = None) -> 
         found = _probe_minting_box(p)
         if found is not None:
             return found
-    try:
-        from coordinator_core.group_em import box_registry
+    return _store_reply(rc_id, session_key, p, forwarded_by)
 
+
+def _own_session_key(op: str, forwards: bool) -> str:
+    """The caller's own session id; box-qualified when the reply may travel to another box."""
+    from coordinator_core.group_em import box_registry
+    from coordinator_core.ops.session_context import resolve_current_session_id
+
+    sid = resolve_current_session_id()
+    if not sid:
+        raise CallerFacingValidationError(
+            f"{op}: session_key (string) is required; no current session id resolved"
+        )
+    return f"{box_registry.local_box_id()}:{sid}" if forwards else sid
+
+
+def _store_reply(
+    rc_id: str,
+    session_key: str,
+    p: dict,
+    forwarded_by: Optional[str],
+    create: bool = False,
+    origin_box: Optional[str] = None,
+) -> dict:
+    from coordinator_core.group_em import box_registry
+
+    try:
         return roll_call.upsert_reply(
             rc_id,
             session_key,
             p.get("goals"),
             p.get("activity"),
             p.get("priority_goal_id"),
-            origin_box=box_registry.local_box_id(),
+            origin_box=origin_box or box_registry.local_box_id(),
             forwarded_by=forwarded_by,
+            jobs=p.get("jobs"),
+            queued=p.get("queued"),
+            eta=p.get("eta"),
+            create_if_missing=create,
         )
     except roll_call.RollCallReplyRefused as refused:
         return {"ok": False, "error": "RollCallReplyRefused", **refused.as_dict()}

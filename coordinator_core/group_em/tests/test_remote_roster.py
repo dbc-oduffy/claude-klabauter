@@ -130,7 +130,7 @@ def test_refresh_fs_box_copies_published_roster(tmp_path):
     out = rr.read_snapshot(d, now=NOW, local_id="box-me")
     assert out["box-a"]["reachable"] is True
     assert out["box-a"]["sessions"] == [
-        {"session_id": "s1", "name": "n-s1", "cwd": "/c", "status": "idle", "address": "a"}
+        {"session_id": "s1", "name": "n-s1", "cwd": "/c", "status": "idle", "address": "a", "role": None}
     ]
 
 
@@ -241,6 +241,14 @@ def test_publish_local_writes_fs_source(tmp_path):
     raw = json.loads(rr.snapshot_path(d, "box-me").read_text(encoding="utf-8"))
     assert raw["ok"] is True and raw["sessions"][0]["session_id"] == "m1"
     assert rr.read_snapshot(d, now=NOW, local_id="box-me") == {}
+
+
+def test_published_snapshot_carries_role(tmp_path):
+    d = _primary(tmp_path)
+    rows = [_row("m1", role="em"), _row("m2", role="worker_leg")]
+    assert rr.publish_local(d, rows, now=NOW, local_id="box-me") is True
+    raw = json.loads(rr.snapshot_path(d, "box-me").read_text(encoding="utf-8"))
+    assert {s["session_id"]: s["role"] for s in raw["sessions"]} == {"m1": "em", "m2": "worker_leg"}
 
 
 def test_publish_local_skips_unidentified_box(tmp_path):

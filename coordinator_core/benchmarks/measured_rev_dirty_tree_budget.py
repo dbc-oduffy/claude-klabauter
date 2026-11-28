@@ -15,8 +15,8 @@ Phases (exclusive process time; a nested wrapped call is charged to the inner ph
   run_landing_paths  drop_unmeasurable  spine  py_parse  checkin  write_object  tree_rewrite
   peer_split  touched_own_split  reach_seeds  reach_paths  foreign_dirt  other (unwrapped remainder)
 
-    python coordinator_core/benchmarks/measured_rev_dirty_tree_budget.py [--dirty N] [--runs N]
-        [--paths N] [--enforce-bar] [--json]
+    python coordinator_core/benchmarks/measured_rev_dirty_tree_budget.py [--dirty N] [--untracked N]
+        [--runs N] [--paths N] [--enforce-bar] [--json]
 
 `--enforce-bar` exits 2 when pass `first` is at or over BAR_MS process time, any spawn happened, or the
 call did not return a candidate commit. A process spawned by the call would also count against
@@ -115,9 +115,19 @@ def _write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
 
 
-def build_fixture(parent: Path, name: str, *, dirty: int, runs: int, paths: int) -> dict:
-    """A repo with `dirty` tracked modules all modified in the worktree, a focal run that declares and
-    measures the first `paths` of them, and `runs` peer run records under `state/warp`: about
+def _write_untracked(root: Path, untracked: int) -> None:
+    """`untracked` small record files under `state/records/`, none tracked: the field shape of a tree
+    whose dirt is mostly untracked records."""
+    for i in range(untracked):
+        rec = root / "state" / "records" / f"d{i % 100:02d}" / f"rec-{i:06d}.md"
+        rec.parent.mkdir(parents=True, exist_ok=True)
+        rec.write_text(f"record {i}\n", encoding="utf-8", newline="\n")
+
+
+def build_fixture(parent: Path, name: str, *, dirty: int, runs: int, paths: int, untracked: int = 0) -> dict:
+    """A repo with `dirty` tracked modules all modified in the worktree, `untracked` untracked record
+    files, a focal run that declares and measures the first `paths` of them, and `runs` peer run records
+    under `state/warp`: about
     HALTED_SHARE halted (marker, withheld set, withheld-index entry), the rest live (live-run index
     footprint), each declaring a rotating slice of the dirty paths, every seventh co-declaring the
     focal run's own paths. Returns `{root, run_id, paths}`."""
@@ -139,6 +149,7 @@ def build_fixture(parent: Path, name: str, *, dirty: int, runs: int, paths: int)
         carries_peer = i < paths and i % PEER_HUNK_EVERY != 0
         base_text = peer_text[i] if carries_peer else _mod_text(i)
         (root / rel).write_text(base_text + f"EDIT = {i}\n", encoding="utf-8", newline="\n")
+    _write_untracked(root, untracked)
     measured = mods[:paths]
     now = time.time()
     focal = _run_id("bench-measured-rev", 0, now)
@@ -370,17 +381,17 @@ def load_at_head(module_names: list) -> list:
     return replaced
 
 
-def run(workdir: Path, dirty: int, runs: int, paths: int, repeats: int, at_head: list) -> dict:
+def run(workdir: Path, dirty: int, runs: int, paths: int, repeats: int, at_head: list, untracked: int = 0) -> dict:
     """Warm-up, the enforced first call, a repeat call, then `repeats` attributed calls on a fresh fixture."""
     declare_benchmark_origin()
-    out: dict = {"dirty": dirty, "runs": runs, "paths": paths, "bar_ms": BAR_MS}
+    out: dict = {"dirty": dirty, "runs": runs, "paths": paths, "untracked": untracked, "bar_ms": BAR_MS}
     warm = build_fixture(workdir, "warmup", dirty=8, runs=4, paths=4)
     _handler_call(warm)()
     out["at_head"] = load_at_head(at_head)
-    first_fx = build_fixture(workdir, "first", dirty=dirty, runs=runs, paths=paths)
+    first_fx = build_fixture(workdir, "first", dirty=dirty, runs=runs, paths=paths, untracked=untracked)
     out["first"] = measure(_handler_call(first_fx))
     out["repeat"] = measure(_handler_call(first_fx))
-    attr_fx = build_fixture(workdir, "attribution", dirty=dirty, runs=runs, paths=paths)
+    attr_fx = build_fixture(workdir, "attribution", dirty=dirty, runs=runs, paths=paths, untracked=untracked)
     out["attribution"] = attribute(_handler_call(attr_fx), repeats)
     return out
 
@@ -388,7 +399,8 @@ def run(workdir: Path, dirty: int, runs: int, paths: int, repeats: int, at_head:
 def render(result: dict) -> str:
     first, repeat, attr = result["first"], result["repeat"], result["attribution"]
     lines = [
-        f"fixture: dirty={result['dirty']} runs={result['runs']} measured_paths={result['paths']} "
+        f"fixture: dirty={result['dirty']} untracked={result['untracked']} runs={result['runs']} "
+        f"measured_paths={result['paths']} "
         f"at_head={[m['module'] for m in result['at_head']] or 'none (tree as edited)'}",
         f"first  : process_ms={first['process_ms']:.1f} spawns={first['spawns']} "
         f"wall_minus_process_ms={first['wall_minus_process_ms']:.1f} changed={first['changed']} "
@@ -425,6 +437,7 @@ def over_bar(result: dict) -> list:
 def main(argv: list) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--dirty", type=int, default=DEFAULT_DIRTY, help="tracked paths dirty in the worktree")
+    ap.add_argument("--untracked", type=int, default=0, help="untracked record files under state/records")
     ap.add_argument("--runs", type=int, default=DEFAULT_RUNS, help="peer run records under state/warp")
     ap.add_argument("--paths", type=int, default=DEFAULT_PATHS, help="paths the focal run declares and measures")
     ap.add_argument("--repeat", type=int, default=DEFAULT_REPEAT, help="attributed calls averaged into the phase table")
@@ -443,7 +456,7 @@ def main(argv: list) -> int:
     workdir = make_managed_temp_dir(prefix="mrdt-")
     try:
         with fixture_settings_home(workdir):
-            result = run(workdir, args.dirty, args.runs, args.paths, max(args.repeat, 1), args.at_head)
+            result = run(workdir, args.dirty, args.runs, args.paths, max(args.repeat, 1), args.at_head, args.untracked)
     finally:
         rmtree_or_raise(workdir, label="measured-rev-dirty-tree")
     why = over_bar(result)

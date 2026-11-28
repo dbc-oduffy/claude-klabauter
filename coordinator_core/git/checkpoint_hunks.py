@@ -521,11 +521,14 @@ def checkpoint_own_blobs(
         holders: dict[str, dict[str, bool]] = {}
         for path, sibling in pairs:
             holders.setdefault(_norm(path), {})[sibling] = True
+        lineage = run_hunk_claims.lineage_holders(root, run_id)  # an earlier attempt's delta is the run's own
         whole: list[str] = []
         for path in dict.fromkeys(pending):
             diff = diffs[path]
             hunks = list(diff.hunks)
-            split = run_hunk_claims.own_hunks(root, run_id, path, hunks, holders.get(path, {}))
+            split = run_hunk_claims.own_hunks(
+                root, run_id, path, hunks, {**lineage, **holders.get(path, {})},
+            )
             if split.overlapping or split.unattributed or not split.own:
                 withheld.append(path)
                 why[path] = _withheld_reason(split, hunks)

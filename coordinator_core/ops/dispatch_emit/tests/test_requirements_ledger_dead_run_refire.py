@@ -78,6 +78,33 @@ def test_another_runs_exited_fire_does_not_kill_this_one(repo: Path) -> None:
     assert _revise(repo)["next"]["kind"] == "recheck"
 
 
+def _halt(repo: Path, kind: str) -> None:
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    (repo / RECORD_DIR_ROOT / RUN / halted_run.HALTED_FILE).write_text(
+        json.dumps({"status": "halted", "halted": kind, "sizing_rel": REL}), encoding="utf-8"
+    )
+
+
+def test_a_revision_into_a_failed_run_is_refused_naming_the_failed_state(repo: Path) -> None:
+    _halt(repo, "run_failed")
+    before = len(rl.read_ledger(repo, repo / RECORD_DIR_ROOT / RUN).items)
+    out = _revise(repo)
+    assert "error" in out and out.get("ok") is not True
+    assert "failed" in out["error"] and "run_failed" in out["error"] and REL in out["error"]
+    assert len(rl.read_ledger(repo, repo / RECORD_DIR_ROOT / RUN).items) == before
+
+
+def test_a_revision_into_a_run_halted_for_another_cause_is_still_accepted(repo: Path) -> None:
+    _halt(repo, "usage_limit")
+    out = _revise(repo)
+    assert "error" not in out and out["ok"] is True
+
+
+def test_a_run_with_no_halt_marker_is_still_accepted(repo: Path) -> None:
+    assert _revise(repo)["ok"] is True
+
+
 def test_a_pm_ask_ledger_names_no_relay_origin(repo: Path) -> None:
     ledger = rl.read_ledger(repo, repo / RECORD_DIR_ROOT / RUN)
     assert ledger.items[-1].origin == "ask"

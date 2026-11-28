@@ -218,3 +218,46 @@ def test_a_hook_lane_task_binds_the_chain_deadline_inside_the_server_budget_and_
         assert _preuse_phases._POOL_BUDGET_END is None
     finally:
         _preuse_phases.bind_pool_budget(None)
+
+
+class _Probe:
+    def __init__(self, ms: float) -> None:
+        self.ms = ms
+
+    def probe_ms(self, _root) -> float:
+        return self.ms
+
+
+def _hold(monkeypatch: pytest.MonkeyPatch, probe_ms: float, method: str, finish_after: float, tmp_path: Path):
+    import concurrent.futures
+
+    monkeypatch.setattr(server, "_HOOK_LANE_IO_HOLD_SECS", 1.0)
+    holder = object.__new__(server._ServerContext)
+    holder.__dict__["_holder_probe_cache"] = _Probe(probe_ms)
+    future: concurrent.futures.Future = concurrent.futures.Future()
+    timer = threading.Timer(finish_after, future.set_result, args=({"result": "verdict"},))
+    timer.start()
+    try:
+        msg = {"method": method, "_caller_cwd": str(tmp_path)}
+        return holder._hold_hook_for_io_wait(future, msg, method)
+    finally:
+        timer.cancel()
+
+
+def test_a_hook_op_on_a_slow_drive_is_held_for_its_verdict_not_cut_at_the_lane_budget(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    slow = server._SLOW_DRIVE_PROBE_MS * 5
+    assert _hold(monkeypatch, slow, "hooks.preuse_bash_dispatch", 0.2, tmp_path) == {"result": "verdict"}
+
+
+def test_a_hook_op_on_a_healthy_drive_or_a_non_hook_op_is_still_cut(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert _hold(monkeypatch, 1.0, "hooks.preuse_bash_dispatch", 0.2, tmp_path) is None
+    assert _hold(monkeypatch, server._SLOW_DRIVE_PROBE_MS * 5, "dispatch.emit", 0.2, tmp_path) is None
+
+
+def test_a_held_hook_op_that_outlasts_the_hold_is_cut(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    slow = server._SLOW_DRIVE_PROBE_MS * 5
+    assert _hold(monkeypatch, slow, "hooks.preuse_bash_dispatch", 5.0, tmp_path) is None

@@ -449,3 +449,44 @@ class TestStatusAndRunningSeconds:
 
         rows = peer_roster.build_roster("/repo/claude-klabauter")
         assert rows[0].running_seconds == 120.0
+
+
+class TestRole:
+    def test_em_worker_leg_and_subagent_are_distinguished(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from coordinator_core.session import external_registry as er
+
+        snap = {
+            "sid-claude": _record("claude-1", "/sock/a.sock"),
+            "agy-em": hr.ExternalRegistryRecord(pid=2, start_epoch=1.0, cwd="/repo", name="a", provider="agy"),
+            "agy-leg": hr.ExternalRegistryRecord(pid=3, start_epoch=1.0, cwd="/repo", name="b", provider="agy"),
+            "agy-sub": hr.ExternalRegistryRecord(pid=4, start_epoch=1.0, cwd="/repo", name="c", provider="agy"),
+        }
+        ext = {
+            "agy-em": {"role": "em"},
+            "agy-leg": {"role": "unknown"},
+            "agy-sub": {"role": "worker", "agent_id": "x"},
+        }
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+        monkeypatch.setattr(er, "snapshot", lambda *a, **k: ext)
+
+        roles = {r.session_id: r.role for r in peer_roster.build_roster("/repo")}
+        assert roles == {
+            "sid-claude": "em",
+            "agy-em": "em",
+            "agy-leg": "worker_leg",
+            "agy-sub": "subagent",
+        }
+
+    def test_codex_engine_run_row_is_a_worker_leg(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from coordinator_core.codex_runner import roster
+
+        monkeypatch.setattr(hr, "snapshot", lambda: {"sid": _record("c-1", "/sock/a.sock")})
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+        monkeypatch.setattr(
+            roster,
+            "live_records",
+            lambda: [{"run_id": "r1", "mode": "exec", "cwd": "/repo", "pid": 9, "provider": "agy"}],
+        )
+        rows = {r.session_id: r.role for r in peer_roster.build_roster("/repo")}
+        assert rows == {"sid": "em", "agy:r1": "worker_leg"}

@@ -409,7 +409,7 @@ def _resume(halt: str, **extra) -> dict:
 
 
 def _verdict() -> dict:
-    return {"items": [{"id": "R1", "status": "met"}]}
+    return {"items": [{"id": "R1", "status": "met", "evidence": "verified"}]}
 
 
 def test_since_halt_with_no_declared_paths_refuses_the_met_row(repo) -> None:

@@ -112,5 +112,18 @@ def test_git_grep_pattern_finds_referencers_in_a_real_repo(tmp_path: Path) -> No
     (tmp_path / "pkg" / "tests" / "test_b.py").write_text("from pkg.sub import other\n")
     git("init", "-q")
     git("add", ".")
+    from coordinator_core.ops.dispatch_emit import test_import_table
+
+    test_import_table.rebuild(tmp_path)
     waves = emit._widen_waves_with_test_referencers([[_row("A", [MOD])]], tmp_path)
     assert waves[0][0].writes == [MOD, "pkg/tests/test_a.py"]
+
+
+def test_no_table_widens_nothing_and_schedules_a_rebuild(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import test_import_table
+
+    scheduled = []
+    monkeypatch.setattr(test_import_table, "schedule_refresh", lambda root: scheduled.append(root))
+    waves = [[_row("A", [MOD])]]
+    assert emit._widen_waves_with_test_referencers(waves, tmp_path) == waves
+    assert scheduled == [tmp_path]

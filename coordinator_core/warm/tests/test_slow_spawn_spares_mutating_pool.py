@@ -220,3 +220,61 @@ def test_leg_classification_keys_on_frames_not_kind():
         {"leg": "x", "frames": ["subprocess.py::communicate:1200", "subprocess.py::wait:1264"]}
     )
     assert not server._leg_is_spawn_or_io(None)
+
+
+class _ParkThenAnswerPools:
+    """Pool factory: the first submit across every pool it builds parks forever; later ones answer."""
+
+    submits = 0
+
+    def __init__(self, *_a, **_k):
+        self.shutdown_args = None
+        self._processes = {}
+
+    def submit(self, *_a, **_k):
+        fut = concurrent.futures.Future()
+        type(self).submits += 1
+        if type(self).submits > 1:
+            fut.set_result({"jsonrpc": "2.0", "id": 6, "result": {"ok": True}})
+        else:
+            fut.set_running_or_notify_cancel()
+        return fut
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        self.shutdown_args = (wait, cancel_futures)
+
+
+def test_a_timed_out_mutating_op_releases_its_gate_slot_and_the_next_op_completes(rig, monkeypatch):
+    _ParkThenAnswerPools.submits = 0
+    monkeypatch.setattr(server.concurrent.futures, "ProcessPoolExecutor", _ParkThenAnswerPools)
+    monkeypatch.setattr(server, "_withdrawal_deadline_secs", lambda *_a, **_k: 0.4)
+    ctx, _old = rig
+    ctx._dispatch_pool = _ParkThenAnswerPools()
+    _ParkThenAnswerPools.submits = 0
+    gate = ctx._admission_gate()
+    gate.resize(1)
+
+    first_key = dispatch_ack.mint_key()
+    assert server._ack_store.admit(first_key, _HEAVY)
+    server._claim_path(ctx._claim_dir, first_key).write_text("424242", encoding="ascii")
+    first = ctx._pool_dispatch(_msg(), dispatch_key=first_key)
+
+    assert first["error"]["code"] == server.WARM_DISPATCH_INDETERMINATE
+    assert gate._heavy_held == 0, "the timed-out op still holds its slot"
+
+    second_key = dispatch_ack.mint_key()
+    assert server._ack_store.admit(second_key, _HEAVY)
+    started = time.monotonic()
+    second = ctx._pool_dispatch(_msg(), dispatch_key=second_key)
+
+    assert second.get("result") == {"ok": True}, second
+    assert time.monotonic() - started < 0.4, "the next op waited on a slot the timeout never released"
+    assert gate._heavy_held == 0
+
+
+def test_a_slot_whose_holder_never_releases_is_not_reclaimed_before_its_deadline():
+    gate = server._AdmissionGate(1)
+    assert gate.acquire(True, 1.0) == 0.0
+    gate.hold(30.0)
+
+    assert gate.acquire(True, 0.2) is None

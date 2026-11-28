@@ -46,8 +46,8 @@ def test_undeclared_own_tracked_and_untracked_dirt_reaches_the_halt_record(own_d
     held = warp_run_deliverable.halted_withheld_paths(own_dirt, RUN)
     assert {TRACKED, UNTRACKED} <= held
     assert PEER_DIRT not in held
-    assert out["withheld"][TRACKED] == halted_record_commit.RUN_DIRT_UNCOMMITTED
-    assert out["withheld"][UNTRACKED] == halted_record_commit.RUN_DIRT_UNCOMMITTED
+    assert out["withheld"][TRACKED] == halted_record_commit.EVICTED_PARKED
+    assert out["withheld"][UNTRACKED] == halted_record_commit.EVICTED_PARKED
 
 
 def test_own_dirt_stays_uncommitted_and_the_peer_edit_is_not_claimed(own_dirt) -> None:
@@ -107,7 +107,7 @@ def test_touch_record_dirt_reaches_the_halt_record(touch_record_dirt, monkeypatc
     held = warp_run_deliverable.halted_withheld_paths(touch_record_dirt, RUN)
     assert {TRACKED, UNTRACKED} <= held
     assert PEER_DIRT not in held and "scratch/dump.txt" not in held
-    assert out["withheld"][TRACKED] == halted_record_commit.RUN_DIRT_UNCOMMITTED
+    assert out["withheld"][TRACKED] == halted_record_commit.EVICTED_PARKED
 
 
 def test_red_without_the_run_dirt_capture(own_dirt, monkeypatch: pytest.MonkeyPatch) -> None:

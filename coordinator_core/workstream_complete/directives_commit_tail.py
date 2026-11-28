@@ -141,6 +141,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Set, Union
 
+from coordinator_core.ops.fleet._common import MONTH_DIR_RE
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
 from coordinator_core.session import scope as session_scope
@@ -1692,6 +1693,26 @@ def _held_handoff_basenames(worktree_root: "Union[Path, str]", session_id: str) 
     return [basename for class_, basename in matches if class_ == "handoff-claims"]
 
 
+def active_handoff_relpath(worktree_root: "Union[Path, str]", basename: str) -> Optional[str]:
+    """Repo-relative POSIX path of the live baton `basename`, flat
+    (`state/handoffs/<name>`) or one `YYYY-MM` level down; None when absent.
+    Stats only the named file in each candidate dir -- never a corpus scan."""
+    root = Path(worktree_root)
+    base = root / "state" / "handoffs"
+    if (base / basename).is_file():
+        return f"state/handoffs/{basename}"
+    try:
+        months = sorted(
+            (e.name for e in base.iterdir() if MONTH_DIR_RE.fullmatch(e.name)), reverse=True
+        )
+    except OSError:
+        return None
+    for month in months:
+        if (base / month / basename).is_file():
+            return f"state/handoffs/{month}/{basename}"
+    return None
+
+
 def _held_for_dispositions(
     worktree_root: "Union[Path, str]", session_id: str, names: "Sequence[str]"
 ) -> "set[str]":
@@ -1705,8 +1726,11 @@ def _held_for_dispositions(
     for name in names:
         if name in held:
             continue
+        rel = active_handoff_relpath(root, name)
+        if rel is None:
+            continue
         try:
-            text = (root / "state" / "handoffs" / name).read_text(encoding="utf-8")
+            text = (root / rel).read_text(encoding="utf-8")
         except OSError:
             continue
         if extract_frontmatter_scalar(text, "claimed_by") == session_id:
@@ -1763,10 +1787,10 @@ def resolve_ship_stamp_candidates(
         sha = entry.get("shipped_in")
         if not sha:
             continue
-        active_path = root / "state" / "handoffs" / basename
-        if not active_path.is_file():
+        active_rel = active_handoff_relpath(root, basename)
+        if active_rel is None:
             continue
-        candidates.append((f"state/handoffs/{basename}", str(sha)))
+        candidates.append((active_rel, str(sha)))
     return candidates
 
 
@@ -1976,13 +2000,13 @@ def resolve_close_stamp_candidates(
         disposition = entry.get("disposition")
         if disposition not in _HANDOFF_DISPOSAL_VALUES:
             continue
-        active_path = root / "state" / "handoffs" / basename
-        if not active_path.is_file():
+        active_rel = active_handoff_relpath(root, basename)
+        if active_rel is None:
             continue
         closed_reason = (
             entry.get("closed_reason") if disposition in _CLOSE_VERB_DISPOSITIONS else None
         )
-        candidates.append((f"state/handoffs/{basename}", disposition, closed_reason))
+        candidates.append((active_rel, disposition, closed_reason))
     return candidates
 
 
@@ -2023,7 +2047,7 @@ def dropped_disposition_diagnostics(
             reason = "entry is not an object"
         elif name not in held:
             reason = "no handoff claim held by this session"
-        elif not (root / "state" / "handoffs" / name).is_file():
+        elif active_handoff_relpath(root, name) is None:
             reason = "not active under state/handoffs"
         elif entry.get("disposition") == _HANDOFF_DISPOSITION_SHIPPED and not entry.get("shipped_in"):
             reason = "disposition shipped carries no shipped_in"

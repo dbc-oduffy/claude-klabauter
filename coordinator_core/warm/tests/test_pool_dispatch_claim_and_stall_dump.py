@@ -385,14 +385,16 @@ def test_stall_record_times_each_leg_the_handler_thread_sat_in(tmp_path, monkeyp
     assert "--- threads ---" in record.read_text(encoding="utf-8")
 
 
-def test_a_hang_with_no_claim_still_writes_an_accept_record(tmp_path):
+def test_a_hang_with_no_claim_still_writes_a_pool_admission_record(tmp_path):
     stall_dir = tmp_path / "stall-dumps"
     phase = ["gate"]
     disarm = server._arm_accept_stall(stall_dir, 0.1, tmp_path / "unclaimed", "k1", phase)
-    assert _wait_for(lambda: any(stall_dir.glob("*-accept-k1.txt")) if stall_dir.is_dir() else False)
+    assert _wait_for(
+        lambda: any(stall_dir.glob("*-pool-admission-k1.txt")) if stall_dir.is_dir() else False
+    )
     disarm()
 
-    (record,) = stall_dir.glob("*-accept-k1.txt")
+    (record,) = stall_dir.glob("*-pool-admission-k1.txt")
     header = _header(record)
     assert "_pool_dispatch:gate" in header["leg"]
     assert float(header["fs-probe-ms"]) >= 0

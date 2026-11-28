@@ -17,7 +17,12 @@ import pytest
 
 from coordinator_core.warm import pool_sizing, server, telemetry
 
-_HOOK_OPS = ("hooks.preuse_write_dispatch", "hooks.preuse_bash_dispatch", "hooks.guard_editor_python_direct")
+_HOOK_OPS = (
+    "hooks.preuse_write_dispatch",
+    "hooks.preuse_bash_dispatch",
+    "hooks.guard_editor_python_direct",
+    "hooks.dispatch_event",
+)
 _HEAVY_OP = "dispatch.ask_stage"
 _BAR_SECS = 0.5
 _HOLD_SECS = 6.0
@@ -340,3 +345,67 @@ def test_unconsumed_recycle_records_are_dropped_after_their_ttl(tmp_path: Path, 
     assert ctx._take_recycled(old) is None
     assert ctx._take_recycled(fresh)["op"] == "op.b"
     assert not ctx.__dict__["_recycled_at"]
+
+
+_LAND_RUN = "dispatch.land_run"
+
+
+def test_dispatch_event_resolves_to_the_reserved_lane_from_a_door_frame() -> None:
+    frame = {
+        "method": "invoke.from_argv",
+        "params": {"entrypoint": server._HOOK_RUN_ENTRYPOINT, "argv": ["--stdin-hook", "hooks.dispatch_event"]},
+    }
+    eff = server._effective_method(frame)
+    assert eff == "hooks.dispatch_event"
+    assert server._is_light_mutating(eff) and not server._is_light_mutating(_LAND_RUN)
+    assert server._is_claimless(eff)
+
+
+def test_dispatch_event_is_served_within_budget_with_pool_size_one_and_land_run_holding_the_slot(
+    headroom, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = threading.Event()
+    headroom(_headroom(pool_sizing.RAM_RESERVE_MB // 2))
+    ctx, heavy = _ctx(tmp_path, monkeypatch, release, hook_io_blocked=False)
+    assert heavy == 1
+
+    def _body(msg, caller):
+        if msg["method"] == _LAND_RUN:
+            release.wait(_HOLD_SECS)
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {"ok": msg["method"]}}
+
+    monkeypatch.setattr(server, "_pool_dispatch_worker_body", _body)
+    holder = _FakeIO(_LAND_RUN, 1)
+    threads = [_serve_async(ctx, holder)]
+    try:
+        assert _wait(lambda: ctx._admission_gate()._heavy_held >= 1, 5.0), "land_run never held the heavy slot"
+        queued = [_FakeIO(_LAND_RUN, 2)]
+        threads.append(_serve_async(ctx, queued[0]))
+        for i in range(8):
+            hook_io = _FakeIO("hooks.dispatch_event", 5000 + i)
+            started = time.monotonic()
+            ctx._serve_queued(hook_io, (time.time(), 0), lane="guard")
+            assert time.monotonic() - started < server._HOOK_LANE_BUDGET_SECS
+            assert json.loads(hook_io.written[0])["result"]["ok"] == "hooks.dispatch_event"
+        assert not holder.written and not queued[0].written
+    finally:
+        _shutdown(ctx, release, threads)
+
+
+@pytest.mark.parametrize("free_ram_mb", [0.0, pool_sizing.RAM_RESERVE_MB // 2, 32 * 1024])
+def test_the_hook_reserve_is_never_below_one_whatever_the_pool_size(headroom, monkeypatch: pytest.MonkeyPatch, free_ram_mb: float) -> None:
+    headroom(_headroom(free_ram_mb))
+    assert server._guard_pool_workers() >= 1 + server._LIGHT_RESERVE_WORKERS
+    monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 1)
+    assert server._guard_pool_workers() >= 1
+
+
+def test_a_hook_class_outcome_is_not_journaled_but_a_mutating_op_is(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    written: list = []
+    monkeypatch.setattr(server.dispatch_ack, "journal_dir_beside", lambda claim_dir: str(tmp_path / "j"))
+    monkeypatch.setattr(server.dispatch_ack, "record_outcome", lambda journal, key, kind, **kw: written.append(key) or True)
+    out = {"result": {"ok": 1}}
+    server._journal_landed({"method": "hooks.dispatch_event"}, "claims", "dk-hook", out)
+    assert written == []
+    server._journal_landed({"method": _LAND_RUN}, "claims", "dk-land", out)
+    assert written == ["dk-land"]

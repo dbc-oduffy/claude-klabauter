@@ -28,9 +28,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
+BLOCKER_KINDS = ("run_end", "run_landed", "file_state", "oracle_check", "remote_run")
+RESUME_ACTIONS = ("refire", "close_landed", "notify")
+ON_BLOCKER_DEAD = ("surface", "proceed")
+
 #: Seconds a parked stage may wait for its blockers; past it the baseline refusal applies.
 STAGE_WAIT_DEADLINE_S = 7200.0
 
+_END_KINDS = ("run_end", "run_landed")
 _DIR = "coordinator-warp-stage-waits"
 _STARTED_SUFFIX = ".started"
 _LOCK_SUFFIX = ".lock"
@@ -108,7 +113,10 @@ def read(root: Path, run_id: str) -> Optional[dict]:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return record if isinstance(record, dict) else None
+    if not isinstance(record, dict):
+        return None
+    record["typed_blockers"] = typed_blockers(record)
+    return record
 
 
 def iso_utc(epoch: float) -> str:
@@ -116,10 +124,45 @@ def iso_utc(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _normalise_blocker(blocker: object) -> Optional[dict]:
+    """A string is a `run_end` blocker on that run id; a mapping keeps its extra keys. None when unusable."""
+    if isinstance(blocker, str):
+        return {"kind": "run_end", "ref": blocker} if blocker else None
+    if isinstance(blocker, Mapping):
+        ref = blocker.get("ref")
+        if not isinstance(ref, str) or not ref:
+            return None
+        kind = blocker.get("kind", "run_end")
+        if kind not in BLOCKER_KINDS:
+            raise ValueError(f"stage_wait: unknown blocker kind {kind!r}; one of {BLOCKER_KINDS}")
+        return {**blocker, "kind": kind, "ref": ref}
+    return None
+
+
+def typed_blockers(record: Mapping) -> list[dict]:
+    """The record's blockers as `{kind, ref, ...}` objects; a legacy string-only record reads as `run_end`."""
+    typed = record.get("typed_blockers")
+    if isinstance(typed, list):
+        return [b for b in typed if isinstance(b, dict) and b.get("ref")]
+    out = [_normalise_blocker(b) for b in record.get("blockers") or ()]
+    return [b for b in out if b is not None]
+
+
+def _landed_cleared(root: Path, ref: str) -> bool:
+    """True when `blocker_check` finds the `run_landed` blocker's landed marker sha; a failing check is not cleared."""
+    # trap: blocker_check imports stage_wait at module level, so this import stays lazy.
+    from coordinator_core.ops.dispatch_emit import blocker_check
+
+    try:
+        return blocker_check.evaluate(Path(root), {"kind": "run_landed", "ref": ref}).cleared
+    except Exception:
+        return False
+
+
 def park(
     root: Path,
     run_id: str,
-    blockers: Iterable[str],
+    blockers: Iterable[object],
     writes: Iterable[str],
     *,
     session_id: str = "",
@@ -127,21 +170,35 @@ def park(
     last_activity: Optional[Mapping[str, float]] = None,
     sizing_rel: str = "",
     reason: str = "",
+    resume_action: Optional[str] = None,
+    on_blocker_dead: Optional[str] = None,
 ) -> Optional[dict]:
     """Write the run's one wait record naming `blockers`; None when no record home or run id resolves.
 
+    A blocker is a run-id string (a `run_end` blocker) or a `{kind, ref, ...}` mapping with `kind` in
+    `BLOCKER_KINDS`. The record keeps `typed_blockers` (the objects) and `blockers` (their refs, for
+    readers that test run-id membership). `resume_action` (`RESUME_ACTIONS`, default `refire`) and
+    `on_blocker_dead` (`ON_BLOCKER_DEAD`, default `surface`) are record-level; a repeat park that omits
+    one keeps the prior value.
+
     A repeat park of a still-waiting run replaces the blocker set and keeps the first deadline, so
     re-attempts never extend the bound. `session_id` receives the start notice. `last_activity` maps a
-    blocker to its last-activity epoch; the record carries it as ISO UTC under `last_activity`, so a
+    blocker ref to its last-activity epoch; the record carries it as ISO UTC under `last_activity`, so a
     reader tells a live blocker from a dead one without the stage stamp. `sizing_rel` is the refire's
     sizing when the waiter's own token record is gone (a halted run discards it); `reason` tags a park
     that is not a stage-write overlap (`co-tenant-wait`). Both are omitted from the record when empty."""
     path = _path(root, run_id)
-    names = sorted({b for b in blockers if isinstance(b, str) and b})
+    normalised = [n for n in (_normalise_blocker(b) for b in blockers) if n is not None]
+    unique = {(b["kind"], b["ref"]): b for b in normalised}
+    typed = [unique[key] for key in sorted(unique)]
+    names = sorted({b["ref"] for b in typed})
     if path is None:
         return None
-    if not names:
+    if not typed:
         raise ValueError("stage_wait.park: blockers must be non-empty")
+    for value, allowed, label in ((resume_action, RESUME_ACTIONS, "resume_action"), (on_blocker_dead, ON_BLOCKER_DEAD, "on_blocker_dead")):
+        if value is not None and value not in allowed:
+            raise ValueError(f"stage_wait.park: {label} {value!r} is not one of {allowed}")
     stamp = time.time() if now is None else now
     with _lock, _record_lock(path):
         prior = read(root, run_id)
@@ -149,6 +206,9 @@ def park(
         record = {
             "run_id": run_id,
             "blockers": names,
+            "typed_blockers": typed,
+            "resume_action": resume_action or (prior or {}).get("resume_action") or RESUME_ACTIONS[0],
+            "on_blocker_dead": on_blocker_dead or (prior or {}).get("on_blocker_dead") or ON_BLOCKER_DEAD[0],
             "writes": sorted({w for w in writes if isinstance(w, str)}),
             "session_id": session_id,
             "parked_at": prior["parked_at"] if keep else stamp,
@@ -237,10 +297,19 @@ def _wake_one(root: Path, path: Path, ended_run_id: str) -> Optional[dict]:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(record, dict) or record.get("started") or ended_run_id not in record.get("blockers", ()):
+    if not isinstance(record, dict) or record.get("started"):
         return None
-    record["blockers"] = [b for b in record["blockers"] if b != ended_run_id]
-    if record["blockers"]:
+    typed = typed_blockers(record)
+    hit = [b for b in typed if b["ref"] == ended_run_id and b["kind"] in _END_KINDS]
+    if not hit:
+        return None
+    cleared = [b for b in hit if b["kind"] == "run_end" or _landed_cleared(root, b["ref"])]
+    if not cleared:
+        return None
+    left = [b for b in typed if not any(b is c for c in cleared)]
+    record["typed_blockers"] = left
+    record["blockers"] = sorted({b["ref"] for b in left})
+    if left:
         _write_quiet(path, record)
         return None
     if not _claim_start(path):

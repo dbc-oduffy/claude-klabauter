@@ -1,6 +1,6 @@
 """A re-fired run's register binds its ask, relayed text and revisions; a later session PM turn
-that shares a content word with the ask but was never relayed or revised in is listed under
-`unrelated_turns`, not seeded as an open row."""
+that was never relayed or revised in and is not proven another run's seeds an open row; it is
+never listed under `unrelated_turns`."""
 
 from __future__ import annotations
 
@@ -46,12 +46,11 @@ def _register(repo):
     return rr.read_register((repo / REL).read_text(encoding="utf-8"))
 
 
-def test_a_later_unrelated_session_turn_sharing_a_word_is_listed_not_seeded(repo) -> None:
+def test_a_later_pm_turn_not_proven_foreign_is_seeded_as_an_open_row(repo) -> None:
     rl.bind(repo, RUN, REL, ask_text=ASK)
     reg = _register(repo)
-    assert UNRELATED not in [r["source_text"] for r in reg.rows]
-    assert [e["turn"] for e in reg.raw[rr.UNRELATED_TURNS_KEY]] == [1]
-    assert not [r for r in reg.rows if r["status"] == rr.STATUS_OPEN and r["source_text"] == UNRELATED]
+    assert [r["source_text"] for r in reg.rows if r["status"] == rr.STATUS_OPEN] == [ASK, UNRELATED]
+    assert not reg.raw.get(rr.UNRELATED_TURNS_KEY)
 
 
 def test_rebinding_is_idempotent_and_a_revision_still_binds(repo) -> None:
@@ -60,8 +59,9 @@ def test_rebinding_is_idempotent_and_a_revision_still_binds(repo) -> None:
     rl.bind(repo, RUN, REL, ask_text=ASK)
     reg = _register(repo)
     texts = [r["source_text"] for r in reg.rows]
-    assert ASK in texts and "also keep the sizing shippable" in texts and UNRELATED not in texts
-    assert len(reg.raw[rr.UNRELATED_TURNS_KEY]) == 1
+    assert ASK in texts and "also keep the sizing shippable" in texts
+    assert texts.count(UNRELATED) == 1
+    assert not reg.raw.get(rr.UNRELATED_TURNS_KEY)
 
 
 def test_a_relayed_run_binds_the_relayed_text_only(repo) -> None:

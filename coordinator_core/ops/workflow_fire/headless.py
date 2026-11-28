@@ -567,6 +567,17 @@ def _staged_worker_binding(result, owner):
     return {"depth": 1, "script_path": str(Path(owner["repo_root"]) / path), "script_sha256": digest}
 
 
+def _is_staged_commit_binding(binding, staged_binding, root_binding=None) -> bool:
+    """A commit worker names the gate-issued staged script, or the depth-0 root that issued it."""
+    if binding == staged_binding:
+        return True
+    if not isinstance(binding, dict) or binding.get("depth") != 0:
+        return False
+    named = {k: v for k, v in binding.items() if k != "depth"}
+    return (named == {k: v for k, v in staged_binding.items() if k != "depth"}
+            or (root_binding is not None and named == root_binding))
+
+
 def _read_host_gate_receipt(path: Path, record: dict, digest: str | None) -> dict:
     if digest is None or not path.is_file():
         raise ValueError("host gate receipt missing")
@@ -1206,7 +1217,9 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                         request_id = str(event['id'])
                         options = event.get('options', {})
                         if (staged_binding is not None and options.get('phase') == 'commit'
-                                and event.get('binding') != staged_binding):
+                                and not _is_staged_commit_binding(
+                                    event.get('binding'), staged_binding,
+                                    {key: record[key] for key in ('script_path', 'script_sha256')})):
                             raise ValueError('commit worker differs from host-issued staged workflow')
                         if staged_binding is not None and options.get('phase') == 'commit':
                             from coordinator_core.ops.workflow_fire import finalizer

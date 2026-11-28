@@ -121,23 +121,32 @@ def _resolve_root(params: dict, repo_root: Optional[Path]) -> Optional[Path]:
 
 @register_op("testing.suite_runs")
 def _suite_runs(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """Params: repo_root (optional), collection (optional; all when absent). Returns
-    ``{"repo_root", "collections": {name: {"current", "previous"}}}``; each non-None slot
-    carries the record plus a ``freshness`` verdict. Git spawns: 0 with no records, else
+    """Params: repo_root (optional), collection (optional; all when absent), failed_ids
+    (optional list; default each collection's current record's). Returns
+    ``{"repo_root", "collections": {name: {"current", "previous", "main"?, "failure_split"?}}}``;
+    each non-None slot carries the record plus a ``freshness`` verdict (``main`` is the raw
+    record, no verdict). ``failure_split`` is ``srr.classify_failures``: per id, ``pre-existing``
+    (red at the previous banked sha or main, shas named) or ``new``; read from disk, no extra
+    spawn. Git spawns: 0 with no records, else
     exactly 2 regardless of record or sha count (one ``status``, one ``git log <oldest>..HEAD``; the log is skipped when every sha is HEAD)."""
     root = _resolve_root(params, repo_root)
     if root is None:
         return {"repo_root": None, "collections": {}}
     base = root / ".coordinator-local" / "suite-runs"
     loaded: dict = {}
+    mains: dict = {}
+    raw_ids = params.get("failed_ids")
+    wanted_ids = [str(i) for i in raw_ids] if isinstance(raw_ids, list) else None
     for name in _collections(base, params.get("collection")):
         try:
             rec_dir = srr.record_dir(root, name)
         except ValueError:
             continue
         runs = srr.read_runs(rec_dir)
-        if any(runs.values()):
+        main = srr.read_main(rec_dir)
+        if any(runs.values()) or main:
             loaded[name] = runs
+            mains[name] = main
 
     started: dict = {}
     for runs in loaded.values():
@@ -172,4 +181,10 @@ def _suite_runs(params: dict, repo_root: Optional[Path] = None) -> dict:
             })
             for slot, rec in runs.items()
         }
+        main = mains.get(name)
+        if main is not None:
+            out[name][srr.MAIN_SLOT] = main
+        ids = wanted_ids if wanted_ids is not None else ((runs.get("current") or {}).get("failed_ids") or [])
+        if ids:
+            out[name]["failure_split"] = srr.classify_failures(ids, runs.get("previous"), main, runs.get("current"))
     return {"repo_root": str(root), "collections": out}

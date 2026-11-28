@@ -163,6 +163,52 @@ def test_premint_marker_oserror_retracts_the_deferred_id_before_an_overrun(repo,
     assert chosen not in json.dumps(env), env
 
 
+_HALTED_SIZING = "state/sizings/2026-10-01-gate.yaml"
+_HALTED_RUN = "warp-2026-10-01-gate-20261027T142436-989a2d"
+
+
+def _halted_refire_overrun(repo, monkeypatch, payload_args):
+    """A refire of a halted sizing whose hook outruns its budget after the run's own stage file is touched."""
+    import threading
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
+    from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
+
+    monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "1.0")
+    rd = repo / RECORD_DIR_ROOT / _HALTED_RUN
+    write_halt_marker(rd, halted="refusal", sizing_rel=_HALTED_SIZING)
+    run_token.mint(repo, _HALTED_RUN, f"scratch/warp/{_HALTED_RUN}.workflow.mjs", session_id="sess-real-emit", sizing_rel=_HALTED_SIZING)
+    release = threading.Event()
+
+    def slow_persist(root, run_id, brief):
+        (root / RECORD_DIR_ROOT / run_id / RUN_STAGE_FILE).write_text('{"stage": "halted"}', encoding="utf-8")
+        release.wait(30)
+
+    monkeypatch.setattr(mod, "_persist_em_context", slow_persist)
+    try:
+        return mod.evaluate(real._payload(repo, payload_args))
+    finally:
+        release.set()
+
+
+def test_overran_refire_of_a_halted_run_resumes_it_and_is_never_a_minted_start(repo, monkeypatch):
+    env = _halted_refire_overrun(repo, monkeypatch, {"sizing": _HALTED_SIZING})
+    hso = env["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow", env
+    script = Path(hso["updatedInput"]["scriptPath"])
+    text = script.read_text(encoding="utf-8")
+    assert ".launcher." in script.name and _HALTED_RUN in text
+    assert mod._MINTED_OP not in text and "run-past-minted" not in json.dumps(env)
+    assert "resumes" in hso["additionalContext"] and "Do not re-submit" in hso["additionalContext"]
+
+
+def test_overran_minted_start_of_a_run_that_is_not_the_refired_one_is_unchanged(repo, monkeypatch):
+    """The resume answer is only for the run the call resolved to refire: any other minted run still starts through the op."""
+    call = {**_bare_call(), "resume": _HALTED_RUN, "resume_ctx": (repo, _HALTED_SIZING, {}, None, None)}
+    env = mod._minted_start_envelope(repo, ["ask-20261029T200000-e3414a"], time.monotonic() + 1.0, call)
+    assert mod._MINTED_OP in Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+
+
 def _bare_call():
     return {"t0": time.monotonic(), "wall0": time.time(), "roots": [], "minted": [], "gate": run_token.WriteGate(),
             "gates": [], "session": None, "payload": {"ask": "x"}}

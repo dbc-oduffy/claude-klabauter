@@ -146,6 +146,31 @@ def _policy_file_for(payload: Dict[str, Any]) -> Optional[str]:
 #: `permissionDecision` IS the no-objection signal `interpret_result` reads.
 NO_OBJECTION: Dict[str, Any] = {}
 
+#: A payload carrying this key true asks the op to name the guards the engine ran; the key is
+#: stripped before evaluation. Only a requester gets `TRACE_RESULT_KEY` back, so every other
+#: caller's result keeps its exact shape.
+TRACE_REQUEST_KEY = "trace_guards"
+TRACE_RESULT_KEY = "guards_evaluated"
+
+#: Legs `evaluate_payload_json` times around its guard loop; every other leg name is a guard that ran.
+_NON_GUARD_LEGS = frozenset({"claims", "chain_arrival", "chain_build", "disarm_status"})
+
+
+def _evaluate_traced(raw: str, **kwargs: Any) -> tuple:
+    """`(evaluate_payload_json result, names of the guards the chain ran)`; the names are in wall-time order, not run order.
+
+    Runs the chain under the leg collector (a contextvar, so begin and read stay in this one thread).
+    """
+    from coordinator_core.bash_guards import leg_attribution
+
+    token = leg_attribution.begin()
+    try:
+        out = evaluate_payload_json(raw, **kwargs)
+        rows = leg_attribution.summary(top=1 << 20, floor_ms=0.0) or []
+    finally:
+        leg_attribution.end(token)
+    return out, [r["name"] for r in rows if r["name"] not in _NON_GUARD_LEGS]
+
 
 def _verdict_from_envelope(
     out: Union[Dict[str, Any], List[Dict[str, Any]], None],
@@ -223,6 +248,8 @@ async def _warm_guard_evaluate(params: dict, repo_root: Optional[Path] = None) -
             "warm.hook_http.payload_from_event; got %r (%s)."
             % (payload, type(payload).__name__)
         )
+    payload = dict(payload)
+    want_trace = bool(payload.pop(TRACE_REQUEST_KEY, False))
     if payload.get("host") == "codex" or (
         payload.get("host") == "grok"
         and payload.get("tool_name") in _GROK_WRITE_TOOLS
@@ -233,6 +260,15 @@ async def _warm_guard_evaluate(params: dict, repo_root: Optional[Path] = None) -
             resolution_class=_engine_resolution_class(),
         )
     raw = json.dumps(payload)
+    if want_trace:
+        out, evaluated = await asyncio.to_thread(
+            _evaluate_traced,
+            raw,
+            policy_file=_policy_file_for(payload),
+            resolution_class=_engine_resolution_class(),
+        )
+        verdict = _verdict_from_envelope(out)
+        return {**verdict, TRACE_RESULT_KEY: evaluated} if evaluated else verdict
     out = await asyncio.to_thread(
         evaluate_payload_json,
         raw,

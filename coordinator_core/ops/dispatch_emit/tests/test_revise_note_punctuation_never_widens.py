@@ -1,5 +1,5 @@
 """A revise note's bare punctuation token ("-", "--", "...") never becomes a write path, even when a
-repo file of that name exists; a real repo path in the same note still widens the footprint."""
+repo file of that name exists; a note never widens the footprint, a real repo path in it included."""
 
 from __future__ import annotations
 
@@ -78,10 +78,10 @@ def test_punctuation_tokens_are_never_paths_even_when_the_file_exists(tmp_path: 
     assert _spine_ids(repo) == ["C1"]
 
 
-def test_a_real_repo_path_in_the_same_note_still_widens(tmp_path: Path) -> None:
+def test_a_real_repo_path_in_the_same_note_is_named_but_a_note_never_widens(tmp_path: Path) -> None:
     repo = _make(tmp_path)
     note = f"Remaining: - fix {OUTSIDE} ..."
     assert rl._paths_named(repo, [note]) == [OUTSIDE]
     reply = rl._handler({"run_id": RUN, "note": note}, repo)
-    assert reply["footprint_widened"][0]["paths"] == [OUTSIDE]
-    assert len(_spine_ids(repo)) == 2
+    assert reply["ok"] is True and "footprint_widened" not in reply
+    assert _spine_ids(repo) == ["C1"]

@@ -53,7 +53,7 @@ def base(tmp_path, monkeypatch):
     monkeypatch.setattr(terminal_commit, "CLOSE_JOB_SCRIPT", str(noop))
     monkeypatch.setattr(review_edits, "review_writes", lambda *a, **k: {})
     monkeypatch.setattr(
-        claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], [])
+        claims, "list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([("handoff", "b.md")], [])
     )
     return repo, script
 

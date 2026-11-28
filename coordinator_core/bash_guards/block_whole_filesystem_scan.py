@@ -26,7 +26,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
-from coordinator_core.search.engine import DEFAULT_PRUNE_DIRS
+from coordinator_core.search._prune_dirs import DEFAULT_PRUNE_DIRS
 
 from coordinator_core.bash_guards._command_tokenizer import (
     resolve_command_positions,

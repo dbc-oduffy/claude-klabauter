@@ -82,7 +82,9 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
     CLAIM_PARAM,
     GAPS_CLOSED_FIELD,
+    HALT_BLOCKING_ITEMS_FIELD,
     HALT_GAP_RULE,
+    HALT_REVIEW_BLOCKED,
     HALT_DEPENDENTS_UNSTARTED,
     HALT_NO_DISPATCHABLE_EXECUTOR,
     LEG_REFUSAL_HEAD,
@@ -218,8 +220,11 @@ from coordinator_core.ops.dispatch_emit.rag_use import (
     DEGRADED as RAG_DEGRADED,
     HALT_EXAMPLE_RETRIEVAL_REPO_CADENCE,
     HALT_EXAMPLE_RETRIEVAL_REPO_NOT_SERVING,
+    HALT_EXAMPLE_RETRIEVAL_REPO_OUTAGE_REPORTED,
     HALT_EXAMPLE_RETRIEVAL_REPO_UNUSED,
     HALT_UE_CORPUS_GAP,
+    HALT_UE_RETRIEVAL_CHECK_FAILED,
+    HALT_UE_RETRIEVAL_MISSING,
     NO_UE_PATHS_GAP,
     RAG_NOT_USED,
     RESTORE_MESSAGE,
@@ -671,8 +676,6 @@ def _agent(
 #: `model: opus`, so `block_ungranted_opus_subagent` admits it and `enforce_agent_model_pin`
 #: sees an equal model and a cheaper-or-equal effort.
 _MECHANICAL_EFFORT = "low"
-#: Types only the rulings alias (`_RULINGS_AGENT_TYPE`); no gate leg uses it.
-_MECHANICAL_AGENT_TYPE = "general-purpose"
 _MECHANICAL_MODEL = "haiku"
 #: Invariant: the gate leg must hold a shell (Bash in the definition's pinned `tools:`); general-purpose pins none.
 #: Its model must equal `emit._AGENT_MODELS` for this type (haiku). It is never `_TEST_AGENT_TYPE`: that
@@ -681,10 +684,7 @@ _GATE_AGENT_TYPE = "coordinator:queue-grind-op-runner"
 #: A floor leg whose whole prompt is one shell command and a relay: a Bash-only type with no Read or Write.
 _OP_RELAY_AGENT_TYPE = "coordinator:op-relay"
 _PLAN_AUTHOR_AGENT_TYPE = "coordinator:plan-author"
-#: apply-rulings and pull-split: light judgment (edit a plan in place per a recorded ruling, slice rows by
-#: disjoint writes); haiku loses the census/corrects/declared_absent semantics the edit must preserve.
-_RULINGS_AGENT_TYPE = _MECHANICAL_AGENT_TYPE
-_RULINGS_MODEL = "sonnet"
+_RULINGS_AGENT_TYPE = _PLAN_AUTHOR_AGENT_TYPE
 #: JS predicate over a pull entry (gates plan-revise and the re-blitz): true only when a reviewer's verdict is PIVOT or ABORT, or a
 #: REJECTED carrying a premise failure; an OK or BLOCKED review never re-plans. The `premise-check` entry routes BLOCKED by design and is no reviewer.
 _PULL_REVIEW_UNSAVEABLE_JS = (
@@ -1066,6 +1066,20 @@ _RAG_PREFETCH_SCHEMA = _obj(["citations"], {"citations": _STR})
 #: `head` carries this where the opening `rag-prefetch` stage's block belongs: empty until that stage returns.
 _RAG_BLOCK_MARKER = f"{_emit._SHARED_PATH_MARKER_DELIM}{_pipeline_compose._RAG_SPLICE}{_emit._SHARED_PATH_MARKER_DELIM}"
 _OP_RUN_RAG_USE = "dispatch.run_rag_use"
+_UE_RETRIEVAL_CAUSES = (HALT_UE_RETRIEVAL_MISSING, HALT_UE_RETRIEVAL_CHECK_FAILED, HALT_EXAMPLE_RETRIEVAL_REPO_OUTAGE_REPORTED)
+
+
+def _run_rag_use_fold_js() -> str:
+    """Run-close `dispatch.run_rag_use` call, ahead of `_closeable` so a UE retrieval cause ends the run halted with no product commit."""
+    return (
+        "  if (_runId && typeof engineOp === 'function') {\n"
+        f"    try {{ const _ru = await engineOp({_lit(_OP_RUN_RAG_USE)}, {{ run_id: _runId, session_id: _SESSION_ID, repo_root: REPO_ROOT }}); "
+        "_runRagUse = (_ru && typeof _ru.rag_use === 'object') ? _ru.rag_use : null;\n"
+        f"      const _ueHb = (_ru && _ru.halted_by && typeof _ru.halted_by === 'object' && {json.dumps(list(_UE_RETRIEVAL_CAUSES))}.includes(_ru.halted_by.halted)) ? _ru.halted_by : null;\n"
+        "      if (_ueHb && !_halted) _halted = { ..._ueHb, reason: 'ue retrieval: ' + _ueHb.halted, goal_unmet: true, run_id: _runId, sizing: _sizingRel }; }\n"
+        "    catch (e) { log('run rag use threw: ' + String((e && e.message) ?? e)); }\n"
+        "  }"
+    )
 #: Worded positively: the refused spellings live only in suite_tier_refusal, never in a scout prompt.
 EXIT_CRITERION_RULES_CLAUSE = (
     " The exit_criterion names no test tier and no tier-valued argument; "
@@ -2030,7 +2044,7 @@ _RUN_OWNED_PATH_JS = (
 _MEASURED_REV_32004_CLAUSE = (
     "A -32004 from the measured-rev op is not a refusal: follow the -32004 reconcile contract "
     "(docs/wiki/reconcile-policy.md; measured_rev is its named re-run carve-out, so a reconcile state of "
-    "unknowable with reason killed also licenses exactly one re-run). If it persists "
+    "unknowable with reason killed or engine-restarted also licenses exactly one re-run). If it persists "
     "after that, or error.data has no reconcile_command, report status error with tests_run 0 and zero_run_cause "
     f"'{MEASURED_REV_32004_CAUSE}'; never fall back to the working tree. "
     "If a guard denies any command you issue, stop: report status error with tests_run 0, "
@@ -2121,7 +2135,6 @@ _USAGE_LIMIT_RE = (
 _USAGE_LIMIT_RESET_RE = r"/resets\s+((?:[a-z]{3,9}\.?\s+\d{1,2},?\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?:\s*\(([^)]+)\))?/i"
 HALT_USAGE_LIMIT = "usage_limit"
 HALT_FAMILY_CLI_FAILURE = "family_cli_failure"
-HALT_REVIEW_BLOCKED = "review_blocked"
 HALT_CRITERION_NOT_MET = "criterion_not_met"
 HALT_DELIVERY_FAIL = "delivery_fail"
 HALT_NOT_CLOSEABLE = "not_closeable"
@@ -2175,7 +2188,7 @@ def _test_blockers_js(
         + (f"    const {p}Live = {live};\n" if shared_live else "")
         + f"    const {p}Failing = {p + 'Live' if shared_live else live}{own_filter}.sort().map((n) => ({{ node_id: n, message: {p}Detail.get(n) ?? '' }}));\n"
         + out_of_ask
-        + f"    const {p}Gaps = {p}Failing.map((t) => t.node_id + ': ' + (t.message.trim().split('\\n')[0] ?? '').trim().slice(0, 300));\n"
+        + f"    const {p}Gaps = {p}Failing.map((t) => t.node_id + ': ' + ((t.message.trim().split('\\n')[0] ?? '').trim().slice(0, 300) || 'no failure message recorded (see test sidecar)'));\n"
     )
 
 
@@ -2332,6 +2345,8 @@ def _review_blocked_halt_js(
         "      const _claimed = (typeof _manifest !== 'undefined' && _manifest?.ledger_item_ids?.length) ? _manifest.ledger_item_ids : [];\n"
         "      _halted = { halted: " + json.dumps(HALT_REVIEW_BLOCKED) + ", blocker: " + json.dumps(TEST_BLOCKER) + ", run_id: _runId, "
         "failing: _rvFailing, gaps: _rvGaps, "
+        "reason: ('review blocked by ' + _rvFailing.length + ' failing test(s): ' + _rvFailing.map((t) => t.node_id).join(', ')), "
+        + json.dumps(HALT_BLOCKING_ITEMS_FIELD) + ": _rvFailing.map((t) => ({ id: t.node_id, remaining: ((t.message ?? '').trim().split('\\n')[0] ?? '').trim().slice(0, 300) || 'failing' })), "
         + HALT_PLAN_FIELD + ": (typeof _planRel !== 'undefined' ? _planRel : null), "
         "items: _claimed.map((id) => ({ id, remaining: _rvGaps, evidence: _rvGaps[0] })), "
         "slices: _slicesJs, " + SELF_CORRECTION_FIELD + ": _sc, "
@@ -2339,6 +2354,9 @@ def _review_blocked_halt_js(
         + _refire_js(sizing_rel) + " };\n"
         "    } else if (_blockedSlices.length) _halted = { halted: " + json.dumps(HALT_REVIEW_BLOCKED) + ", run_id: _runId, "
         "unapplied_findings: _blockedSlices.reduce((n, w) => n + (w.findings - (w.applied ?? 0)), 0), "
+        "reason: ('review blocked by unapplied findings in slice(s): ' + _blockedSlices.map((w) => (w.slice_id ?? '?') + ' (' + (w.findings - (w.applied ?? 0)) + ')').join(', ')), "
+        + json.dumps(HALT_BLOCKING_ITEMS_FIELD) + ": _blockedSlices.map((w) => ({ id: 'slice:' + (w.slice_id ?? '?'), "
+        "remaining: (w.findings - (w.applied ?? 0)) + ' unapplied finding(s), see ' + (w.sidecar_path ?? 'its review sidecar') })), "
         "slices: _slicesJs, " + SELF_CORRECTION_FIELD + ": _sc, "
         "next_action: _scNa('The refire re-runs the review wave over the blocked slices: ') + "
         + _refire_js(sizing_rel) + " };\n"
@@ -2378,7 +2396,7 @@ _REVIEW_RECOVER_JS = r"""
       const detail = new Map();
       for (const d of (Array.isArray(rv?.failing_detail) ? rv.failing_detail : [])) if (d && d.node_id) detail.set(_hfPosix(d.node_id), String(d.message ?? ''));
       const split = classifyReds(failing, _manifest?.review_declared_paths ?? [], { detail, pre_existing: rv?.pre_existing ?? [], passed_at_base: rv?.passed_at_base ?? [], diff_named: Array.isArray(rv?.diff_named) ? rv.diff_named : [], reverted: Array.isArray(rv?.reverted) ? rv.reverted : [] });
-      const ownedTxt = split.owned.map((n) => n + ': ' + ((detail.get(n) ?? '').trim().split('\n')[0] ?? '').trim().slice(0, 300));
+      const ownedTxt = split.owned.map((n) => n + ': ' + (((detail.get(n) ?? '').trim().split('\n')[0] ?? '').trim().slice(0, 300) || 'no failure message recorded (see test sidecar)'));
       const slices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter((w) => w && (w.verdict === 'WARN' || __BLOCKED__) && (w.findings ?? 0) > (w.applied ?? 0))
         .map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null }));
       const foreign = [...reverifyForeign, ...failing.filter((n) => split.foreign.includes(_hfPosix(n)))];
@@ -2506,7 +2524,7 @@ def _review_recover_js(
         base_flag += f' --repo-root "{Path(repo_root).as_posix()}"'
     reverify_prompt = _cat(
         f"{head}\n\n{anchor}\n\nHalt re-verify leg (review). A fix leg just ran. Run "
-        f"`python -m coordinator_core.ops.test_leg_run{base_flag} --out {run_abs_out} -- ` followed by these failing test ids and the scoped tests of these files: ",
+        f"`python -m coordinator_core.ops.test_leg_remote{base_flag} --out {run_abs_out} -- ` followed by these failing test ids and the scoped tests of these files: ",
         "js:idsText",
         " and ",
         "js:fpText",
@@ -2627,11 +2645,10 @@ _TEST_RAN_JS = (
 
 
 #: `zero_run_cause` values a co-tenant clean-export refusal reports (`clean_overlay_verify` prints them); the
-#: wait cause halts `co_tenant_wait`, never `test_infra_failure`. The three cause strings mirror
-#: `co_tenant_owner.PARKED`, `.CAUSE_HALTED_OWNER`; keep them equal (the cycle cause is mirrored below).
+#: wait cause halts `co_tenant_wait`, never `test_infra_failure`. The wait cause string mirrors
+#: `co_tenant_owner.PARKED`; keep them equal (the cycle cause is mirrored below).
 CO_TENANT_WAIT_CAUSE = "co-tenant-wait"
 CO_TENANT_WAIT_HALT = "co_tenant_wait"
-CO_TENANT_HALTED_CAUSE = "co_tenant_dependency_on_halted_run"
 #: Mirrors `co_tenant_cycle.CAUSE_CYCLE`: runs that each need a path another of them holds; keep equal.
 CO_TENANT_CYCLE_CAUSE = "co_tenant_cycle"
 #: Mirrors `co_tenant_owner.CAUSE_TYPED`: a dependency on a peer-dirty path no run recorded writing (no owner); keep equal.
@@ -2675,7 +2692,6 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "const _rvPre = [...new Set(_rvAtBase)]; "
         "const _rvCause = (typeof _rvt.zero_run_cause === 'string') ? _rvt.zero_run_cause : ''; "
         "const _rvWait = _rvCause === " + json.dumps(CO_TENANT_WAIT_CAUSE) + "; "
-        "const _rvHalted = _rvCause === " + json.dumps(CO_TENANT_HALTED_CAUSE) + "; "
         "const _rvCycle = _rvCause === " + json.dumps(CO_TENANT_CYCLE_CAUSE) + "; "
         "const _rvUnowned = _rvCause === " + json.dumps(CO_TENANT_UNOWNED_CAUSE) + "; "
         "const _rvCo = (_rvt.co_tenant && typeof _rvt.co_tenant === 'object') ? _rvt.co_tenant : {}; "
@@ -2697,7 +2713,7 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "&& typeof _testResult?.import_error?.source_path === 'string') "
         "? 'Land the uncommitted ' + _testResult.import_error.source_path + ' first, then refire: ' "
         ": 'Refire to re-run the test leg: ') + " + _refire_js(sizing_rel) + " }; "
-        "if (_rvt.over_budget === true && ['error', 'errored'].includes(_rvt.status) && !_rvWait && !_rvHalted && !_rvCycle && !_rvUnowned "
+        "if (_rvt.over_budget === true && ['error', 'errored'].includes(_rvt.status) && !_rvWait && !_rvCycle && !_rvUnowned "
         "&& typeof _rvt.sidecar_path === 'string' && _rvt.sidecar_path.trim() "
         "&& !(Array.isArray(_rvt.failing_ids) && _rvt.failing_ids.some((x) => typeof x === 'string' && x.trim()))) "
         "{ _halted = { ..._halted, halted: " + json.dumps(TEST_LEG_OVER_BUDGET_HALT) + " }; } "
@@ -2728,21 +2744,18 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "_halted = { ..._halted, halted: " + json.dumps(GUARD_REFUSED_HALT) + ", "
         "detail: 'the test leg ran zero tests: a guard refused its command' + (_rvRef ? ': ' + _rvRef : ' (the verdict named no guard refusal)'), "
         "next_action: 'Fix the guard refusal named in detail first (a rerun repeats it), then refire: ' + " + _refire_js(sizing_rel) + " }; } "
-        "if (_rvWait || _rvHalted || _rvCycle || _rvUnowned) { _halted = { ..._halted, halted: _rvCycle ? " + json.dumps(CO_TENANT_CYCLE_CAUSE)
+        "if (_rvWait || _rvCycle || _rvUnowned) { _halted = { ..._halted, halted: _rvCycle ? " + json.dumps(CO_TENANT_CYCLE_CAUSE)
         + " : _rvWait ? " + json.dumps(CO_TENANT_WAIT_HALT)
-        + " : _rvUnowned ? " + json.dumps(CO_TENANT_UNOWNED_CAUSE)
-        + " : " + json.dumps(CO_TENANT_HALTED_CAUSE) + ", "
+        + " : " + json.dumps(CO_TENANT_UNOWNED_CAUSE) + ", "
         "detail: _rvCycle ? 'the clean export needs ' + _rvMod + ' from ' + _rvOwner + ', which waits on this run (cycle: ' "
         "+ _rvCyc.join(' -> ') + '); the run did not run its tests' : _rvWait ? 'the test leg parked behind ' + _rvOwner + ', which owns ' + _rvMod "
         "+ ' that the clean export needs; the run did not run its tests' "
-        ": _rvUnowned ? 'the clean export needs ' + _rvSym + ' from ' + _rvMod + ' (imported by ' + _rvImp "
-        "+ '), a path no run recorded writing; the run did not run its tests' "
-        ": 'the clean export needs ' + _rvMod + ' from halted run ' + _rvOwner + '; the run did not run its tests', "
+        ": 'the clean export needs ' + _rvSym + ' from ' + _rvMod + ' (imported by ' + _rvImp "
+        "+ '), a path no live run holds; the run did not run its tests', "
         "next_action: _rvCycle ? 'Joint-land the cycle: ' + String(_rvCo.remedy ?? ('coordinator-invoke dispatch.land_run ' "
         "+ JSON.stringify({ joint: _rvCyc }))) : _rvWait ? 'the engine refires ' + _rvOwner + ' first, then this run (stranded-wait sweep)' "
-        ": _rvUnowned ? 'Land the needed symbol or drop the import: ' + _rvSym + ' in ' + _rvMod + ', imported by ' + _rvImp "
-        "+ ' (no run recorded writing it); then ' + " + _refire_js(sizing_rel) + " "
-        ": 'Refire the owner first: ' + String(_rvCo.owner_refire ?? _rvOwner) + '; then ' + " + _refire_js(sizing_rel) + " }; } }"
+        ": 'Land the needed symbol or drop the import: ' + _rvSym + ' in ' + _rvMod + ', imported by ' + _rvImp "
+        "+ ' (no live run holds it); then ' + " + _refire_js(sizing_rel) + " }; } }"
     )
 
 
@@ -3180,11 +3193,11 @@ def _verify_tests_call(
     if repo_root:
         base_flag += f'--repo-root "{Path(repo_root).as_posix()}" '
     leg_command = engine_module_command(
-        "coordinator_core.ops.test_leg_run", repo_root, f"{base_flag}--out {shlex.quote(out_path)} -- ",
+        "coordinator_core.ops.test_leg_remote", repo_root, f"{base_flag}--out {shlex.quote(out_path)} -- ",
         shell="bash",
     )
     windows_command = engine_module_command(
-        "coordinator_core.ops.test_leg_run", repo_root,
+        "coordinator_core.ops.test_leg_remote", repo_root,
         f"{base_flag}--out {_powershell_quote(out_path)} -- ", shell="powershell",
     )
     # Build apostrophe escapes at runtime so emitter quoting cannot split their JS string literals.
@@ -4784,6 +4797,54 @@ def _row_sidecar_js(run_id: str, label_prefix: str) -> str:
     return _sidecar.sidecar_clause_js("ask", run_id, f"{label_prefix} + r.id")
 
 
+AGENT_LEG_REMOTE_MODULE = "coordinator_core.ops.agent_leg_remote"
+_PLACED_LEG_SCHEMA = _obj(
+    ["placed"],
+    {
+        "placed": {"type": "boolean"},
+        "box_id": {"type": ["string", "null"]},
+        "reason": {"type": ["string", "null"]},
+        "reply": {"type": ["string", "object", "null"]},
+    },
+)
+
+
+def _placed_leg_js(anchor: str, run_id: str, repo_root_abs: str, run_abs: str, exec_phase: str) -> str:
+    """JS for `_placeLeg(leg, extra, localCall)`, declared inside `_launchRow(r)`: a test-runner leg runs `agent_leg_remote`
+    for row `r`, which picks the box at fire time; `placed: true` returns its reply, anything else runs `localCall()`.
+
+    Trap: the label must not end in the row id (`test_late_revise_row_judged_e2e` counts executor legs by that suffix)."""
+    quote = '"'
+    head = _lit(f"python -m {AGENT_LEG_REMOTE_MODULE} --leg ")
+    mid = _lit(f" --run-id {run_id} --repo-root {quote}{repo_root_abs}{quote} --out {quote}{run_abs}/")
+    tail = _lit(f".result.json{quote} --prompt-file ")
+    command = (
+        f"{head} + leg + {mid} + leg + '-' + r.id + {tail} + JSON.stringify(String(r.brief_path)) + "
+        "(r.model ? ' --model ' + JSON.stringify(String(r.model)) : '') + "
+        "(leg === 'executor' ? ' --writes ' + (r.writes ?? []).map((w) => JSON.stringify(String(w))).join(' ') : '') + extra"
+    )
+    prompt = _cat(
+        f"{anchor}\n\nRun exactly this one command as its own Bash call, no wrapper, no edit to it, and do not retry it. "
+        "Run it in the background with no timeout parameter and wait for its completion notification; it is the whole "
+        "leg and can take a long time. Edit nothing yourself. Return the JSON object it prints as your result, "
+        "unchanged.\n\n",
+        "js:" + command,
+        "js:" + _sidecar.sidecar_clause_js("ask", run_id, "'place-' + r.id + ':' + leg"),
+    )
+    return (
+        f"    const _PLACED_SCHEMA = {json.dumps(_PLACED_LEG_SCHEMA, sort_keys=True)};\n"
+        "    const _placeLeg = async (leg, extra, localCall) => {\n"
+        "      let _pl = null;\n"
+        f"      try {{ _pl = await agent({prompt}, {{ label: 'place-' + r.id + ':' + leg, phase: {exec_phase}, "
+        f"agentType: {_lit(_emit._TEST_AGENT_TYPE)}, {_emit._model_opt(_emit._TEST_AGENT_TYPE)}, "
+        f"effort: {_lit(_MECHANICAL_EFFORT)}, schema: _PLACED_SCHEMA }}); }}\n"
+        "      catch (e) { if (typeof _errLimitText === 'function' && _errLimitText(e) !== null) throw e; _pl = null; }\n"
+        "      if (_pl && _pl.placed === true && _pl.reply !== undefined && _pl.reply !== null) return _pl.reply;\n"
+        "      return localCall();\n"
+        "    };"
+    )
+
+
 def _reviewer_row_js(anchor: str, label_prefix: str, run_id: str) -> list[str]:
     """The execute-loop branch for a blinded falsifier-integrity reviewer row: the agent is given
     only the repo anchor and its brief path (no preamble, no ledger clause -- the brief is the
@@ -4807,7 +4868,7 @@ def _reviewer_row_js(anchor: str, label_prefix: str, run_id: str) -> list[str]:
     return [
         f"      if (r.agent_type === {_lit(REVIEWER_AGENT_TYPE)}) _rows[r.id] = _runRow(r.id, "
         "(r.deps ?? []).map((d) => _rows[d]), null, async () => {",
-        f"        const _v = await {reviewer};",
+        f"        const _v = await _placeLeg('review', {_lit(' --schema-name falsifier_integrity_result')}, () => {reviewer});",
         "        if (!_v || !_v.verdict) { return 'BLOCKED: the reviewer returned no verdict'; }",
         f"        _verdictReports.push({{ path: {report}, text: JSON.stringify(_v) }});",
         "        return 'DONE: ' + r.id + ' verdict ' + _v.verdict;",
@@ -7229,7 +7290,7 @@ def compose_ask_script(
         )
         ruled_call = _agent(
             ruled_prompt, label="apply-rulings", phase="plan", agent_type=_RULINGS_AGENT_TYPE,
-            agent_model=_RULINGS_MODEL, schema=_RULED_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
+            schema=_RULED_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
         )
         b.append(
             "    if (_gate.resume_plan && _reusePhase('plan_gate_rulings')) "
@@ -7330,7 +7391,7 @@ def compose_ask_script(
         )
         patch_call = _agent(
             patch_prompt, label="plan-patch", phase="plan", agent_type=_RULINGS_AGENT_TYPE,
-            agent_model=_RULINGS_MODEL, schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA,
+            schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA,
             effort=_MECHANICAL_EFFORT, run_id=run_id,
         )
         b.append(f"      const _unsaveable = {_PULL_REVIEW_UNSAVEABLE_JS};")
@@ -7371,7 +7432,7 @@ def compose_ask_script(
         )
         split_call = _agent(
             split_prompt, label="pull-split", phase="plan", agent_type=_RULINGS_AGENT_TYPE,
-            agent_model=_RULINGS_MODEL, schema=_PULL_SPLIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
+            schema=_PULL_SPLIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
         )
         b.append("      if (_unsaveable) {")
         b.append(
@@ -7829,12 +7890,13 @@ def compose_ask_script(
     # Invariant: `_launchRow` is the one dispatch of a manifest row. The wave loop and `_lateLeg` both call it, so a
     # row a revise or re-plan added meets the same reviewer, kept, route, family and group arms as an original row.
     b.append("  const _launchRow = (r) => {")
+    b.append(_placed_leg_js(anchor, run_id, repo_root_abs, run_abs, exec_phase))
     b.extend(_reviewer_row_js(anchor, work_label, run_id))
     routed_arm = f"r.route ? {_routed_row_js(work_label, exec_phase)} : " if routed else ""
     b.append(
-        f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => r.kept_from ? _keptRun(r) : {routed_arm}{family_arm}r.group ? _groupRun(r) : agent(_rowPrompt(r), "
+        f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => r.kept_from ? _keptRun(r) : {routed_arm}{family_arm}r.group ? _groupRun(r) : _placeLeg('executor', '', () => agent(_rowPrompt(r), "
         f"{{ label: {work_label} + r.id, phase: {exec_phase}, "
-        f"agentType: r.agent_type, model: r.model, effort: {_js_string_literal(_ROW_EFFORT)}, stallMs: {_emit._EXECUTOR_STALL_MS} }}), "
+        f"agentType: r.agent_type, model: r.model, effort: {_js_string_literal(_ROW_EFFORT)}, stallMs: {_emit._EXECUTOR_STALL_MS} }})), "
         "{ title: r.id, paths: r.writes ?? [], declared: r.writes ?? [] });"
     )
     b.append("  };")
@@ -8077,7 +8139,7 @@ def compose_ask_script(
             "`. Return `changed`: the union of both outputs, one repo-relative path per entry; [] when both are empty. "
             "Run nothing else; edit nothing.",
         ),
-        label="first-halt-changed", phase="review", agent_type=_emit._TEST_AGENT_TYPE,
+        label="first-halt-changed", phase="review", agent_type=_OP_RELAY_AGENT_TYPE,
         schema=_obj(["changed"], {"changed": {"type": "array", "items": _STR}}),
         effort=_MECHANICAL_EFFORT, run_id=run_id, agent_type_host=agent_type_host,
     )
@@ -8602,6 +8664,7 @@ def compose_ask_script(
         f"(_haltedByHold ? {_lit(HALT_DEPENDENTS_UNSTARTED)} : {_lit(HALT_STOP_RULE)}), "
         "reason: String(_halted), sizing: _sizingRel, run_id: _runId, stopped_rows: _stoppedRows }; }"
     )
+    b.append(_run_rag_use_fold_js())
     if judged:
         b.append(_criterion_latest_test_reconcile_js())
         b.append(f"  const _criterionOpen = !!({_fv} && {_fv}.status === 'not_met');")
@@ -8756,13 +8819,6 @@ def compose_ask_script(
             script_path=script_path,
         )
         _append_halt_record_commit(b)
-    b.append(
-        "  if (_runId && typeof engineOp === 'function') {\n"
-        f"    try {{ const _ru = await engineOp({_lit(_OP_RUN_RAG_USE)}, {{ run_id: _runId, session_id: _SESSION_ID, repo_root: REPO_ROOT }}); "
-        "_runRagUse = (_ru && typeof _ru.rag_use === 'object') ? _ru.rag_use : null; }\n"
-        "    catch (e) { log('run rag use threw: ' + String((e && e.message) ?? e)); }\n"
-        "  }"
-    )
     b.append("  _refireNextAction();")
     b.append(
         f"  return {{ arm: _gate.arm, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null, {_ROUTE_VERDICT_KEY}: _gate?.{_ROUTE_VERDICT_KEY} ?? null, sizing: _sizingRel, plan: _planRel, run_id: _runId, "

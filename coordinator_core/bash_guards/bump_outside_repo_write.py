@@ -35,7 +35,7 @@ target gitdir exists to relocate a marker into, so C3's per-target
 narrowing is a structural no-op for this class. It DOES consume C1's
 `target_is_publish_destination` classifier for the message's
 `destination_class` axis (always resolving `DESTINATION_FOREIGN` in
-practice, since a `publish.mirrors.*.path` entry is itself always a real
+practice, since a round mirror clone is itself always a real
 repo, and this guard's predicate has already excluded any target that
 resolves to one) -- classified explicitly rather than hardcoded, so this
 guard never silently drifts from C1's own closed set.
@@ -953,7 +953,7 @@ def check_bump_outside_repo_write(
         # C1 -- classify via the SAME closed-set membership test C4 uses.
         # This guard's own defining predicate (`target_gitdir is not None:
         # continue`, above) means `target_dir` never resolves to a git repo
-        # by the time execution reaches here, so a `publish.mirrors.*.path`
+        # by the time execution reaches here, so a round-mirror
         # match (itself always a real repo) is structurally unreachable --
         # this always classifies DESTINATION_FOREIGN in practice. Classified
         # explicitly anyway (rather than hardcoding DESTINATION_FOREIGN)

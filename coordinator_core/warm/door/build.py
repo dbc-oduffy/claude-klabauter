@@ -56,6 +56,10 @@ SOURCES = (_SOURCE, _CORE_SOURCE, _CORE_HEADER, _ENV_SET_HEADER)
 #: hand, and grep both on change.
 SIDECAR_FILENAME = "door.engine-root.txt"
 
+#: Must equal door.c's `OWNER_SID_SIDECAR_FILENAME` and
+#: `election.OWNER_SID_RECORD_NAME`. Windows only; holds a machine SID, so it is gitignored.
+OWNER_SID_SIDECAR_FILENAME = "door.owner-sid.txt"
+
 #: Provenance sidecar written next to every compiled `door.exe` -- see
 #: `write_provenance()`. Filename convention: `<exe-name>.provenance.json`,
 #: so it survives a `--output` pointing somewhere other than `door.exe`.
@@ -166,13 +170,36 @@ def write_sidecar(output_exe: Path, engine_root: Path) -> Path:
     changed one lands whole via `os.replace`, retried briefly because a
     door's read holds the handle for microseconds, not across the retry.
     """
-    from coordinator_core.warm.door.sidecar_guard import check_box_sidecar_write
-
-    check_box_sidecar_write(output_exe.parent, engine_root)
-    return _write_sidecar_atomic(
+    path = _write_sidecar_atomic(
         output_exe.parent / SIDECAR_FILENAME,
         (_sidecar_root_string(engine_root) + "\n").encode("utf-8"),
     )
+    if os.name == "nt":
+        write_owner_sid_sidecar(output_exe)
+    return path
+
+
+def write_owner_sid_sidecar(output_exe: Path) -> Path:
+    """Writes the owner-SID record (`OWNER_SID_SIDECAR_FILENAME`) beside
+    `output_exe`: one line, the SID of the user running this build, which the
+    door and `election.engine_owner_sid` read to name the warm pipe. The first
+    write links a finished temp into place (a reader never sees a partial
+    file); a changed record goes through `_write_sidecar_atomic`."""
+    from coordinator_core.warm import election
+
+    record = output_exe.parent / OWNER_SID_SIDECAR_FILENAME
+    content = (election.current_user_sid() + "\n").encode("utf-8")
+    if not record.exists():
+        tmp = record.with_name(f"{record.name}.{os.getpid()}.tmp")
+        tmp.write_bytes(content)
+        try:
+            os.link(tmp, record)
+            return record
+        except FileExistsError:
+            pass
+        finally:
+            tmp.unlink(missing_ok=True)
+    return _write_sidecar_atomic(record, content)
 
 
 def write_python_sidecar(output_exe: Path, python_bin: Path | None = None) -> Path:

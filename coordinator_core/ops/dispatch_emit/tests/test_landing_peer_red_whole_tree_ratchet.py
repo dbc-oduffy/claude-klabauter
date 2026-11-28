@@ -93,7 +93,7 @@ def test_an_unevidenced_foreign_red_with_no_owed_measurement_stays_unknown(repo)
     assert check == landing_integrity.UNKNOWN_ONLY and list(findings) == [] and findings.unknown_ids == [RATCHET]
 
 
-def test_an_unevidenced_foreign_red_the_owed_check_measured_and_did_not_clear_refuses_as_caused(repo):
+def test_an_id_the_record_names_foreign_stays_unknown_when_the_owed_check_did_not_clear_it(repo):
     params = _dual_record(
         repo, export={"status": "fail", "failed_tests": [RATCHET]},
         live={"status": "fail", "failed_tests": [RATCHET]}, baseline=_foreign([]),
@@ -101,8 +101,7 @@ def test_an_unevidenced_foreign_red_the_owed_check_measured_and_did_not_clear_re
 
     findings, check = landing_integrity.landing_test_gate(repo, params, RUN, ["ok.py"])
 
-    assert check == "failed"
-    assert [(f.reason, RATCHET in f.detail) for f in findings] == [(landing_targeted_tests.TARGETED_TESTS_FAILED, True)]
+    assert check == landing_integrity.UNKNOWN_ONLY and list(findings) == [] and findings.unknown_ids == [RATCHET]
 
 
 def test_a_caused_red_also_red_at_the_base_is_attributed_pre_existing_and_leaves_the_gate_clear(repo):

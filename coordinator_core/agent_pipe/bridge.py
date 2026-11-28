@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.agent_pipe import codex_app_server, mailbox, roster
-from coordinator_core.agent_pipe.agy import AgyAdapter
+from coordinator_core.agent_pipe.agy import AgyAdapter, SpoolRefused, claim_resume, take_spool
 from coordinator_core.agent_pipe.contract import (
     KIND_AGY,
     KIND_CLAUDE,
@@ -164,7 +164,8 @@ def refusal(msg: BridgeMessage) -> Optional[str]:
 @dataclass
 class Delivery:
     """Outcome of one route(). status: delivered (claude mailbox written), handed-off (codex/agy running
-    detached), refused (routing control), unroutable (no binding or leg failed to start)."""
+    detached), queued (codex queue, or agy spool with reason "spooled": a held presence lock or running
+    resume), refused (routing control), unroutable (no binding or leg failed to start)."""
 
     status: str
     reason: Optional[str]
@@ -237,24 +238,43 @@ def _deliver_codex(binding: dict, msg: BridgeMessage) -> Delivery:
 
 
 def _deliver_agy(binding: dict, msg: BridgeMessage) -> Delivery:
-    argv = AgyAdapter().resume_argv(binding["id"], _body(msg))
+    body = _body(msg)
     try:
-        proc = subprocess.Popen(
-            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        lease = claim_resume(binding["id"], body, msg.from_identity, wait_s=0)
+    except SpoolRefused as exc:
+        return Delivery("unroutable", f"agy spool: {exc}", msg)
+    if lease is None:
+        return Delivery("queued", "spooled", msg)
+    def spawn(text: str) -> subprocess.Popen:
+        return subprocess.Popen(
+            AgyAdapter().resume_argv(binding["id"], text),
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, errors="replace", creationflags=_NO_WINDOW,
         )
+
+    try:
+        proc = spawn(body)
     except OSError as exc:
+        lease.release()
         return Delivery("unroutable", f"cannot spawn agy: {exc}", msg)
 
     def watch() -> None:
         cause = None
+        current = proc
         try:
-            for line in proc.stdout:
-                cause = cause or (classify_exit(line) if line.lstrip().startswith("{") else None)
-            proc.wait()
+            while True:
+                for line in current.stdout:
+                    cause = cause or (classify_exit(line) if line.lstrip().startswith("{") else None)
+                current.wait()
+                pending = take_spool(binding["id"])
+                if not pending:
+                    break
+                current = spawn("\n\n".join(pending))
         except Exception as exc:  # noqa: BLE001 - a failed read must not kill the watcher silently
             _log("leg-failed", msg, f"agy: {exc}")
             return
+        finally:
+            lease.release()
         if cause:
             _log("leg-failed", msg, f"agy: {cause}", cause)
 

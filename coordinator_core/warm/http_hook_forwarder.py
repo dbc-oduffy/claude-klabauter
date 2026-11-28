@@ -228,6 +228,12 @@ _FORWARD_CONNECT_TIMEOUT_SECS = 2.0
 #: up on a slow op, and it already does. This module's job is to not pre-empt that decision.
 _FORWARD_READ_TIMEOUT_SECS = 45.0
 
+#: A backend that has not answered by this deadline is treated as wedged for THIS request: the
+#: forwarder runs the cold guard chain in process and returns its verdict instead of waiting out
+#: `_FORWARD_READ_TIMEOUT_SECS`, which exceeds the harness hook timeout. Must stay well below the
+#: hook timeout, with room for `_evaluate_cold`.
+_HEDGE_DEADLINE_SECS = 8.0
+
 #: The one fixed, machine-global loopback port this module ever binds or dials -- named here so
 #: exactly one place in the tree commits the number (module docstring, "WHAT THIS MODULE DOES
 #: NOT DO"; `DR-http-hook-forwarder-fixed-port.md` Decision 3 assigns *ownership* of the port,
@@ -384,6 +390,7 @@ CAUSE_RECORD_MALFORMED = "record_not_a_dict"
 CAUSE_RECORD_BAD_PORT = "record_port_missing_or_invalid"
 CAUSE_NO_BIND_HOST = "bind_host_unresolvable"
 CAUSE_SKEWED = "record_version_skewed"
+CAUSE_BACKEND_WEDGED = "backend_wedged_hedged_to_cold"
 
 #: Env var overriding where the rung records are persisted. Exists for tests, like
 #: `DIAL_COUNT_PATH_ENV`; a deployment never sets it.
@@ -1668,7 +1675,21 @@ class _ForwarderHandler(BaseHTTPRequestHandler):
             host, port, hook_path, cookie_value = backend
             hook_path = _apply_registration_op(hook_path, self.path)
             try:
-                status, resp_body = _forward(host, port, hook_path, body_to_forward, cookie_value)
+                status, resp_body, hedged_cold = _forward_hedged(
+                    host, port, hook_path, body_to_forward, cookie_value
+                )
+                if hedged_cold is not None:
+                    if counter is not None:
+                        counter.record_cause(CAUSE_BACKEND_WEDGED)
+                        counter.record_rung(RUNG_COLD)
+                    _record_rung(
+                        RUNG_COLD,
+                        CAUSE_BACKEND_WEDGED,
+                        hook_event_name,
+                        detail="backend silent past hedge deadline",
+                    )
+                    self._respond(200, hedged_cold)
+                    return
             except OSError:
                 retried = _retry_forward_after_wait(
                     host, port, hook_path, body_to_forward, cookie_value
@@ -1769,6 +1790,55 @@ def _forward(
         return resp.status, data
     finally:
         conn.close()
+
+
+def _forward_hedged(
+    host: str, port: int, hook_path: str, body: bytes, cookie_value: Optional[str] = None
+) -> Tuple[int, bytes, Optional[bytes]]:
+    """`_forward` with a hedge: returns `(status, body, None)` from the backend, or
+    `(0, b"", cold_verdict)` when the backend stayed silent past `_HEDGE_DEADLINE_SECS` and the
+    in-process cold chain produced a real verdict. A backend error inside the deadline re-raises
+    as `OSError` exactly as `_forward` would. When cold cannot run, the backend keeps its full
+    read bound.
+
+    The abandoned worker is a daemon thread that dies on its own socket timeout.
+    """
+    box: Dict[str, Any] = {}
+    done = threading.Event()
+
+    def _run() -> None:
+        try:
+            box["ok"] = _forward(host, port, hook_path, body, cookie_value)
+        except BaseException as exc:  # noqa: BLE001 -- relayed to the waiting handler
+            box["err"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=_run, daemon=True, name="hook-forward").start()
+    if not done.wait(_HEDGE_DEADLINE_SECS):
+        cold = _evaluate_cold(body)
+        if cold is not None:
+            return 0, b"", cold
+        done.wait(_FORWARD_READ_TIMEOUT_SECS + _FORWARD_CONNECT_TIMEOUT_SECS)
+    if "err" in box:
+        err = box["err"]
+        if isinstance(err, OSError):
+            raise err
+        raise OSError(str(err))
+    if "ok" not in box:
+        raise OSError("forward did not complete")
+    status, data = box["ok"]
+    return status, data, None
+
+
+def _preimport_cold_chain() -> None:
+    """Import the `_evaluate_cold` chain now so a starved disk cannot stall the hedge later."""
+    try:
+        from coordinator_core.warm import hook_http as _hook_http
+
+        _ = _hook_http.evaluate_cold
+    except Exception:
+        return
 
 
 class _ExclusiveServer(ThreadingHTTPServer):
@@ -1949,6 +2019,7 @@ def serve_forever(port: int = FIXED_PORT, host: Optional[str] = None) -> None:
     the election never advertises a seat it does not hold. See `publish_door_discovery` for why a
     non-door publishes this at all.
     """
+    _preimport_cold_chain()
     server = make_server(port, host=host)
     publish_door_discovery(port)
     try:

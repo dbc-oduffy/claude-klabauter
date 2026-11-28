@@ -1086,8 +1086,8 @@ Usage: python3 scripts/setup.sh [OPTIONS]
                              no registry rung -- repos.coordinator_claude is a
                              RETIRED key that names the publish mirror, not a
                              working checkout). Every candidate must clear two
-                             gates: not a registered publish.mirrors.*.path
-                             entry, and positive evidence of a real
+                             gates: not a registered publish.mirrors.*
+                             path entry, and positive evidence of a real
                              coordinator-claude plugin source checkout. Only
                              consulted by the `python3 -m` entry point when
                              the trampoline's own env vars
@@ -1214,13 +1214,13 @@ _COORDINATOR_ROOT_LADDER_REMEDIATION = (
     "  2. $COORDINATOR_CLAUDE_ROOT\n"
     "  3. engine.working_repos.content_root registry key\n"
     "  (repos.coordinator_claude stays RETIRED -- it names the publish-mirror\n"
-    "  location, never a working checkout; see publish.mirrors.<name>.path in\n"
+    "  location, never a working checkout; see the publish.mirrors.<name> path key in\n"
     "  the machine-local registry for the mirror this repo actually resolves\n"
     "  that key to. `engine.working_repos.content_root` is written by the\n"
     "  installer's content-root migration. Absent: `machine-local set\n"
     "  engine.working_repos.content_root <path>`.)\n"
     "  Every rung additionally requires the candidate to (a) NOT be a\n"
-    "  registered publish.mirrors.*.path entry, and (b) show positive\n"
+    "  registered publish.mirrors.* path entry, and (b) show positive\n"
     "  evidence of a real coordinator-claude plugin source checkout\n"
     "  (.claude-plugin/plugin.json plus commands/ or hooks/).\n"
     "  Final rungs, for a consumer install with no working checkout:\n"
@@ -1266,14 +1266,14 @@ def _plugin_root_rung_candidates() -> list[tuple[Path, str]]:
 
 def _is_publish_mirror(path: Path) -> bool:
     """True iff `path` resolves under (or equals) any registered
-    `publish.mirrors.*.path` entry in the machine-local registry.
+    `publish.mirrors.*` path entry in the machine-local registry.
 
     Reuses the SAME mirror-identification mechanism the cross-repo write
     guard already uses to recognize `C:\\coordinator-claude` as a publish
     mirror (`coordinator_core.bash_guards._write_bump_applicability.
     target_is_publish_destination`) rather than inventing a second one here
     -- see that module's own docstring for the closed-set membership test
-    (`publish.mirrors.<name>.path`, never a path-pattern guess).
+    (a `publish.mirrors.<name>` path key, never a path-pattern guess).
 
     Fails open (`False`) when the registry has no `publish.mirrors.*`
     entries at all -- the OSS case, where this predicate must be a pure
@@ -1398,7 +1398,7 @@ def _resolve_coordinator_root_ladder(
         if _is_publish_mirror(candidate):
             print(
                 f"  [coordinator-root ladder] {rung}: {candidate} is a registered "
-                "publish mirror (publish.mirrors.*.path) -- rejected, not a working checkout.",
+                "publish mirror (publish.mirrors.* path) -- rejected, not a working checkout.",
                 file=err,
             )
             continue
@@ -1468,6 +1468,9 @@ def main(argv: list[str], out=None, err=None) -> int:
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
     repo_root_env = os.environ.get("COORDINATOR_SETUP_REPO_ROOT", "")
+    for stream in (out, err):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     lib_dir_env = os.environ.get("COORDINATOR_SETUP_LIB_DIR", "")
     if repo_root_env and lib_dir_env:
         repo_root = Path(repo_root_env)

@@ -55,6 +55,7 @@ GUARD_DENY_CLASS: Dict[str, str] = {
     "block-external-workspace-vcs-write": BOX_DEGRADING,
     "block-editor-kill-by-name": BOX_DEGRADING,
     "deny-kill-by-port-or-tree": BOX_DEGRADING,
+    "refuse-unrecordable-detached-spawn": BOX_DEGRADING,
     "blanket-git-add": DISRUPTIVE,
     "stale-temp-index-base": DISRUPTIVE,
     "check-test-suite-invocation": BOX_DEGRADING,
@@ -110,6 +111,10 @@ PM_RULED_EXCEPTIONS: Dict[str, PmRuledException] = {
 SUBAGENT_DENY_CLASS: Dict[str, str] = {
     "guard-subagent-heavy-ue-launch": BOX_DEGRADING,
     "block-subagent-destructive-action": BOX_DEGRADING,
+    #: PM R2 (engine-cruft run): "deny.  named reviwer agents and the EM can do that, but regular
+    #: subagents cannot." An unowned repo tree copy is disk fill; the guard itself returns an
+    #: advisory for the EM and a named reviewer, so only a regular subagent reaches the deny.
+    "block-clone-shaped-cruft": BOX_DEGRADING,
 }
 
 #: Guards ruled advisory after a predicate read against the five deny classes (disk fill,

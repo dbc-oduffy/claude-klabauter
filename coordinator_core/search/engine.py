@@ -99,11 +99,7 @@ _READ_LIMITER = ReadRateLimiter(_READ_RATE_BYTES_PER_SEC, _READ_RATE_THRESHOLD)
 MAX_MATCH_LINES = 2000
 MAX_RENDER_BYTES = 48_000
 
-DEFAULT_PRUNE_DIRS = frozenset({
-    ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", "dist", "build",
-    ".next", "site-packages", ".gradle", "target",
-})
+from coordinator_core.search._prune_dirs import DEFAULT_PRUNE_DIRS  # noqa: E402,F401
 
 GREP_FAMILY = ("grep", "egrep", "fgrep", "rg")
 

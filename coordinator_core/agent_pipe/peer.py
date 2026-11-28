@@ -26,9 +26,11 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Mapping, Optional, Tuple
 
 from coordinator_core.agent_pipe import mailbox
+if TYPE_CHECKING:
+    from coordinator_core.agent_pipe.agy import ResumeLease
 from coordinator_core.agent_pipe.contract import Adapter, PipeMessage
 from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 from coordinator_core.win_portability import no_console_creationflags
@@ -169,6 +171,7 @@ class _Relay:
         self.stdin_alive = 0
         self.write_locks = {n: threading.Lock() for n in names}
         self.stdin_procs: Dict[str, subprocess.Popen] = {}
+        self.leases: "Dict[str, Optional[ResumeLease]]" = {}
 
     def _touch(self) -> None:
         self.last_activity = time.monotonic()
@@ -272,6 +275,9 @@ class _Relay:
             self._read(p, proc)
         finally:
             self.exit_codes[p.name] = proc.returncode
+            lease = self.leases.pop(p.name, None)
+            if lease is not None:
+                lease.release()
             with self.lock:
                 self.stdin_alive -= 1
                 self._touch()
@@ -292,8 +298,36 @@ class _Relay:
         self._read(p, proc)
         self.exit_codes[p.name] = proc.returncode
 
+    @staticmethod
+    def _is_agy_resume(p: Participant) -> bool:
+        from coordinator_core.agent_pipe.agy import AgyAdapter
+        return bool(p.conversation) and isinstance(p.adapter, AgyAdapter)
+
+    def _claim(self, p: Participant, text: str) -> "Tuple[bool, Optional[ResumeLease]]":
+        """(go, lease): an agy participant on a conversation spawns only under a `claim_resume` lease; others always go."""
+        if not self._is_agy_resume(p):
+            return True, None
+        from coordinator_core.agent_pipe.agy import SpoolRefused, claim_resume
+        try:
+            lease = claim_resume(p.conversation, text, p.name)
+        except SpoolRefused as exc:
+            print(f"peer {p.name}: {exc}", file=sys.stderr)
+            self.exit_codes[p.name] = 127
+            return False, None
+        return lease is not None, lease
+
+    def _run_guarded(self, p: Participant, argv, text: str) -> None:
+        go, lease = self._claim(p, text)
+        if not go:
+            return
+        try:
+            self._run_once(p, argv)
+        finally:
+            if lease is not None:
+                lease.release()
+
     def _resume_main(self, p: Participant) -> None:
-        self._run_once(p, p.argv or p.adapter.spawn_argv(p.prompt, p.conversation or None))
+        self._run_guarded(p, p.argv or p.adapter.spawn_argv(p.prompt, p.conversation or None), p.prompt)
         with self.lock:
             self.pending -= 1
             self._touch()
@@ -303,7 +337,7 @@ class _Relay:
                 return
             if self.stop_reason is None:
                 argv = p.adapter.resume_argv(p.conversation, text) if p.conversation else p.adapter.spawn_argv(text)
-                self._run_once(p, argv)
+                self._run_guarded(p, argv, text)
             with self.lock:
                 self.pending -= 1
                 self._touch()
@@ -320,9 +354,15 @@ class _Relay:
         threads: List[threading.Thread] = []
         for p in self.by_name.values():
             if p.mode == STDIN:
+                go, lease = self._claim(p, p.prompt)
+                if not go:
+                    continue
                 proc = self._try_spawn(p, p.argv or p.adapter.spawn_argv(p.prompt, p.conversation or None), subprocess.PIPE)
                 if proc is None:
+                    if lease is not None:
+                        lease.release()
                     continue
+                self.leases[p.name] = lease
                 self.stdin_procs[p.name] = proc
                 self.stdin_alive += 1
                 t = threading.Thread(target=self._stdin_main, args=(p, proc), daemon=True)

@@ -278,3 +278,53 @@ def test_the_sweep_runs_at_default_arguments_against_the_wall_clock(tmp_path):
     fire = Fire()
     result = drain.run(str(tmp_path), fire=fire)
     assert result["refired"] == 1 and fire.calls == [run_id]
+
+
+RESEARCH_SIZING = "state/sizings/2026-11/2026-11-20-research-thing.yaml"
+RESEARCH_RUN = "pipeline-research-20261120T100142-032efc"
+
+
+def _research_run(root, *, run=RESEARCH_RUN, brief=None, closed=False, pointer=None):
+    """A research run emitted from a sizing: its receipt beside the script, its scratch dir, and when `closed` a trail."""
+    base = root / RUN_DIR_ROOT
+    (base / run).mkdir(parents=True, exist_ok=True)
+    brief = brief if brief is not None else f"{root.as_posix()}/{RESEARCH_SIZING}"
+    (base / f"{run}.workflow.mjs.emitted.json").write_text(json.dumps({"brief": brief, "run_id": run}), encoding="utf-8")
+    if pointer:
+        (base / run / "brief.md").write_text(f"The brief is `{pointer}`; read it first.\n", encoding="utf-8")
+    if closed:
+        trail = root / "docs" / "research" / "topic" / f"2026-11-20-{run}" / "trail.yaml"
+        trail.parent.mkdir(parents=True)
+        trail.write_text(f'run_id: "{run}"\nsizing: {RESEARCH_SIZING}\n', encoding="utf-8")
+
+
+@pytest.mark.parametrize("closed", [False, True], ids=["live", "closed"])
+@pytest.mark.parametrize("age", [1000, drain.MINTED_SWEEP_LOOKBACK_SECONDS + 100], ids=["in-window", "backlog"])
+def test_an_ask_that_launched_as_a_research_run_is_neither_noticed_nor_refired(tmp_path, closed, age):
+    run_id = _ask(tmp_path, age=age, sizing=RESEARCH_SIZING)
+    _research_run(tmp_path, closed=closed)
+    fire = Fire()
+    result = _drain(tmp_path, fire)
+    assert fire.calls == [] and "never_launched" not in result and "closed" not in result
+    assert _stage(tmp_path, run_id)["warp_run"] == RESEARCH_RUN and _stage(tmp_path, run_id)["stage"] == "minted"
+    assert _notices(tmp_path, OWNER) == [] and _notices(tmp_path, GEM) == []
+    assert _marker(tmp_path, run_id) is None
+    assert not (tmp_path / RECORD_DIR_ROOT / run_id / "never-launched.json").exists()
+
+
+def test_a_research_run_emitted_with_context_files_is_found_through_its_brief_pointer(tmp_path):
+    run_id = _ask(tmp_path, age=1000, sizing=RESEARCH_SIZING)
+    _research_run(tmp_path, brief=f"{tmp_path.as_posix()}/{RUN_DIR_ROOT}/{RESEARCH_RUN}/brief.md", pointer=RESEARCH_SIZING)
+    fire = Fire()
+    _drain(tmp_path, fire)
+    assert fire.calls == [] and _stage(tmp_path, run_id)["warp_run"] == RESEARCH_RUN
+
+
+def test_a_research_run_of_another_sizing_or_older_than_the_ask_does_not_hide_a_never_launched_ask(tmp_path):
+    run_id = _ask(tmp_path, age=1000, sizing=RESEARCH_SIZING)
+    _research_run(tmp_path, run="pipeline-research-20261120T100142-aaaaaa", brief=f"{tmp_path.as_posix()}/state/sizings/other.yaml")
+    _research_run(tmp_path, run="pipeline-research-20261119T235959-bbbbbb")
+    fire = Fire()
+    result = _drain(tmp_path, fire)
+    assert fire.calls == [run_id] and result["refired"] == 1
+    assert "warp_run" not in _stage(tmp_path, run_id)

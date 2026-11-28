@@ -236,6 +236,115 @@ class LaunchSnapshot:
         return self._records[key]
 
 
+_SESSION_INDEX_MAX = 32
+_INDEX_RACY_SECONDS = 2.0
+
+
+class _SessionIndex:
+    """One session record dir's launch records, read once per change and keyed by normalised script
+    path. `by_script[key][task_id] = (fired_at, record)`; `files` keeps each name's stat signature so
+    a rescan re-reads only the files that moved. Immutable once built: a change builds a new one."""
+
+    __slots__ = ("sig", "trusted", "files", "by_script")
+
+    def __init__(self, sig, trusted, files, by_script) -> None:
+        self.sig = sig
+        self.trusted = trusted
+        self.files = files
+        self.by_script = by_script
+
+
+#: Per-process index of session launch dirs, keyed by dir path; bounded by key count, oldest evicted.
+_SESSION_INDEX: dict[str, _SessionIndex] = {}
+
+
+def _script_key(path: object) -> Optional[str]:
+    if not isinstance(path, str) or not path:
+        return None
+    return os.path.normcase(os.path.normpath(path))
+
+
+def _build_session_index(directory: str, sig, held: Optional[_SessionIndex]) -> _SessionIndex:
+    """Scan `directory`, reusing `held`'s record for every file whose stat signature is unchanged and
+    old enough that a same-tick rewrite cannot hide. Raises OSError when the dir cannot be listed."""
+    cutoff_ns = time.time_ns() - int(_INDEX_RACY_SECONDS * 1e9)
+    files: dict[str, tuple] = {}
+    by_script: dict[str, dict[str, tuple[float, dict]]] = {}
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            name = entry.name
+            if not name.endswith(".json"):
+                continue
+            try:
+                stat = entry.stat()
+            except OSError:
+                continue
+            esig = (stat.st_mtime_ns, stat.st_size)
+            prior = held.files.get(name) if held is not None else None
+            if prior is not None and prior[0] == esig and stat.st_mtime_ns < cutoff_ns:
+                record = prior[1]
+            else:
+                record = _read_json(Path(entry.path))
+            files[name] = (esig, record)
+            task_id = name[: -len(".json")]
+            if not record or not _SAFE_ID_RE.match(task_id):
+                continue
+            key = _script_key(record.get("scriptPath"))
+            if key is None:
+                continue
+            fired = record.get("fired_at")
+            by_script.setdefault(key, {})[task_id] = (
+                fired if isinstance(fired, (int, float)) else 0.0,
+                record,
+            )
+    trusted = (time.time_ns() - sig[0]) > int(_INDEX_RACY_SECONDS * 1e9)
+    return _SessionIndex(sig, trusted, files, by_script)
+
+
+def _session_index(tmpdir: str, session_id: str) -> Optional[_SessionIndex]:
+    """The session's launch-record index, rebuilt only when the record dir's stat changed (one stat
+    on a repeat call). None when the dir is absent or unlistable. A dir stamped within
+    `_INDEX_RACY_SECONDS` of its scan is rescanned next time (its mtime cannot yet prove no later write).
+    Trap: a directory stamp moves on create/delete/rename only; NTFS does not move it for an in-place
+    rewrite of an existing record, so a writer must replace launch records by rename, never edit them."""
+    try:
+        directory = _launch_records_mod.session_dir(tmpdir, session_id)
+    except (OSError, ValueError):
+        return None
+    sig = _stat_sig(directory)
+    held = _SESSION_INDEX.get(directory)
+    if sig is None:
+        _SESSION_INDEX.pop(directory, None)
+        return None
+    if held is not None and held.sig == sig and held.trusted:
+        return held
+    try:
+        built = _build_session_index(directory, sig, held)
+    except OSError:
+        _SESSION_INDEX.pop(directory, None)
+        return None
+    _SESSION_INDEX.pop(directory, None)
+    while len(_SESSION_INDEX) >= _SESSION_INDEX_MAX:
+        _SESSION_INDEX.pop(next(iter(_SESSION_INDEX)))
+    _SESSION_INDEX[directory] = built
+    return built
+
+
+def _indexed_launch_records(session_id: str, script_path: str, dirs: list[str]) -> list[tuple[str, dict]]:
+    """`_launch_records` answered from the stat-invalidated session index: no listing, no record read
+    on a repeat call, whatever the record count."""
+    key = _script_key(script_path)
+    if key is None:
+        return []
+    found: dict[str, tuple[float, dict]] = {}
+    for tmpdir in dirs:
+        index = _session_index(tmpdir, session_id)
+        if index is not None:
+            found.update(index.by_script.get(key, {}))
+    ordered = sorted(found.items(), key=lambda kv: (kv[1][0], kv[0]))
+    return [(task_id, rec) for task_id, (_, rec) in ordered]
+
+
 def _launch_records(
     session_id: str, script_path: str, dirs: list[str], snapshot: Optional[LaunchSnapshot] = None
 ) -> list[tuple[str, dict]]:
@@ -245,7 +354,7 @@ def _launch_records(
     if snapshot is not None and (snapshot.session_id != session_id or snapshot.dirs != list(dirs)):
         snapshot = None
     if snapshot is None:
-        snapshot = LaunchSnapshot(session_id, dirs)
+        return _indexed_launch_records(session_id, script_path, dirs)
     found: dict[str, tuple[float, dict]] = {}
     for tmpdir in dirs:
         for name in snapshot.names(tmpdir):
@@ -907,11 +1016,12 @@ def live_run_for_session(
         return scope[memo_key]
     dirs = _launch_dirs(tmpdir)
     answer: Optional[str] = None
+    stats: dict = {}
     for record in _token_records(root):
         if record.get("session_id") != session_id:
             continue
         cache_key = (str(root), record["run_id"], session_id, transcript_path, tuple(dirs))
-        if _not_live_cached(cache_key):
+        if _not_live_cached(cache_key, stats):
             continue
         read = _liveness_inputs(root, record, transcript_path, dirs)
         if _unfired(root, record, dirs):
@@ -973,12 +1083,21 @@ def _liveness_inputs(
     return tuple((path, _stat_sig(path)) for path in paths)
 
 
-def _not_live_cached(cache_key: tuple) -> bool:
-    """True when this record was judged not live and no input has changed since."""
+def _not_live_cached(cache_key: tuple, stats: Optional[dict] = None) -> bool:
+    """True when this record was judged not live and no input has changed since. `stats` shares one
+    stat per path across the records of one call (every token of a session names the same launch
+    dir and transcript)."""
     held = _NOT_LIVE.get(cache_key)
     if held is None:
         return False
-    if all(_stat_sig(path) == sig for path, sig in held):
+    if stats is None:
+        stats = {}
+    for path, sig in held:
+        if path not in stats:
+            stats[path] = _stat_sig(path)
+        if stats[path] != sig:
+            break
+    else:
         return True
     _NOT_LIVE.pop(cache_key, None)
     return False

@@ -1,22 +1,28 @@
-"""Pre-create the codex workspace's `<cwd>/scratch` before a sandboxed child starts.
+"""Pre-create the directories a sandboxed codex child writes under `<cwd>` before it starts.
 
 Codex stamps its per-root capability SID onto `<cwd>` with an inheriting ACE; a directory created here,
 unsandboxed, inherits it. No ACL is written anywhere: the grantable principal already holds inherited
 access and the failing one (codex's random per-root capability SID) is not derivable in-process.
+
+The directories: `scratch/warp` (workflow spill files) and the `warp` record home (`state/warp`, the run
+record the mint writes). A child that creates either itself is refused WinError 5.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from coordinator_core.session.record_homes import home_rel
+
 SCRATCH_DIRNAME = "scratch"
 _WARP = Path(SCRATCH_DIRNAME) / "warp"
+_PRECREATED = (_WARP, Path(home_rel("warp")))
 _CAPABILITY_SID = "per-root capability SID"
 
 
 class ScratchGrantRefused(RuntimeError):
-    """`<cwd>/scratch` could not be created for the sandbox. `.path` is the directory, `.principal` the
-    restricted codex sandbox token that needs it."""
+    """A directory the sandbox needs under `<cwd>` could not be created. `.path` is that directory (the
+    `scratch` root for the scratch pair), `.principal` the restricted codex sandbox token that needs it."""
 
     def __init__(self, path: Path, principal: str, cause: BaseException | None = None) -> None:
         self.path = Path(path)
@@ -36,15 +42,16 @@ def _principal_text() -> str:
 
 
 def ensure_sandbox_scratch(cwd: Path) -> Path:
-    """Return `<cwd>/scratch`, creating it and `scratch/warp` plainly (inherited DACL, no ACL call).
-    The ready path is one stat and no spawn. Raises `ScratchGrantRefused` when mkdir is refused."""
+    """Return `<cwd>/scratch`, creating `scratch/warp` and `state/warp` plainly (inherited DACL, no ACL
+    call). The ready path is a stat per directory and no spawn. Raises `ScratchGrantRefused` when a mkdir
+    is refused."""
     root = Path(cwd)
-    scratch = root / SCRATCH_DIRNAME
-    warp = root / _WARP
-    if warp.is_dir():
-        return scratch
-    try:
-        warp.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise ScratchGrantRefused(scratch, _principal_text(), exc) from exc
-    return scratch
+    for rel in _PRECREATED:
+        target = root / rel
+        if target.is_dir():
+            continue
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ScratchGrantRefused(root / (SCRATCH_DIRNAME if rel == _WARP else rel), _principal_text(), exc) from exc
+    return root / SCRATCH_DIRNAME

@@ -50,10 +50,33 @@ def test_no_exclusion_sentence_keeps_every_write(tmp_path: Path) -> None:
     assert {"lib/dep.py", "pkg/a.py"} <= set(_x1_writes(m))
 
 
-def test_a_footprint_wholly_excluded_is_refused_as_no_writes(tmp_path: Path) -> None:
+def test_a_footprint_wholly_excluded_is_kept_and_reported_as_a_conflict(tmp_path: Path) -> None:
+    _sizing(tmp_path)
+    m = stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["lib/dep.py"])
+    assert _x1_writes(m) == ["lib/dep.py"]
+    assert [(d["path"], d["status"]) for d in m.dropped_writes] == [("lib/dep.py", "conflict")]
+    assert m.dropped_writes[0]["sentence"].startswith("Do not touch the uncommitted peer edits")
+
+
+def test_a_partially_excluded_footprint_drops_only_the_excluded_path_without_a_conflict(tmp_path: Path) -> None:
+    _sizing(tmp_path)
+    m = stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py", "lib/dep.py"])
+    assert _x1_writes(m) == ["pkg/a.py"]
+    assert [d["path"] for d in m.dropped_writes] == ["lib/dep.py"]
+    assert all("status" not in d for d in m.dropped_writes)
+
+
+def test_no_writes_at_all_is_still_refused(tmp_path: Path) -> None:
     _sizing(tmp_path)
     with pytest.raises(AskStageError, match="^XS-MINT-NO-WRITES: "):
-        stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["lib/dep.py"])
+        stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=[])
+
+
+def test_a_conditional_wait_excludes_nothing(tmp_path: Path) -> None:
+    _sizing(tmp_path, intent="Fix lib/dep.py and pkg/a.py. Until the peer's merges land, do not touch lib/dep.py.")
+    m = stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py", "lib/dep.py"])
+    assert {"pkg/a.py", "lib/dep.py"} <= set(_x1_writes(m))
+    assert m.dropped_writes == ()
 
 
 def test_dropped_write_is_reported_with_its_sentence(tmp_path: Path) -> None:

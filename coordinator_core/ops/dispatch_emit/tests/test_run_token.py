@@ -747,11 +747,68 @@ def test_admits_compares_the_script_canonically_but_never_loosely(tmp_path: Path
     script.write_text("x", encoding="utf-8")
     (repo / "scratch" / "other.workflow.mjs").write_text("x", encoding="utf-8")
     link = tmp_path.parent / (tmp_path.name + "-link")
-    link.symlink_to(repo, target_is_directory=True)
+    try:
+        link.symlink_to(repo, target_is_directory=True)
+    except OSError:  # Windows without the symlink privilege
+        link = None
     token = run_token.mint(repo, "ask-1", str(script))
     assert run_token.admits(repo, "ask-1", token, "scratch/s.workflow.mjs")
-    assert run_token.admits(repo, "ask-1", token, str(link / "scratch" / "s.workflow.mjs"))
+    if link is not None:
+        assert run_token.admits(repo, "ask-1", token, str(link / "scratch" / "s.workflow.mjs"))
     assert run_token.admits(repo, "ask-1", token, str(repo / "scratch" / ".." / "scratch" / "s.workflow.mjs"))
     assert not run_token.admits(repo, "ask-1", token, "scratch/other.workflow.mjs")
     assert not run_token.admits(repo, "ask-1", token, "s.workflow.mjs")
     assert not run_token.admits(repo, "ask-1", token, 5)
+
+
+def _stall_receipt_write(monkeypatch) -> threading.Event:
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
+
+    release = threading.Event()
+    real = halt_resume_record.atomic_write_bytes
+
+    def blocking(target, data, **kwargs):
+        release.wait(10)
+        return real(target, data, **kwargs)
+
+    monkeypatch.setattr(halt_resume_record, "atomic_write_bytes", blocking)
+    return release
+
+
+def test_note_halt_landing_stall_raises_typed_when_asked_and_a_late_write_still_lands(tmp_path: Path, monkeypatch) -> None:
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "scratch/s.workflow.mjs")
+    release = _stall_receipt_write(monkeypatch)
+    landed = {"sha": "a" * 40, "paths": [], "halted": "ledger-check"}
+    try:
+        with pytest.raises(run_token.HaltWriteIndeterminate) as caught:
+            run_token.note_halt_landing(repo, "ask-1", token, "scratch/s.workflow.mjs", landed, raise_on_stall=True)
+        assert caught.value.landed == landed and caught.value.path
+    finally:
+        release.set()
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
+
+    deadline = time.monotonic() + 5
+    while halt_resume_record.write_outstanding(caught.value.path) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert run_token.halt_landing(repo, "ask-1", token, "scratch/s.workflow.mjs") == landed
+
+
+def test_halt_own_token_refuses_other_runs_wrong_script_and_a_run_with_no_record_or_escrow(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    own = run_token.mint(repo, "ask-own", "a.mjs")
+    other = run_token.mint(repo, "ask-other", "a.mjs")
+    assert run_token.halt_own_token(repo, "ask-own", own, "a.mjs")
+    assert not run_token.halt_own_token(repo, "ask-own", other, "a.mjs")
+    assert not run_token.halt_own_token(repo, "ask-own", own, "b.mjs")
+    assert not run_token.halt_own_token(repo, "ask-none", own, "a.mjs")
+
+
+def test_note_halt_landing_stall_without_raise_on_stall_returns(tmp_path: Path, monkeypatch) -> None:
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-2", "scratch/s.workflow.mjs")
+    release = _stall_receipt_write(monkeypatch)
+    try:
+        assert run_token.note_halt_landing(repo, "ask-2", token, "scratch/s.workflow.mjs", {"sha": "b" * 40}) is None
+    finally:
+        release.set()

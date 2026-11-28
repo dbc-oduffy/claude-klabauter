@@ -77,6 +77,8 @@ Negative-spec:
 from __future__ import annotations
 
 import os
+import shlex
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
@@ -87,6 +89,7 @@ __all__ = [
     "reconcile",
     "reconcile_all",
     "disagreement_message",
+    "remedy_lines",
 ]
 
 
@@ -110,13 +113,6 @@ class _RootSpec:
 #: The logical roots this box writes down more than once, and every channel
 #: that claims to answer for each. Rows, not code paths -- see the module
 #: docstring's "GENERAL, NOT PER-FILENAME".
-#:
-#: `publish.mirrors.claude_klabauter.path` is a genuine third channel for the
-#: published mirror, not a near-duplicate: `publish.py` writes the mirror to
-#: the path THAT key names, while dispatch resolves through
-#: `repos.claude_klabauter`. The two pointing at different trees means
-#: publishing lands somewhere nothing dispatches to, which is exactly the
-#: class of silent split this module exists to name.
 _ROOTS: Tuple[_RootSpec, ...] = (
     _RootSpec(
         name="claude_klabauter",
@@ -124,7 +120,6 @@ _ROOTS: Tuple[_RootSpec, ...] = (
         channels=(
             _ChannelSpec("registry", "repos.claude_klabauter"),
             _ChannelSpec("pointer", ".claude-klabauter-root"),
-            _ChannelSpec("registry", "publish.mirrors.claude_klabauter.path"),
         ),
     ),
     _RootSpec(
@@ -171,8 +166,8 @@ class RootReconciliation:
     #: Channel names whose values are not the same path, when two or more
     #: channels spoke. Empty when the speaking channels agree.
     disagreeing: Tuple[str, ...]
-    #: Channel names whose value names a path that is not a directory on
-    #: this box. A pointer carried over from another machine lands here.
+    #: Channels naming a missing directory, plus missing pointers for a
+    #: configured root. Unconfigured roots remain silent.
     absent_targets: Tuple[str, ...]
     #: Pointer channels that are silent while the row's registry key (its
     #: first channel) is set. A pointer is read before any registry rung, so
@@ -274,7 +269,11 @@ def reconcile(root_name: str, machine_local: Optional[Path] = None) -> RootRecon
     if len(forms) > 1:
         disagreeing = tuple(c.name for c in speaking)
 
-    absent = tuple(c.name for c in speaking if not c.exists)
+    absent = tuple(
+        c.name for c in channels
+        if (c.value and not c.exists)
+        or (speaking and c.name.startswith("pointer ") and c.value is None)
+    )
 
     missing: Tuple[str, ...] = ()
     if channels and channels[0].value:
@@ -299,9 +298,59 @@ def reconcile_all(machine_local: Optional[Path] = None) -> Tuple[RootReconciliat
     return tuple(reconcile(spec.name, machine_local) for spec in _ROOTS)
 
 
+def _flagged(report: RootReconciliation) -> list[Channel]:
+    return [
+        c
+        for c in report.channels
+        if c.name in report.disagreeing or c.name in report.absent_targets
+    ]
+
+
+def _remedy_for(channel: Channel, good_path: str) -> str:
+    """The runnable command that rewrites one flagged channel to `good_path`."""
+    from coordinator_core._settings_home import settings_home
+
+    def quote(value: str) -> str:
+        if os.name == "nt":
+            return "'" + value.replace("'", "''") + "'"
+        return shlex.quote(value)
+
+    python = ("& " if os.name == "nt" else "") + quote(sys.executable)
+    if channel.name.startswith("pointer "):
+        code = (
+            "from pathlib import Path; import sys; p = Path(sys.argv[1]); "
+            "p.parent.mkdir(parents=True, exist_ok=True); "
+            "p.write_text(sys.argv[2], encoding='utf-8')"
+        )
+        return f"{python} -c {quote(code)} {quote(channel.origin)} {quote(good_path)}"
+    script = settings_home() / "bin" / "machine-local"
+    return f"{python} {quote(str(script))} set {quote(channel.origin)} {quote(good_path)}"
+
+
+def remedy_lines(reports: Sequence[RootReconciliation]) -> list[str]:
+    """One runnable remedy per disagreeing or absent channel, in report order.
+
+    A unique existing directory supplies the target. When existing channels
+    disagree, or none exists, the operator must choose `<real-root>`.
+    """
+    out: list[str] = []
+    for report in reports:
+        if report.ok:
+            continue
+        existing = {_normalise(c.value): c.value for c in report.channels if c.value and c.exists}
+        good = next(iter(existing.values())) if len(existing) == 1 else None
+        for channel in _flagged(report):
+            lead = "" if good else "(replace <real-root> with the real checkout path) "
+            out.append(
+                f"  {report.root}: {channel.origin}: "
+                f"{lead}{_remedy_for(channel, good or '<real-root>')}"
+            )
+    return out
+
+
 def disagreement_message(reports: Sequence[RootReconciliation]) -> Optional[str]:
-    """One operator-facing block naming every disagreeing or absent channel,
-    or `None` when every root reconciles.
+    """One operator-facing block naming every disagreeing or absent channel
+    with its runnable remedy, or `None` when every root reconciles.
 
     Guard-messaging register (`docs/wiki/guard-messaging.md` § Register):
     one fact per line, each line naming the exact key or file to edit, and a
@@ -330,8 +379,10 @@ def disagreement_message(reports: Sequence[RootReconciliation]) -> Optional[str]
         "root-resolution channels disagree; each line is a place the root is "
         "written down:\n"
         + "\n".join(lines)
-        + "\nCorrect the channel that is wrong; resolvers read them in their own "
-        "precedence order and will not reconcile this for you."
+        + "\nRemedy, per channel (run the one for the channel that is wrong):\n"
+        + "\n".join(remedy_lines(reports))
+        + "\nResolvers read channels in their own precedence order and will not "
+        "reconcile this for you."
     )
 
 

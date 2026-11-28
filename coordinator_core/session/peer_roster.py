@@ -35,6 +35,11 @@ from coordinator_core.session import harness_registry
 from coordinator_core.session import reachability
 
 
+ROLE_EM = "em"
+ROLE_WORKER_LEG = "worker_leg"
+ROLE_SUBAGENT = "subagent"
+
+
 class EmptySnapshotError(RuntimeError):
     """The registry answered with no records at all, box-wide.
 
@@ -122,6 +127,27 @@ class PeerRow:
     messaging_available: bool
     kind: str = "claude"
     pid: Optional[int] = None
+    role: str = ROLE_EM
+
+
+def _external_rows() -> dict:
+    """Engine-owned registry rows by session id; any read failure yields no rows."""
+    try:
+        from coordinator_core.session import external_registry
+
+        return external_registry.snapshot()
+    except Exception:
+        return {}
+
+
+def _role_of(sid: str, record: object, external: dict) -> str:
+    """`worker_leg` for a non-em engine binding, `subagent` for an agent_id row, else `em`."""
+    row = external.get(sid)
+    if row is None:
+        return ROLE_EM if getattr(record, "provider", "claude") == "claude" else ROLE_WORKER_LEG
+    if row.get("agent_id"):
+        return ROLE_SUBAGENT
+    return ROLE_EM if row.get("role") == "em" else ROLE_WORKER_LEG
 
 
 def _worker_rows(
@@ -155,6 +181,7 @@ def _worker_rows(
                     messaging_available=messaging_available,
                     kind=provider,
                     pid=int(rec["pid"]),
+                    role=ROLE_WORKER_LEG,
                 )
             )
         except Exception:
@@ -364,6 +391,7 @@ def build_roster(
     }
 
     now = time.time()
+    external = _external_rows()
     rows: List[PeerRow] = []
     for sid, record in snapshot.items():
         if not box_wide and not _cwd_within_repo(record.cwd, effective_root):
@@ -391,6 +419,7 @@ def build_roster(
                 messaging_available=harness_messaging_available,
                 kind=getattr(record, "provider", "claude"),
                 pid=record.pid,
+                role=_role_of(sid, record, external),
             )
         )
     rows.extend(_worker_rows(effective_root, box_wide, harness_messaging_available, now))

@@ -37,11 +37,14 @@ def test_declared_path_changed_since_the_baseline_is_still_withheld(repo):
     _chunks(repo, {"C1": ["ran.py", "peer.py"]})
     _baseline(repo, {"ran.py": None, "peer.py": "0" * 40})
 
+    before = {p: (repo / p).read_bytes() for p in ("ran.py", "peer.py")}
+
     out = _call(repo, {"halted": "refusal", "reason": "x"})
 
     assert out["withheld"] == {
         "ran.py": halted_record_eviction.EVICTED_PARKED, "peer.py": "halt-record-only",
     }
+    assert {p: (repo / p).read_bytes() for p in before} == before
 
 
 def test_without_a_baseline_every_declared_path_is_withheld(repo):

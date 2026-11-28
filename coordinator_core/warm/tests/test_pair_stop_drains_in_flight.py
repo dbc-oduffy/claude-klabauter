@@ -300,6 +300,146 @@ def test_server_in_flight_request_survives_stop_inside_a_publish_swap_window(eng
     _assert_drained(*_stop_with_request_in_flight(engine_root, spawned, swap_window=True))
 
 
+def _start_in_flight(engine_root: Path, spawned: list) -> "tuple[dict, _InFlightClient]":
+    crumb = _boot_server(engine_root, spawned)
+    client = _InFlightClient(crumb["pipe"])
+    client.start()
+    _wait_for(
+        lambda: (engine_root / "dispatch-entered.flag").exists(),
+        "request reaching dispatch",
+        deadline_secs=_REPLY_DEADLINE_SECS,
+    )
+    return crumb, client
+
+
+def _server_alive(crumb: dict) -> bool:
+    return pair_stop.stable_pid_alive(crumb["pid"], stored_start_epoch=str(crumb["stable_pid_start_epoch"]))
+
+
+def test_outstanding_read_counts_the_in_flight_request_and_evicts_nothing(engine_root, spawned) -> None:
+    crumb, client = _start_in_flight(engine_root, spawned)
+
+    count = pair_stop.read_server_outstanding(crumb["pipe"])
+
+    assert count is not None and count >= 1
+    assert _server_alive(crumb)
+    assert client.reply() == {"jsonrpc": "2.0", "id": "in-flight", "result": "served"}
+    assert _wait_for(
+        lambda: pair_stop.read_server_outstanding(crumb["pipe"]) == 0,
+        "outstanding count back to zero",
+        deadline_secs=_REPLY_DEADLINE_SECS,
+    )
+    assert _server_alive(crumb)
+
+
+def test_stop_reports_in_flight_before_it_signals_anything(engine_root, spawned) -> None:
+    crumb, client = _start_in_flight(engine_root, spawned)
+    reports: list = []
+
+    def _on_in_flight(count) -> None:
+        reports.append((count, _server_alive(crumb)))
+
+    result = pair_stop.stop_warm_pair(engine_root, on_in_flight=_on_in_flight)
+
+    assert len(reports) == 1
+    count, alive_at_report = reports[0]
+    assert count is not None and count >= 1
+    assert alive_at_report
+    assert result.in_flight == count
+    _assert_drained(crumb, client.reply(), result)
+
+
+def test_stop_reports_unknown_in_flight_when_no_server_answers(engine_root) -> None:
+    reports: list = []
+
+    result = pair_stop.stop_warm_pair(engine_root, on_in_flight=reports.append)
+
+    assert reports == [None]
+    assert result.in_flight is None
+    assert result.ok()
+
+
+def test_stop_without_a_report_callback_reads_nothing(engine_root, monkeypatch) -> None:
+    def _no_read(_pipe):
+        raise AssertionError("the outstanding read runs only for a caller that asked to report it")
+
+    monkeypatch.setattr(pair_stop, "read_server_outstanding", _no_read)
+
+    assert pair_stop.stop_warm_pair(engine_root).in_flight is None
+
+
+def test_outstanding_read_uses_its_own_short_deadline(monkeypatch) -> None:
+    seen: list = []
+
+    def _fake(pipe, params, deadline_secs=None):
+        seen.append(deadline_secs)
+        return None
+
+    monkeypatch.setattr(pair_stop, "_probe_exchange", _fake)
+
+    assert pair_stop.read_server_outstanding("pipe") is None
+    assert seen == [pair_stop._OUTSTANDING_READ_DEADLINE_SECS]
+    assert pair_stop._OUTSTANDING_READ_DEADLINE_SECS <= 0.5 < pair_stop._ASK_READ_DEADLINE_SECS
+
+
+def _stamped_root(tmp_path: Path, stamp: "bytes | None") -> Path:
+    root = tmp_path / "restart-root"
+    (root / "coordinator_core").mkdir(parents=True)
+    if stamp is not None:
+        (root / "coordinator_core" / "_engine_stamp").write_bytes(stamp)
+    return root
+
+
+def test_rotated_stamp_keeps_sha_prefix_and_is_idempotent_in_shape() -> None:
+    first = pair_stop._rotated_stamp(b"sha:abc123\n")
+    second = pair_stop._rotated_stamp(first)
+
+    assert first.startswith(b"sha:abc123+restart-") and first.endswith(b"\n")
+    assert second.startswith(b"sha:abc123+restart-") and second.count(b"+restart-") == 1
+    assert first != second
+
+
+def test_restart_without_a_stamp_is_unsupported_and_spawns_nothing(tmp_path) -> None:
+    def _boom(*_a, **_k):
+        raise AssertionError("no successor may start for an unstamped root")
+
+    result = pair_stop.restart_warm_pair(_stamped_root(tmp_path, None), start_successor=_boom)
+
+    assert result.outcome == pair_stop.RESTART_UNSUPPORTED
+    assert not result.ok()
+
+
+def test_restart_with_nothing_running_spawns_nothing(tmp_path) -> None:
+    def _boom(*_a, **_k):
+        raise AssertionError("nothing running: the next hook starts the engine")
+
+    result = pair_stop.restart_warm_pair(_stamped_root(tmp_path, b"sha:abc\n"), start_successor=_boom)
+
+    assert result.outcome == pair_stop.RESTART_NO_ENGINE
+    assert result.ok()
+
+
+@pytest.mark.parametrize(
+    ("answered", "outcome", "ok"),
+    [(True, pair_stop.RESTART_RESTARTED, True), (False, pair_stop.RESTART_NOT_ANSWERING, False)],
+)
+def test_restart_hands_a_rotated_stamp_to_the_successor(tmp_path, monkeypatch, answered, outcome, ok) -> None:
+    root = _stamped_root(tmp_path, b"sha:abc\n")
+    monkeypatch.setattr(pair_stop, "find_pair_processes", lambda *_a, **_k: [object()])
+    calls: list = []
+
+    def _start(r, *, err=None, old_stamp, new_stamp):
+        calls.append((r, old_stamp, new_stamp))
+        return answered
+
+    result = pair_stop.restart_warm_pair(root, start_successor=_start)
+
+    assert result.outcome == outcome and result.ok() is ok
+    assert len(calls) == 1
+    _root, old, new = calls[0]
+    assert old == b"sha:abc\n" and new != old and new.startswith(b"sha:abc+restart-")
+
+
 class _SlowListener(BaseHTTPRequestHandler):
     received: threading.Event
 

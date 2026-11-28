@@ -63,7 +63,7 @@ def test_no_record_dir_writes_nothing(repo):
     assert not (repo / REL).exists()
 
 
-def test_a_halt_that_evicts_nothing_still_writes_the_record_and_names_ownerless(repo, monkeypatch):
+def test_a_halt_that_parks_keeps_the_tree_writes_the_record_and_names_ownerless(repo, monkeypatch):
     _write_record(repo, RUN)
     (repo / "product.py").write_bytes(RUN_BYTES)
     monkeypatch.setattr(halted_record_commit, "_run_written", lambda *a, **k: ["product.py"])
@@ -71,7 +71,8 @@ def test_a_halt_that_evicts_nothing_still_writes_the_record_and_names_ownerless(
     out = _call(repo)
 
     assert not out.get("error") and not out.get("refused"), out
-    assert out.get("evicted", []) == []
+    assert out.get("evicted", []) == ["product.py"]
+    assert (repo / "product.py").read_bytes() == RUN_BYTES
     rec = stranded_sibling.read(repo / REL)
     assert rec["product.py"] == {"base": blob_sha(HEAD_BYTES), "run": blob_sha(RUN_BYTES)}
     assert out["ownerless"] == ["product.py"]

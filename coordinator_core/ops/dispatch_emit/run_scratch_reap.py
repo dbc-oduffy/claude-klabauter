@@ -1,7 +1,8 @@
 """Run-end scratch reaper: tombstones the scratch a finished run's own ledger lists.
 
-Inputs are the run ledger and the repo keep index; no process is spawned, and the only directory
-listing is the one `scratch/warp/<run_id>` of a resumable halt. A path leaves by one `os.rename`
+Inputs are the run ledger, the repo keep index and the `.owner.json` marks one level under the
+share, session and coordinator-temp roots; no process is spawned and no deeper directory is walked.
+A path leaves by one `os.rename`
 into `scratch/.deleted/`, the shape `scratch.delete` uses.
 Invariant: the own-run gate reads the halted marker and the retest record directly, never
 `_run_referenced`, which holds a just-landed run for its 24h activity window.
@@ -32,6 +33,9 @@ _WARP_PREFIX = "scratch/warp/"
 _HALTED = "halted"
 _TERMINAL = (STATUS_LANDED, STATUS_SUPERSEDED, STATUS_CLOSED)
 _RESUMABLE = (_HALTED, STATUS_RESUMED)
+
+#: Repo-relative writer roots whose direct children carry an owner mark; the only dirs listed for owned paths.
+OWNED_REPO_ROOTS = (".coordinator-local/subagent-share", ".coordinator-local/coordinator-sessions")
 
 #: Files under `scratch/warp/<run_id>` a halted run's landing or resume still reads: the recorded
 #: base (`recorded_run_base`), the submission stamp (`land_run`, `landing_retest`), the fan-out
@@ -102,6 +106,78 @@ def _warp_owner(rel: str) -> Optional[str]:
     return None
 
 
+def _owned_dirs(parent: Path, root: Path, run_id: str) -> list[Path]:
+    """Children of `parent` (one scandir, links skipped) whose `.owner.json` names `run_id` for `root`."""
+    from coordinator_core import owner_mark
+    from coordinator_core.ops import prune_claude_temp as _p
+
+    out: list[Path] = []
+    try:
+        with os.scandir(parent) as it:
+            entries = sorted(it, key=lambda e: e.name)
+    except OSError:
+        return out
+    for e in entries:
+        try:
+            if not e.is_dir(follow_symlinks=False) or _p._is_link(e.path):
+                continue
+        except OSError:
+            continue
+        mark = owner_mark.read_mark(e.path)
+        if mark is None or mark["owner_kind"] != owner_mark.OWNER_RUN or mark["owner_id"] != run_id:
+            continue
+        repo = mark.get("repo")
+        if repo and not owner_mark._same_dir(str(repo), str(root)):
+            continue
+        out.append(Path(e.path))
+    return out
+
+
+def _owned_paths(root: Path, run_id: str) -> tuple[list[str], list[Path]]:
+    """`(repo-relative, external)` dirs marked as `run_id`'s, from the known writer roots only:
+    the repo's share and session roots, and its coordinator temp root (temp indexes, managed dirs)."""
+    rels: list[str] = []
+    for space in OWNED_REPO_ROOTS:
+        base = root.joinpath(*space.split("/"))
+        rels.extend(f"{space}/{d.name}" for d in _owned_dirs(base, root, run_id))
+    external: list[Path] = []
+    try:
+        from coordinator_core.temp_layout import coordinator_temp_root
+
+        external = _owned_dirs(coordinator_temp_root(root), root, run_id)
+    except (ValueError, OSError):
+        pass
+    return rels, external
+
+
+def _tombstone_external(root: Path, target: Path, seq: int, result: dict) -> None:
+    """Rename a dir outside the repo into the repo tombstone dir. Another volume (the system temp root
+    is not the repo's drive on a split box) cannot take that rename: the dir is renamed beside itself,
+    its owner mark dropped, and the temp-root age prune takes it from there."""
+    from coordinator_core import owner_mark
+
+    if owner_mark.is_kept(target):
+        result["kept"].append(str(target))
+        return
+    tomb = root / "scratch" / TOMBSTONE_DIRNAME
+    stem = f"{time.time_ns()}-{seq}-{target.name}"
+    try:
+        os.makedirs(tomb, exist_ok=True)
+        os.rename(target, tomb / stem)
+    except OSError:
+        beside = target.with_name(f".deleted-{stem}")
+        try:
+            os.rename(target, beside)
+        except OSError as exc:
+            result["refused"].append({"path": str(target), "reason": f"rename failed: {exc}"})
+            return
+        try:
+            os.unlink(beside / owner_mark.MARK_FILE)
+        except OSError:
+            pass
+    result["removed"].append(str(target))
+
+
 def _tombstone(root: Path, rel: str, seq: int, result: dict) -> bool:
     """Rename `rel` into the tombstone dir; records the outcome. True when the path is gone."""
     target = root / rel
@@ -163,6 +239,14 @@ def _reap(root: Path, run_id: str, moment: datetime, result: dict) -> None:
         if norm not in candidates:
             candidates.append(norm)
 
+    owned_rels, owned_external = _owned_paths(root, run_id)
+    if hold or partial:
+        # A held or resumable run may still read its owned dirs.
+        result["kept"].extend(
+            [r for r in owned_rels if r not in candidates] + [str(p) for p in owned_external]
+        )
+    else:
+        candidates.extend(r for r in owned_rels if r not in candidates)
     if hold:
         result["held"] = hold
         result["kept"].extend(candidates)
@@ -207,6 +291,11 @@ def _reap(root: Path, run_id: str, moment: datetime, result: dict) -> None:
                 continue
             seq += 1
             _tombstone(root, rel, seq, result)
+
+    if not (hold or partial):
+        for target in owned_external:
+            seq += 1
+            _tombstone_external(root, target, seq, result)
 
     gone = set(result["removed"]) | set(result["absent"])
     stale = {}

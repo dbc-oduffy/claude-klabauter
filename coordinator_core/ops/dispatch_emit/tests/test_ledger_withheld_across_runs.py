@@ -32,7 +32,18 @@ def _repo(tmp_path, doc=None):
     return tmp_path
 
 
+def _hold_pm_ruling(root, rel) -> None:
+    """The PM's ruling words on the register as a PM-verbatim row, so `out_of_scope` of the PM-origin R1 has its ruling."""
+    row = {
+        rr.ROW_ID: "R9", rr.ROW_TEXT: WORDS, rr.ROW_ANCHOR: "pm_verbatims turn 2", rr.ROW_SURFACE: rl.ROW_SURFACE,
+        rr.ROW_STATUS: rr.STATUS_DEFERRED, rr.ROW_CLAIMED_BY: [],
+        rr.ROW_RULING: {rr.RULING_SOURCE: "pm", rr.RULING_QUOTE: WORDS, rr.RULING_REF: "R7", rr.RULING_ON: "2026-10-16"},
+    }
+    rl._mutate_register(root, rel, lambda rows: [*rows, row])
+
+
 def _rule_out(repo, ids=("R1",)) -> None:
+    _hold_pm_ruling(repo, REL)
     out = rl._handler({"run_id": RUN_A, "verbatim": WORDS, "out_of_scope": list(ids)}, repo_root=repo)
     assert out["ok"]
 

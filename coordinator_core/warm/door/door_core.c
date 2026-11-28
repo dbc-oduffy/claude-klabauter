@@ -2040,20 +2040,70 @@ static int di_segment_matches(char **tok, size_t n) {
 
 /* Splits `cmd` on `&&`, `||`, `;`, `|` (and the single `&`, newline and
  * parentheses the Python matcher also splits on) outside quotes, tokenizes
- * each segment, and asks `di_segment_matches`. */
-static int di_command_is_irreversible(const char *cmd, size_t len) {
+ * each segment, and asks `fn`. Mode 0 is the shape table's tokenizer, unchanged.
+ * DI_MODE_BASH / DI_MODE_PS are the native guard leg's: a `$(...)` or backtick
+ * substitution is walked as its own command and leaves a literal `$` or backtick
+ * in the outer token; a backslash is literal unless it escapes a shell
+ * metacharacter (a Windows path survives); bash drops heredoc bodies; PowerShell
+ * escapes with the backtick. */
+#define DI_MODE_BASH 1
+#define DI_MODE_PS 2
+#define DI_MAX_DEPTH 4
+#define DI_HEREDOC_MAX 4
+#define DI_HEREDOC_TAG_MAX 64
+
+typedef int (*di_seg_fn)(char **tok, size_t n, int mode, int depth);
+
+static int di_walk(const char *cmd, size_t len, int mode, di_seg_fn fn, int depth);
+
+static size_t di_subst(const char *cmd, size_t len, size_t i, int mode, di_seg_fn fn, int depth,
+                       int *found) {
+    size_t from, close = len;
+    if (cmd[i] == '$') {
+        int d = 0;
+        from = i + 2;
+        for (size_t j = i + 1; j < len; j++) {
+            if (cmd[j] == '(') d++;
+            else if (cmd[j] == ')' && --d == 0) { close = j; break; }
+        }
+    } else {
+        from = i + 1;
+        for (size_t j = from; j < len; j++) if (cmd[j] == '`') { close = j; break; }
+    }
+    if (close > from && di_walk(cmd + from, close - from, mode, fn, depth + 1)) *found = 1;
+    return close < len ? close : len - 1;
+}
+
+static int di_walk(const char *cmd, size_t len, int mode, di_seg_fn fn, int depth) {
+    if (depth > DI_MAX_DEPTH) return 0;
     char *work = (char *)malloc(len + 2);
     char **tok = (char **)malloc(sizeof(char *) * (len + 2));
     if (!work || !tok) { free(work); free(tok); return 0; }
-    size_t w = 0, nt = 0;
+    size_t w = 0, nt = 0, hd_n = 0;
     int in_tok = 0, found = 0;
     char quote = 0;
+    char hd[DI_HEREDOC_MAX][DI_HEREDOC_TAG_MAX];
     for (size_t i = 0; i <= len && !found; i++) {
         char ch = i < len ? cmd[i] : '\n';
         if (quote) {
             if (i >= len) { quote = 0; }
             else if (ch == quote) { quote = 0; continue; }
-            else if (quote == '"' && ch == '\\' && i + 1 < len) { work[w++] = cmd[++i]; continue; }
+            else if (quote == '"' && mode && ch == '$' && i + 1 < len && cmd[i + 1] == '(') {
+                work[w++] = ch;
+                i = di_subst(cmd, len, i, mode, fn, depth, &found);
+                continue;
+            }
+            else if (quote == '"' && (mode & DI_MODE_BASH) && ch == '`') {
+                work[w++] = ch;
+                i = di_subst(cmd, len, i, mode, fn, depth, &found);
+                continue;
+            }
+            else if (quote == '"' && (mode & DI_MODE_PS) && ch == '`' && i + 1 < len) { work[w++] = cmd[++i]; continue; }
+            else if (quote == '"' && ch == '\\' && i + 1 < len) {
+                if (mode && ((mode & DI_MODE_PS) || !strchr("\"\\$`", cmd[i + 1]))) work[w++] = ch;
+                else work[w++] = cmd[++i];
+                continue;
+            }
             else { work[w++] = ch; continue; }
         }
         if (ch == '\'' || ch == '"') {
@@ -2061,9 +2111,27 @@ static int di_command_is_irreversible(const char *cmd, size_t len) {
             if (!in_tok) { tok[nt++] = work + w; in_tok = 1; }
             continue;
         }
-        if (ch == '\\' && i + 1 < len) {
+        if ((mode & DI_MODE_PS) && ch == '`' && i + 1 < len) {
             if (!in_tok) { tok[nt++] = work + w; in_tok = 1; }
             work[w++] = cmd[++i];
+            continue;
+        }
+        if (ch == '\\' && i + 1 < len) {
+            if (!in_tok) { tok[nt++] = work + w; in_tok = 1; }
+            if (mode && ((mode & DI_MODE_PS) || !strchr(" \t\n\"'\\$`;&|()<>", cmd[i + 1]))) work[w++] = ch;
+            else work[w++] = cmd[++i];
+            continue;
+        }
+        if (mode && ch == '$' && i + 1 < len && cmd[i + 1] == '(') {
+            if (!in_tok) { tok[nt++] = work + w; in_tok = 1; }
+            work[w++] = ch;
+            i = di_subst(cmd, len, i, mode, fn, depth, &found);
+            continue;
+        }
+        if ((mode & DI_MODE_BASH) && ch == '`') {
+            if (!in_tok) { tok[nt++] = work + w; in_tok = 1; }
+            work[w++] = ch;
+            i = di_subst(cmd, len, i, mode, fn, depth, &found);
             continue;
         }
         if (ch == ' ' || ch == '\t' || ch == '\r') {
@@ -2072,9 +2140,38 @@ static int di_command_is_irreversible(const char *cmd, size_t len) {
         }
         if (ch == ';' || ch == '|' || ch == '&' || ch == '\n' || ch == '(' || ch == ')') {
             if (in_tok) { work[w++] = '\0'; in_tok = 0; }
-            if (nt && di_segment_matches(tok, nt)) found = 1;
+            if (nt && fn(tok, nt, mode, depth)) found = 1;
             nt = 0;
+            if (ch == '\n' && hd_n && i < len && !found) {
+                size_t pos = i + 1;
+                for (size_t h = 0; h < hd_n && pos < len; h++) {
+                    for (;;) {
+                        size_t e = pos, s;
+                        while (e < len && cmd[e] != '\n') e++;
+                        for (s = pos; s < e && cmd[s] == '\t'; s++) {}
+                        size_t le = (e > s && cmd[e - 1] == '\r') ? e - 1 : e;
+                        int hit = le - s == strlen(hd[h]) && memcmp(cmd + s, hd[h], le - s) == 0;
+                        pos = e < len ? e + 1 : len;
+                        if (hit || pos >= len) break;
+                    }
+                }
+                hd_n = 0;
+                i = pos - 1;
+            }
             continue;
+        }
+        if ((mode & DI_MODE_BASH) && ch == '<' && i + 1 < len && cmd[i + 1] == '<' &&
+            (i + 2 >= len || cmd[i + 2] != '<') && (i == 0 || cmd[i - 1] != '<') &&
+            hd_n < DI_HEREDOC_MAX) {
+            size_t j = i + 2, d = 0;
+            if (j < len && cmd[j] == '-') j++;
+            while (j < len && (cmd[j] == ' ' || cmd[j] == '\t')) j++;
+            if (j < len && (cmd[j] == '\'' || cmd[j] == '"' || cmd[j] == '\\')) j++;
+            while (j < len && d < DI_HEREDOC_TAG_MAX - 1 &&
+                   ((cmd[j] >= 'A' && cmd[j] <= 'Z') || (cmd[j] >= 'a' && cmd[j] <= 'z') ||
+                    (cmd[j] >= '0' && cmd[j] <= '9') || cmd[j] == '_'))
+                hd[hd_n][d++] = cmd[j++];
+            if (d) { hd[hd_n][d] = '\0'; hd_n++; }
         }
         if (!in_tok) { tok[nt++] = work + w; in_tok = 1; }
         work[w++] = ch;
@@ -2084,7 +2181,474 @@ static int di_command_is_irreversible(const char *cmd, size_t len) {
     return found;
 }
 
+static int di_shape_segment(char **tok, size_t n, int mode, int depth) {
+    (void)mode; (void)depth;
+    return di_segment_matches(tok, n);
+}
+
+static int di_command_is_irreversible(const char *cmd, size_t len) {
+    return di_walk(cmd, len, 0, di_shape_segment, 0);
+}
+
+/* NATIVE GUARD LEG -- deny cases of three state-free Python guards, run when no
+ * warm verdict is reachable. Each matcher mirrors one guard's deny predicate:
+ * `bash_guards/block_empty_source_push.py`, `block_worktree_creation.py`,
+ * `guard_uncapped_pytest_plugin.py`. Not a row of the shape table above: that
+ * table denies whole verbs on a cold timeout (its `git push` row over-denies an
+ * unheld push); these rows deny only what the Python guard denies.
+ * block-held-push and every partial or superset guard stay out. Trap: a Python
+ * guard's allowlist or wrapper set changes here too. */
+static int dg_ieq(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
+        if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
+        if (x != y) return 0;
+    }
+    return 1;
+}
+
+static int dg_has(const char *hay, size_t hlen, const char *needle) {
+    size_t nl = strlen(needle);
+    for (size_t i = 0; i + nl <= hlen; i++) if (dg_ieq(hay + i, needle, nl)) return 1;
+    return 0;
+}
+
+/* `normalize_executable_basename`: last path component, trailing dots/spaces and
+ * `.exe`/`.cmd` dropped, lower-cased. */
+static void dg_base(const char *t, char *out, size_t cap) {
+    size_t n = strlen(t), s;
+    while (n && (t[n - 1] == '/' || t[n - 1] == '\\')) n--;
+    for (s = n; s && t[s - 1] != '/' && t[s - 1] != '\\'; s--) {}
+    while (n > s && (t[n - 1] == '.' || t[n - 1] == ' ')) n--;
+    if (n - s >= 4 && (dg_ieq(t + n - 4, ".exe", 4) || dg_ieq(t + n - 4, ".cmd", 4))) n -= 4;
+    size_t m = n - s;
+    if (m >= cap) m = cap - 1;
+    for (size_t k = 0; k < m; k++) {
+        char c = t[s + k];
+        out[k] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+    }
+    out[m] = '\0';
+}
+
+static int dg_in(const char *t, const char *const *set) {
+    for (; *set; set++) if (di_eq(t, *set)) return 1;
+    return 0;
+}
+
+typedef struct {
+    const char *base;
+    const char *const *taking;
+    const char *const *boolean;
+    int worktree_only;
+} dg_wrapper_t;
+
+static const char *const dg_none[] = { NULL };
+static const char *const dg_timeout_arg[] = { "-k", "--kill-after", "-s", "--signal", NULL };
+static const char *const dg_timeout_bool[] = { "--foreground", "--preserve-status", "-v", "--verbose", NULL };
+static const char *const dg_nice_arg[] = { "-n", "--adjustment", NULL };
+static const char *const dg_ionice_arg[] = { "-c", "--class", "-n", "--classdata", "-p", "--pid", NULL };
+static const char *const dg_stdbuf_arg[] = { "-i", "--input", "-o", "--output", "-e", "--error", NULL };
+static const char *const dg_sudo_arg[] = {
+    "-u", "--user", "-g", "--group", "-p", "--prompt", "-r", "--role", "-t", "--type", "-C",
+    "--close-from", "-T", "--command-timeout", "-U", "--other-user", "-h", "--host", "-R",
+    "--chroot", "-D", "--chdir", NULL };
+static const char *const dg_sudo_bool[] = {
+    "-A", "--askpass", "-b", "--background", "-E", "--preserve-env", "-H", "--set-home", "-i",
+    "--login", "-K", "--remove-timestamp", "-k", "--reset-timestamp", "-l", "--list", "-n",
+    "--non-interactive", "-P", "--preserve-groups", "-S", "--stdin", "-s", "--shell", "-v",
+    "--validate", "-B", "--bell", NULL };
+static const char *const dg_doas_arg[] = { "-u", "-C", NULL };
+static const char *const dg_doas_bool[] = { "-L", "-n", "-s", NULL };
+static const char *const dg_setsid_bool[] = { "-c", "--ctty", "-f", "--fork", "-w", "--wait", NULL };
+static const char *const dg_strace_arg[] = {
+    "-e", "-o", "-p", "-s", "-E", "-u", "-a", "-b", "-I", "-P", "-O", "-S", NULL };
+static const char *const dg_strace_bool[] = {
+    "-f", "-ff", "-c", "-C", "-d", "-h", "-i", "-q", "-qq", "-r", "-t", "-tt", "-ttt", "-T", "-v",
+    "-V", "-y", "-yy", "-z", "-Z", "-k", "-w", NULL };
+
+static const dg_wrapper_t dg_wrappers[] = {
+    { "sudo", dg_sudo_arg, dg_sudo_bool, 0 },
+    { "command", dg_none, dg_none, 0 },
+    { "time", dg_none, dg_none, 0 },
+    { "exec", dg_none, dg_none, 0 },
+    { "nice", dg_nice_arg, dg_none, 0 },
+    { "nohup", dg_none, dg_none, 0 },
+    { "ionice", dg_ionice_arg, dg_none, 0 },
+    { "timeout", dg_timeout_arg, dg_timeout_bool, 0 },
+    { "stdbuf", dg_stdbuf_arg, dg_none, 0 },
+    { "setsid", dg_none, dg_setsid_bool, 0 },
+    { "strace", dg_strace_arg, dg_strace_bool, 0 },
+    { "doas", dg_doas_arg, dg_doas_bool, 0 },
+    { "which", dg_none, dg_none, 1 },
+    { "type", dg_none, dg_none, 1 },
+    { "busybox", dg_none, dg_none, 1 },
+};
+
+static int dg_all_digits_dots(const char *t, int allow_dot) {
+    if (!*t) return 0;
+    for (; *t; t++) if (!((*t >= '0' && *t <= '9') || (allow_dot && *t == '.'))) return 0;
+    return 1;
+}
+
+/* `^\d+(?:\.\d+)?[smhd]?$` */
+static int dg_is_duration(const char *t) {
+    size_t n = strlen(t);
+    if (n && strchr("smhd", t[n - 1])) n--;
+    char buf[32];
+    if (n == 0 || n >= sizeof buf) return 0;
+    memcpy(buf, t, n);
+    buf[n] = '\0';
+    if (!dg_all_digits_dots(buf, 1)) return 0;
+    char *dot = strchr(buf, '.');
+    return buf[0] != '.' && buf[n - 1] != '.' && (!dot || !strchr(dot + 1, '.'));
+}
+
+static size_t dg_skip_wrapper_argv(char **tok, size_t i, size_t n, const dg_wrapper_t *wr) {
+    int dur = 0;
+    while (i < n) {
+        const char *t = tok[i];
+        if (dg_in(t, wr->boolean)) { i++; continue; }
+        if (t[0] == '-' && t[1] == '-' && strchr(t, '=')) { i++; continue; }
+        if (dg_in(t, wr->taking)) { i += 2; continue; }
+        if (strlen(t) > 2 && t[0] == '-' && t[1] != '-') {
+            char flag[3] = { '-', t[1], '\0' };
+            if (dg_in(flag, wr->taking)) { i++; continue; }
+        }
+        if (di_eq(wr->base, "timeout") && !dur && dg_is_duration(t)) { i++; dur = 1; continue; }
+        if (di_eq(wr->base, "nice") && t[0] == '-' && dg_all_digits_dots(t + 1, 0)) { i++; continue; }
+        break;
+    }
+    return i;
+}
+
+/* Index of the command-position token: grouping markers, env assignments, `env`
+ * and the passthrough wrappers with their own argv peeled. */
+static size_t dg_peel(char **tok, size_t n, int worktree) {
+    size_t i = 0;
+    while (i < n) {
+        const char *t = tok[i];
+        if (di_eq(t, "(") || di_eq(t, "{") || di_is_assignment(t)) { i++; continue; }
+        char b[32];
+        dg_base(t, b, sizeof b);
+        if (di_eq(b, "env")) {
+            i++;
+            while (i < n && (di_is_assignment(tok[i]) || di_eq(tok[i], "-i") ||
+                             di_eq(tok[i], "--ignore-environment"))) i++;
+            continue;
+        }
+        const dg_wrapper_t *wr = NULL;
+        for (size_t k = 0; k < sizeof dg_wrappers / sizeof dg_wrappers[0]; k++)
+            if (di_eq(dg_wrappers[k].base, b) && (worktree || !dg_wrappers[k].worktree_only)) wr = &dg_wrappers[k];
+        if (!wr) break;
+        i = dg_skip_wrapper_argv(tok, i + 1, n, wr);
+    }
+    return i;
+}
+
+/* tok[head] is sh/bash/zsh/dash/ksh given a `-c` flag (standalone or bundled):
+ * returns 1 and the payload token (NULL when the flag is last). */
+static int dg_shell_c(char **tok, size_t n, size_t head, const char **payload) {
+    char b[32];
+    dg_base(tok[head], b, sizeof b);
+    if (!(di_eq(b, "sh") || di_eq(b, "bash") || di_eq(b, "zsh") || di_eq(b, "dash") || di_eq(b, "ksh"))) return 0;
+    for (size_t j = head + 1; j < n; j++) {
+        const char *t = tok[j];
+        int c = 0, letters = t[0] == '-' && t[1] && t[1] != '-';
+        for (const char *p = t + 1; letters && *p; p++) {
+            if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z'))) letters = 0;
+            if (*p == 'c') c = 1;
+        }
+        if (letters && c) { *payload = j + 1 < n ? tok[j + 1] : NULL; return 1; }
+    }
+    return 0;
+}
+
+#define DG_SHELL_C_RECURSE(SELF) \
+    do { \
+        const char *dg_pl = NULL; \
+        if (dg_shell_c(tok, n, h, &dg_pl)) \
+            return dg_pl ? di_walk(dg_pl, strlen(dg_pl), DI_MODE_BASH, SELF, depth + 1) : 0; \
+    } while (0)
+
+static const char *const dg_git_opt_arg[] = {
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix", NULL };
+static const char *const dg_push_opt_arg[] = { "-o", "--push-option", "--repo", "--receive-pack", "--exec", NULL };
+
+static int dg_is_hex40(const char *s, size_t n) {
+    if (n != 40) return 0;
+    for (size_t i = 0; i < n; i++)
+        if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f') || (s[i] >= 'A' && s[i] <= 'F'))) return 0;
+    return 1;
+}
+
+/* `^-[A-Za-z]*d[A-Za-z]*$` */
+static int dg_bundled_delete(const char *t) {
+    if (t[0] != '-' || !t[1]) return 0;
+    int d = 0;
+    for (const char *p = t + 1; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z'))) return 0;
+        if (*p == 'd') d = 1;
+    }
+    return d;
+}
+
+/* `^(?:\d*|&)(?:>>?|<)&?` -- the match length, 0 when `t` is no redirection. */
+static size_t dg_redirect_len(const char *t) {
+    for (int amp = 0; amp < 2; amp++) {
+        size_t p = 0;
+        if (amp) { if (t[0] != '&') break; p = 1; }
+        else while (t[p] >= '0' && t[p] <= '9') p++;
+        if (t[p] == '>') { p++; if (t[p] == '>') p++; }
+        else if (t[p] == '<') p++;
+        else continue;
+        if (t[p] == '&') p++;
+        return p;
+    }
+    return 0;
+}
+
+static int dg_push_deny(char **tok, size_t n, int mode, int depth) {
+    (void)mode;
+    size_t h = dg_peel(tok, n, 0);
+    if (h >= n) return 0;
+    DG_SHELL_C_RECURSE(dg_push_deny);
+    char b[32];
+    dg_base(tok[h], b, sizeof b);
+    if (!di_eq(b, "git") || h + 1 >= n) return 0;
+    size_t i = h + 1;
+    while (i < n && tok[i][0] == '-') i += dg_in(tok[i], dg_git_opt_arg) ? 2 : 1;
+    if (i >= n || !di_eq(tok[i], "push")) return 0;
+    char **args = tok + i + 1;
+    size_t na = n - i - 1;
+    for (size_t k = 0; k < na; k++)
+        if (di_eq(args[k], "-n") || strncmp(args[k], "--dry-run", 9) == 0) return 0;
+    for (size_t k = 0; k < na; k++)
+        if (di_eq(args[k], "-d") || di_eq(args[k], "--delete") || dg_bundled_delete(args[k])) return 1;
+    size_t npos = 0;
+    for (size_t k = 0; k < na; k++) {
+        const char *t = args[k];
+        size_t rl = dg_redirect_len(t);
+        if (rl) { if (rl == strlen(t)) k++; continue; }
+        if (dg_in(t, dg_push_opt_arg)) { k++; continue; }
+        if (t[0] == '-') continue;
+        if (++npos == 1) continue;
+        if (t[0] == '+') t++;
+        const char *colon = strrchr(t, ':');
+        if (!colon) continue;
+        size_t sl = (size_t)(colon - t);
+        if (sl == 0) return 1;
+        int dyn = 0;
+        for (size_t c = 0; c < sl; c++) if (t[c] == '$' || t[c] == '`') dyn = 1;
+        if (dyn && !dg_is_hex40(t, sl)) return 1;
+    }
+    return 0;
+}
+
+static int dg_worktree_subcommand_denied(const char *second) {
+    if (!second) return 0;
+    return !(di_eq(second, "list") || di_eq(second, "remove") || di_eq(second, "prune"));
+}
+
+static int dg_worktree_deny(char **tok, size_t n, int mode, int depth) {
+    (void)mode;
+    size_t h = dg_peel(tok, n, 1);
+    if (h >= n) return 0;
+    DG_SHELL_C_RECURSE(dg_worktree_deny);
+    char b[32];
+    dg_base(tok[h], b, sizeof b);
+    if (!di_eq(b, "git")) return 0;
+    size_t i = h + 1;
+    int ambiguous = 0;
+    while (i < n) {
+        const char *t = tok[i];
+        if (di_eq(t, "-C") || di_eq(t, "-c") || di_eq(t, "--git-dir") || di_eq(t, "--work-tree")) { i += 2; continue; }
+        if (di_eq(t, "--no-pager") || di_eq(t, "-P") || di_eq(t, "--bare") || di_eq(t, "--literal-pathspecs") ||
+            di_eq(t, "--paginate") || di_eq(t, "--no-optional-locks")) { i++; continue; }
+        if (t[0] == '-' && t[1] == '-' && strchr(t, '=')) { i++; continue; }
+        if (t[0] == '-') ambiguous = 1;
+        break;
+    }
+    if (ambiguous) {
+        for (size_t k = 0; k < n; k++)
+            if (di_eq(tok[k], "worktree")) return dg_worktree_subcommand_denied(k + 1 < n ? tok[k + 1] : NULL);
+        return 0;
+    }
+    if (i >= n || !di_eq(tok[i], "worktree")) return 0;
+    return dg_worktree_subcommand_denied(i + 1 < n ? tok[i + 1] : NULL);
+}
+
+static const char *const dg_packaged_plugins[] = {
+    "xdist", "pytest_xdist", "cov", "pytest_cov", "timeout", "pytest_timeout", "pytester", "asyncio",
+    "pytest_asyncio", "anyio", "mock", "pytest_mock", "randomly", "pytest_randomly", "rerunfailures",
+    "pytest_rerunfailures", "benchmark", "pytest_benchmark", "hypothesis", "env", "pytest_env", "django",
+    "pytest_django", "html", "pytest_html", "sugar", "pytest_sugar", "instafail", "pytest_instafail",
+    "socket", "pytest_socket", "forked", "pytest_forked", "metadata", "pytest_metadata", "split",
+    "pytest_split", NULL };
+
+static int dg_is_python_head(const char *b) {
+    if (di_eq(b, "py")) return 1;
+    if (strncmp(b, "python", 6) != 0) return 0;
+    for (b += 6; *b; b++) if (!((*b >= '0' && *b <= '9') || *b == '.')) return 0;
+    return 1;
+}
+
+static int dg_pytest_deny(char **tok, size_t n, int mode, int depth) {
+    (void)mode;
+    size_t h = dg_peel(tok, n, 0);
+    if (h >= n) return 0;
+    DG_SHELL_C_RECURSE(dg_pytest_deny);
+    char b[32], b2[32];
+    dg_base(tok[h], b, sizeof b);
+    size_t a0 = n;
+    if (di_eq(b, "pytest") || di_eq(b, "py.test")) {
+        a0 = h + 1;
+    } else if (dg_is_python_head(b)) {
+        int skip = 0;
+        for (size_t j = h + 1; j < n; j++) {
+            const char *t = tok[j];
+            if (di_eq(t, "-m")) {
+                if (j + 1 < n) {
+                    dg_base(tok[j + 1], b2, sizeof b2);
+                    if (di_eq(b2, "pytest")) a0 = j + 2;
+                }
+                break;
+            }
+            if (di_eq(t, "-X") || di_eq(t, "-W")) { skip = 1; continue; }
+            if (skip) { skip = 0; continue; }
+            if (t[0] != '-') break;
+        }
+    }
+    for (size_t k = a0; k < n; k++) {
+        const char *t = tok[k], *name = NULL;
+        if (di_eq(t, "--")) break;
+        if (di_eq(t, "-p")) { if (k + 1 < n) name = tok[++k]; }
+        else if (strncmp(t, "-p=", 3) == 0) name = t + 3;
+        else if (strncmp(t, "-p", 2) == 0 && strncmp(t, "--", 2) != 0 && t[2]) name = t + 2;
+        if (!name) continue;
+        size_t s = 0, e = strlen(name);
+        while (s < e && (name[s] == '\'' || name[s] == '"')) s++;
+        while (e > s && (name[e - 1] == '\'' || name[e - 1] == '"')) e--;
+        if (e == s) continue;
+        if (e - s >= 3 && strncmp(name + s, "no:", 3) == 0) continue;
+        char pn[128];
+        if (e - s >= sizeof pn) return 1;
+        memcpy(pn, name + s, e - s);
+        pn[e - s] = '\0';
+        if (strncmp(pn, "no:", 3) == 0 || dg_in(pn, dg_packaged_plugins) ||
+            strncmp(pn, "coordinator_core.testing.", 25) == 0) continue;
+        return 1;
+    }
+    return 0;
+}
+
+typedef struct {
+    const char *name;
+    di_seg_fn match;
+    int ps_dialect;
+    const char *needle;
+    const char *needle2;
+    const char *override_env;
+    const char *reason;
+} door_native_guard_row_t;
+
+static const door_native_guard_row_t door_native_guard_rows[] = {
+    { "block-empty-source-push", dg_push_deny, 0, "push", NULL, "COORDINATOR_OVERRIDE_PUSH_DELETE",
+      "BLOCKED by block-empty-source-push: `git push` can delete a remote ref (--delete, an empty or "
+      "unresolved source). Push an explicit 40-char sha or branch name." },
+    { "block-worktree-creation", dg_worktree_deny, 1, "worktree", NULL, NULL,
+      "BLOCKED by block-worktree-creation: git worktree creation is banned fleet-wide. "
+      "Use `git worktree list`, `remove` or `prune`." },
+    { "guard-uncapped-pytest-plugin", dg_pytest_deny, 0, "pytest", "py.test", NULL,
+      "BLOCKED by guard-uncapped-pytest-plugin: `pytest -p` loads an ad-hoc plugin with no process cap. "
+      "Use `scoped-pytest --allow <target> -- <pytest args>`." },
+};
+
+static int dg_override_set(const char *env_s, const char *env_e, const char *name) {
+    if (!env_s) {
+        const char *v = getenv(name);
+        return v && di_eq(v, "1");
+    }
+    buf_t key;
+    if (!buf_init(&key, 48)) return 0;
+    cursor_t c = { env_s + 1, env_e };
+    const char *vs, *ve;
+    int set = 0;
+    while (pc_obj_next(&c, &key, &vs, &ve) == 1)
+        if (pc_key_is(&key, name) && ve - vs == 3 && vs[0] == '"' && vs[1] == '1') set = 1;
+    free(key.data);
+    return set;
+}
+
+int door_native_guard_verdict(const char *payload, size_t plen, char *reason, size_t rcap) {
+    if (reason && rcap) reason[0] = '\0';
+    if (!payload) return 0;
+    cursor_t c = { payload, payload + plen };
+    skip_ws(&c);
+    if (c.p >= c.end || *c.p != '{') return 0;
+    c.p++;
+    buf_t key, tool, event, cmd;
+    int have = buf_init(&key, 32) + buf_init(&tool, 16) + buf_init(&event, 16) + buf_init(&cmd, 128);
+    int r = 0;
+    if (have != 4) {
+        free(key.data); free(tool.data); free(event.data); free(cmd.data);
+        return 0;
+    }
+    const char *ti_s = NULL, *ti_e = NULL, *env_s = NULL, *env_e = NULL, *vs, *ve;
+    int pr;
+    while ((pr = pc_obj_next(&c, &key, &vs, &ve)) == 1) {
+        cursor_t sub = { vs, ve };
+        if (pc_key_is(&key, "tool_name") && *vs == '"') {
+            tool.len = 0;
+            if (!parse_json_string(&sub, &tool)) goto out;
+        } else if (pc_key_is(&key, "hook_event_name") && *vs == '"') {
+            event.len = 0;
+            if (!parse_json_string(&sub, &event)) goto out;
+        } else if (pc_key_is(&key, "tool_input")) {
+            ti_s = vs;
+            ti_e = ve;
+        } else if (pc_key_is(&key, "env") && *vs == '{') {
+            env_s = vs;
+            env_e = ve;
+        }
+    }
+    int ps = pc_key_is(&tool, "PowerShell");
+    if (pr != 0 || !ti_s || *ti_s != '{' || !(ps || pc_key_is(&tool, "Bash"))) goto out;
+    if (event.len && !pc_key_is(&event, "PreToolUse")) goto out;
+    {
+        cursor_t ti = { ti_s + 1, ti_e };
+        while ((pr = pc_obj_next(&ti, &key, &vs, &ve)) == 1) {
+            if (pc_key_is(&key, "command")) {
+                cursor_t sub = { vs, ve };
+                if (*vs != '"') goto out;
+                cmd.len = 0;
+                if (!parse_json_string(&sub, &cmd)) goto out;
+                break;
+            }
+        }
+    }
+    for (size_t k = 0; k < sizeof door_native_guard_rows / sizeof door_native_guard_rows[0] && !r; k++) {
+        const door_native_guard_row_t *row = &door_native_guard_rows[k];
+        if (!cmd.len || !(dg_has(cmd.data, cmd.len, row->needle) ||
+                          (row->needle2 && dg_has(cmd.data, cmd.len, row->needle2))))
+            continue;
+        int mode = (ps && row->ps_dialect) ? DI_MODE_PS : DI_MODE_BASH;
+        if (!di_walk(cmd.data, cmd.len, mode, row->match, 0)) continue;
+        if (row->override_env && dg_override_set(env_s, env_e, row->override_env)) continue;
+        r = 1;
+        if (reason && rcap) snprintf(reason, rcap, "%s", row->reason);
+    }
+out:
+    free(key.data); free(tool.data); free(event.data); free(cmd.data);
+    return r;
+}
+
 int door_payload_is_irreversible(const char *payload, size_t plen) {
+    return door_payload_irreversible_command(payload, plen, NULL, 0);
+}
+
+int door_payload_irreversible_command(const char *payload, size_t plen, char *dst, size_t cap) {
+    if (dst && cap) dst[0] = '\0';
     if (!payload) return 0;
     cursor_t c = { payload, payload + plen };
     skip_ws(&c);
@@ -2112,7 +2676,8 @@ int door_payload_is_irreversible(const char *payload, size_t plen) {
             ti_e = ve;
         }
     }
-    if (pr != 0 || !ti_s || *ti_s != '{' || !pc_key_is(&tool, "Bash") || !pc_key_is(&event, "PreToolUse")) goto out;
+    if (pr != 0 || !ti_s || *ti_s != '{' || !(pc_key_is(&tool, "Bash") || pc_key_is(&tool, "PowerShell")) ||
+        !pc_key_is(&event, "PreToolUse")) goto out;
     {
         cursor_t ti = { ti_s + 1, ti_e };
         while ((pr = pc_obj_next(&ti, &key, &vs, &ve)) == 1) {
@@ -2122,6 +2687,15 @@ int door_payload_is_irreversible(const char *payload, size_t plen) {
                 cmd.len = 0;
                 if (!parse_json_string(&sub, &cmd)) goto out;
                 r = di_command_is_irreversible(cmd.data, cmd.len);
+                if (r && dst && cap) {
+                    size_t keep = cmd.len < cap ? cmd.len : cap - 1;
+                    for (size_t k = 0; k < keep; k++) {
+                        unsigned char ch = (unsigned char)cmd.data[k];
+                        dst[k] = ch < 0x20 ? ' ' : (char)ch;
+                    }
+                    dst[keep] = '\0';
+                    if (cmd.len > keep && cap > 4) memcpy(dst + cap - 4, "...", 4);
+                }
                 break;
             }
         }
@@ -2143,9 +2717,9 @@ int door_hook_read_plan(const char *op, int peer_open, int engine_alive) {
     return DOOR_HOOK_LIVE_READ_MS - first;
 }
 
-void door_irreversible_deny_reason(char *dst, size_t cap, const char *detail) {
+void door_irreversible_unchecked_reason(char *dst, size_t cap, const char *detail, const char *command) {
     snprintf(dst, cap,
-             "coordinator: the engine gave no usable answer after delivery (%s); an "
-             "irreversible-external command is not run unguarded. Retry once warm answers.",
-             (detail && *detail) ? detail : "no detail");
+             "coordinator-door: irreversible-shaped command allowed UNCHECKED, no engine verdict (%s): %s",
+             (detail && *detail) ? detail : "no detail",
+             (command && *command) ? command : "(command not captured)");
 }

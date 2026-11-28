@@ -24,7 +24,7 @@ script; a record older than `TTL_SECONDS` admits nothing. In-process file I/O on
 
 Removal rule: only a landed commit, an ended or refused run, or a sanctioned peer release
 removes a record; a removal without a landed commit (`consume`, `discard`, a re-`mint`) first
-leaves `retired/<run_id>.json`, which `halt_admits` reads so a halted run's record-only commit
+leaves `retired/<run_id>.json`, which `halt_own_token` reads so a halted run's record-only commit
 survives it; `readmit_reviewed` is the only retired->live path, and only while no live, claimed or spent record exists.
 `consume` and `discard` then wake the stages parked behind the ended run (`_wake_stage_waiters`);
 `release` restores a running run and wakes nothing.
@@ -79,7 +79,7 @@ _HALTED = "halted"
 #: Where `escrow` keeps a launcher child's plaintext token for the stage-time twin write.
 _ESCROW = "escrow"
 #: Where a record removed without a landed commit (`consume`, `discard`, a re-`mint`) leaves its
-#: receipt, which `halt_admits` reads; `mint` removes a stale one.
+#: receipt, which `halt_own_token` reads; `mint` removes a stale one.
 _RETIRED = "retired"
 #: Digests of earlier tokens a `carry_prior` re-mint keeps admitting, newest first, and how many.
 _PRIOR = "prior"
@@ -731,9 +731,16 @@ def _same_script(repo_root: Optional[Path], recorded: str, script_path: object) 
 
 
 def _matches(
-    record: Optional[dict], run_id: object, token: object, script_path: object, repo_root: Optional[Path] = None
+    record: Optional[dict],
+    run_id: object,
+    token: object,
+    script_path: object,
+    repo_root: Optional[Path] = None,
+    *,
+    any_age: bool = False,
 ) -> bool:
-    if record is None or record.get("run_id") != run_id or not _fresh(record):
+    """`any_age` skips the `TTL_SECONDS` test; only `halt_own_token` passes it."""
+    if record is None or record.get("run_id") != run_id or not (any_age or _fresh(record)):
         return False
     recorded_script = record.get("script_path")
     if not isinstance(recorded_script, str) or not recorded_script or not _same_script(repo_root, recorded_script, script_path):
@@ -784,6 +791,33 @@ def halt_admits(repo_root: Path, run_id: object, token: object, script_path: obj
         _matches(_read_rec(repo_root, run_id, **kind), run_id, token, script_path, repo_root)
         for kind in ({}, {"claimed": True}, {"retired": True})
     )
+
+
+def halt_own_token(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
+    """Read-only: True when `token` is one this run minted, in any terminal state and at any age.
+
+    The `land_run_halt.land` token gate (`halted_record_commit` still gates on `halt_admits`). A run's
+    own token is admitted from its live, claimed, retired, spent or halted-landing record (each past
+    `TTL_SECONDS` too) or its escrow; another
+    run's token, a forged one, or a script other than the recorded one never matches. Spends and
+    claims nothing, and `admits` (the product-commit gate) is untouched.
+
+    Trap: an escrow holds no script, so it admits only when the run has no record at all (a
+    record that exists is decisive, else the escrow would bypass the script binding); that
+    escrow-only run is matched on the plaintext token alone; the token is a 128-bit secret only that run holds."""
+    if not _well_formed(run_id, token, script_path):
+        return False
+    recorded = False
+    for kind in ({}, {"claimed": True}, {"retired": True}, {"spent": True}, {"halted": True}):
+        record = _read_rec(repo_root, run_id, **kind)
+        recorded = recorded or record is not None
+        if _matches(record, run_id, token, script_path, repo_root, any_age=True):
+            return True
+    if recorded:
+        return False
+    held = _read_rec(repo_root, run_id, escrow=True)
+    plain = held.get("token") if held else None
+    return isinstance(plain, str) and hmac.compare_digest(plain, str(token))
 
 
 def readmit_reviewed(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
@@ -1044,7 +1078,7 @@ def live_records(repo_root: Path) -> Iterator[dict]:
 def _predates_halt(repo_root: Path, record: dict) -> bool:
     """True when `record` is the token its run minted before the run's ended marker (`halted`,
     `superseded`, `landed` or `closed`) was written: the run stopped, so the token holds nothing and no
-    driver is left behind it. A refire's re-mint is newer than the marker and holds. Only the listing hides it: `halt_admits`, `escrowed` and `readmit_reviewed` read the
+    driver is left behind it. A refire's re-mint is newer than the marker and holds. Only the listing hides it: `halt_own_token`, `escrowed` and `readmit_reviewed` read the
     record directly, so the refire still reclaims. Unknown (no marker, unreadable) is not halted."""
     try:
         from coordinator_core.ops.dispatch_emit import halted_run
@@ -1096,25 +1130,45 @@ def claim_pending(repo_root: Path, run_id: object, token: object, script_path: o
     return _matches(record, run_id, token, script_path, repo_root) and not _claim_expirable(record, path)
 
 
-def note_halt_landing(repo_root: Path, run_id: object, token: object, script_path: object, landed: dict) -> None:
+HALT_WRITE_DEADLINE_MS = 150.0
+
+
+class HaltWriteIndeterminate(Exception):
+    """The halt-landing receipt write outlived `HALT_WRITE_DEADLINE_MS`."""
+
+    def __init__(self, path: str, landed: dict, started: bool = True) -> None:
+        super().__init__(path)
+        self.path = path
+        self.landed = landed
+        self.started = started
+
+
+def note_halt_landing(
+    repo_root: Path, run_id: object, token: object, script_path: object, landed: dict, *, raise_on_stall: bool = False
+) -> None:
     """Record the landed halted-run record commit (`landed`: sha, paths, halted kind) beside the
     token without spending it: the live record stays, so the resumed run's product commit can
-    still redeem. Writes nothing when the token no longer matches the live record."""
+    still redeem. Writes nothing when the token no longer matches the live record. A write past
+    `HALT_WRITE_DEADLINE_MS` raises `HaltWriteIndeterminate` when `raise_on_stall`, else is left running."""
     if not _well_formed(run_id, token, script_path):
         return
     record = _read_rec(repo_root, run_id)
     target = _record_path(repo_root, run_id, halted=True)
     if not _matches(record, run_id, token, script_path, repo_root) or target is None:
         return
-    from coordinator_core.atomic_replace import atomic_write_bytes
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
 
     receipt = {k: record.get(k) for k in _RECEIPT_KEYS if record.get(k) is not None}
     receipt["landed"] = landed
+    admitted = halt_resume_record.write_admitted(target)
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_bytes(target, json.dumps(receipt, sort_keys=True).encode("utf-8"), preserve_mode=False)
+        stalled = halt_resume_record.bounded_write(
+            target, json.dumps(receipt, sort_keys=True).encode("utf-8"), HALT_WRITE_DEADLINE_MS, preserve_mode=False
+        )
     except OSError:  # the commit already landed; a missing receipt only costs the repeat-call answer
-        pass
+        return
+    if stalled is halt_resume_record.STALLED and raise_on_stall:
+        raise HaltWriteIndeterminate(str(target), landed, started=admitted)
 
 
 def halt_landing(repo_root: Path, run_id: object, token: object, script_path: object) -> Optional[dict]:
@@ -1175,12 +1229,88 @@ def _wake_stage_waiters(repo_root: Path, ended_run_id: str) -> None:
         return
     for waiter in waiters:
         try:
-            _resume_stage_waiter(repo_root, waiter)
+            sha = _landed_sha(repo_root, ended_run_id) if waiter.get("resume_action") == "close_landed" else None
+            _resume_stage_waiter(repo_root, waiter, sha=sha)
         except Exception:  # noqa: BLE001
             log.warning("stage resume of %s after %s ended failed", waiter.get("run_id"), ended_run_id, exc_info=True)
 
 
-def _resume_stage_waiter(repo_root: Path, waiter: dict) -> bool:
+def _landed_sha(repo_root: Path, run_id: str) -> Optional[str]:
+    """The 40-hex sha of the run's landed marker, None when it holds none."""
+    from coordinator_core.ops.dispatch_emit import blocker_check
+
+    return blocker_check._run_landed(Path(repo_root), run_id).payload.get("sha")
+
+
+def _stamp_resume(repo_root: Path, run_id: str, fields: dict) -> None:
+    """Merge `fields` into the run's stage-wait record."""
+    from coordinator_core.ops.dispatch_emit import stage_wait
+
+    path = stage_wait._path(repo_root, run_id)
+    if path is None:
+        return
+    with stage_wait._lock, stage_wait._record_lock(path):
+        record = stage_wait.read(repo_root, run_id)
+        if record is not None:
+            record.update(fields)
+            stage_wait._write_quiet(path, record)
+
+
+def _resume_close_landed(repo_root: Path, waiter: dict, sha: Optional[str]) -> Optional[bool]:
+    """Retire the waiter's token and ship its batons at the blocker's landed-marker `sha` through the
+    `dispatch.ship_hand_landed_batons` handler; True when shipped, None when held for the PM (no sha, or the
+    handler refused). An escrowed launcher child is left untouched, as `_refire_stage_waiter` does."""
+    from coordinator_core.ops.dispatch_emit import run_close_hand_landed
+
+    run_id = waiter["run_id"]
+    if escrowed(repo_root, run_id) is not None:
+        return False
+    from coordinator_core.ops.dispatch_emit import stranded_wait
+
+    if not sha:
+        stranded_wait.hold_close_landed(repo_root, waiter, sha, "no landed-marker sha")
+        return None
+    discard(repo_root, run_id)
+    try:
+        reply = run_close_hand_landed._handler({"run_id": run_id, "sha": sha}, repo_root=Path(repo_root))
+    except Exception as exc:  # noqa: BLE001 -- a raising handler is a refusal, never a resume
+        reply = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    if reply.get("ok"):
+        return True
+    stranded_wait.hold_close_landed(repo_root, waiter, sha, str(reply.get("error")))
+    return None
+
+
+def _resume_notify(repo_root: Path, waiter: dict) -> bool:
+    """Tell the live Group EM the wait ended; the session's start notice went out when the record started."""
+    from coordinator_core.ops.dispatch_emit.halt_split_tree import send_live_gem
+
+    return send_live_gem(Path(repo_root), f"stage wait of {waiter['run_id']} ended: its blockers cleared (resume_action notify)")
+
+
+def _resume_stage_waiter(repo_root: Path, waiter: dict, sha: Optional[str] = None) -> bool:
+    """Run the waiter's recorded `resume_action` (`refire`, `close_landed` at `sha`, `notify`) and stamp the
+    record `resumed_by` (`engine`, or `pm` after an attention flag), `session: null`, `action`, `sha`,
+    `resumed_at`; True when the action did its work. A refused `close_landed` is held as attention, unstamped."""
+    action = waiter.get("resume_action")
+    if action == "close_landed":
+        done = _resume_close_landed(repo_root, waiter, sha)
+    elif action == "notify":
+        done = _resume_notify(repo_root, waiter)
+    else:
+        action, done = "refire", _refire_stage_waiter(repo_root, waiter)
+    if done is not None:
+        _stamp_resume(repo_root, waiter["run_id"], {
+            "resumed_by": "pm" if waiter.get("pm_resolved") else "engine",
+            "session": None,
+            "action": action,
+            "sha": sha if action == "close_landed" else None,
+            "resumed_at": time.time(),
+        })
+    return bool(done)
+
+
+def _refire_stage_waiter(repo_root: Path, waiter: dict) -> bool:
     """Retire the waiter's token and spool its refire; True when a refire entry was spooled.
 
     A launcher child (a live escrow) is left untouched and spools nothing: its parked script holds in

@@ -28,7 +28,7 @@ RUN = "run1"
 SIZING = "state/sizings/20260101-a.yaml"
 REPORT = "reports/C1.md"
 _SID = "11111111-2222-3333-4444-555555555555"
-_VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
+_VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 _PARTIAL_REPORT = (
     "status: PARTIAL (C1 in-footprint delivered; 5 tests outside the footprint pin the old emitted text)\n\n"
     "Examined 2 paths, changed 2.\n"
@@ -91,7 +91,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     return root
 

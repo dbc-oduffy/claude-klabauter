@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import ask_compose, halt_remedy_class, stage_family, stage_family_binding
+from coordinator_core.ops.dispatch_emit import ask_compose, halt_remedy_class, stage_family
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
 _NODE = shutil.which("node")
@@ -24,7 +24,7 @@ _READ_ROW = {**_WRITE_ROW, "stage_role": "research"}
 
 
 def _script(monkeypatch) -> str:
-    monkeypatch.setattr(ask_compose, "load_sizing", lambda root, rel: {"stage_family_binding": stage_family_binding.BINDING_REF})
+    monkeypatch.setattr(ask_compose, "load_sizing", lambda root, rel: {"stage_families": {"review": "codex"}})
     return ask_compose.compose_ask_script(
         repo_root="REPO", prompt=None, sizing_rel="sizing.yaml", run_id="run-1", session_id=None,
         wrap_stage=lambda text: ("  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size", "Plan"]),

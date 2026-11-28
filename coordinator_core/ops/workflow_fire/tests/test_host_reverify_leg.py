@@ -134,6 +134,24 @@ def test_host_verify_drops_evicted_targets_and_all_evicted_is_not_a_failure(tmp_
     assert result["evicted_targets"] == ["tests/test_a.py"]
 
 
+def test_host_verify_keeps_the_leg_stamp_on_the_verdict_and_stamps_the_all_evicted_file(tmp_path, monkeypatch):
+    stamp = {"measured_at": "2026-11-24T20:00:00+00:00", "head_sha": "c" * 40}
+
+    def fake(repo, output, artifacts, targets, base, timeout, baseline_output=None):
+        return 0, {"status": "pass", "tests_run": 1, "tests_failed": 0, **stamp}
+
+    monkeypatch.setattr(headless, "_run_pinned_test_leg", fake)
+    params = _evicted_run(tmp_path, ["tests/test_a.py"], [])
+    result = headless._verify_test_leg(params, str(tmp_path), tmp_path / "art", 60, run_id="r1")
+    assert {k: result[k] for k in stamp} == stamp
+
+    params = _evicted_run(tmp_path / "all", ["tests/test_a.py"], ["tests/test_a.py"])
+    result = headless._verify_test_leg(params, str(tmp_path / "all"), tmp_path / "art", 60, run_id="r1")
+    saved = json.loads((tmp_path / "all" / "state/warp/r1/test-leg.json").read_text(encoding="utf-8"))
+    assert result["measured_at"] and "head_sha" in result
+    assert saved["measured_at"] == result["measured_at"] and saved["head_sha"] == result["head_sha"]
+
+
 def test_host_verify_reports_a_missing_declared_target_as_a_skip_not_a_pass(tmp_path, monkeypatch):
     """0db00a: 19 tests passed while the run's declared regression test was absent from the tree."""
     def fake(repo, output, artifacts, targets, base, timeout, baseline_output=None):

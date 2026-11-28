@@ -392,6 +392,58 @@ def test_live_gem_session_is_never_nudged_but_other_sessions_are(env, monkeypatc
     assert "turns before the first engine-ask" in nb.advisory_text(env.params())
 
 
+def _tool_use(env: Env, name: str, tool_input: dict) -> None:
+    env.n += 1
+    rec = {
+        "type": "assistant",
+        "message": {
+            "role": "assistant", "id": f"m{env.n}", "model": "x",
+            "content": [{"type": "tool_use", "name": name, "input": tool_input}],
+        },
+    }
+    with open(env.transcript, "ab") as fh:
+        fh.write(json.dumps(rec, separators=(",", ":")).encode() + b"\n")
+
+
+@pytest.mark.parametrize(
+    ("name", "tool_input"),
+    [
+        ("Skill", {"skill": "coordinator:new-project"}),
+        ("Skill", {"skill": "repo-setup"}),
+        ("Bash", {"command": "coordinator-invoke repo.setup --target x"}),
+        ("Bash", {"command": "python -m coordinator_core.ops.new_project_scaffold --name x"}),
+    ],
+)
+def test_new_project_skill_flow_is_never_nudged(env, name, tool_input):
+    env.turns(2)
+    _tool_use(env, name, tool_input)
+    env.turns(12)
+    assert nb.advisory_text(env.params()) == ""
+    env.turns(5)
+    assert nb.advisory_text(env.params()) == ""
+
+
+@pytest.mark.parametrize(
+    ("name", "tool_input"),
+    [
+        ("Skill", {"skill": "coordinator:review"}),
+        ("Bash", {"command": "ls new-project-notes"}),
+        ("Read", {"file_path": "docs/new-project.md"}),
+    ],
+)
+def test_other_tool_use_still_gets_the_nudge(env, name, tool_input):
+    _tool_use(env, name, tool_input)
+    env.turns(11)
+    assert "turns before the first engine-ask" in nb.advisory_text(env.params())
+
+
+def test_skill_flow_flag_only_counts_assistant_tool_use(env):
+    _user(env, "please run Skill new-project repo.setup")
+    _say(env, "I will use new-project and repo-setup")
+    env.turns(11)
+    assert "turns before the first engine-ask" in nb.advisory_text(env.params())
+
+
 @pytest.mark.parametrize("via", ["env", "transcript"])
 def test_interactive_session_still_gets_turn_budget_nudge(env, via):
     extra = {}

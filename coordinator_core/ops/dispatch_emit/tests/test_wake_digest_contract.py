@@ -709,3 +709,90 @@ def test_a_digest_that_requires_a_decision_never_reports_completed(tmp_path, unm
     assert (digest["decision_required"] is not None) is decision_raised
     assert digest["completed"] is (not decision_raised)
     assert (digest["outcome"] == "completed") is (not decision_raised)
+
+
+# --- vendored DoE wake digest 1.6.0: rag_use / halted_by ---------------------
+
+def _doe_digest(**extra):
+    d = {
+        "schema": "doe-wake-digest", "version": 1, "kind": "close",
+        "plan": {"path": "docs/plans/x.md", "deliverable_id": None},
+        "outcome": "complete",
+        "criterion": {"status": "met", "observation": None, "sidecar": None},
+        "decision_required": None, "em_may_think_differently": [], "overflow": 0,
+        "deviations": [], "assembled_by": "code",
+        "counts": {"reviewers": 0, "findings_applied": 0, "escalations": 0, "preflight_findings": 0},
+        "next_action": {"kind": "none", "op": None, "params": None},
+    }
+    d.update(extra)
+    return d
+
+
+def _rag_use(**overrides):
+    r = {
+        "installed": True, "tier": "ue", "tool_family": "project-rag",
+        "totals": {"rag_calls": 4, "grep_calls": 9},
+        "agents": [{
+            "agent_id": "a1", "agent_type": "Explore", "label": "sizing", "gated": True,
+            "rag_calls": 4, "rag_errors": 1, "grep_calls": 9, "verdict": "pass",
+        }],
+    }
+    r.update(overrides)
+    return r
+
+
+_DOE_SCHEMA_SOURCE_SHA = "80494a529c"  # coordinator-content-repo coordinator/schemas/doe-wake-digest.schema.json at 1.6.0
+_DOE_SCHEMA_SHA256 = "4e0536d3bb53ec4659afec656b74685b0f933903f4b5a099e0033e6224a5e309"
+
+
+def test_doe_schema_is_vendored_at_1_6_0():
+    assert wd.load_doe_schema()["x-schema-version"] == "1.6.0"
+
+
+def test_vendored_doe_schema_is_byte_identical_to_the_pinned_doe_blob():
+    import hashlib
+
+    blob = wd._DOE_SCHEMA_PATH.read_bytes()
+    assert hashlib.sha256(blob).hexdigest() == _DOE_SCHEMA_SHA256, (
+        f"vendored schema drifted from DoE blob {_DOE_SCHEMA_SOURCE_SHA}; re-vendor, do not edit"
+    )
+
+
+def test_doe_digest_without_rag_fields_still_validates():
+    assert wd.validate_doe_digest(_doe_digest()) == []
+
+
+def test_doe_digest_carrying_rag_use_validates():
+    assert wd.validate_doe_digest(_doe_digest(rag_use=_rag_use())) == []
+
+
+def test_doe_digest_refuses_an_invented_rag_use_key():
+    assert wd.validate_doe_digest(_doe_digest(rag_use=_rag_use(invented=1))) != []
+    bad_agent = _rag_use()
+    bad_agent["agents"][0]["invented"] = 1
+    assert wd.validate_doe_digest(_doe_digest(rag_use=bad_agent)) != []
+
+
+def test_doe_digest_refuses_a_rag_use_without_tier_or_rag_errors():
+    no_tier = _rag_use()
+    del no_tier["tier"]
+    assert wd.validate_doe_digest(_doe_digest(rag_use=no_tier)) != []
+    no_errors = _rag_use()
+    del no_errors["agents"][0]["rag_errors"]
+    assert wd.validate_doe_digest(_doe_digest(rag_use=no_errors)) != []
+    assert wd.validate_doe_digest(_doe_digest(rag_use=_rag_use(tier="max"))) != []
+
+
+def test_doe_digest_halted_by_requires_layer_and_queries_for_not_serving():
+    agent = {"agent_id": "a1", "agent_type": "Explore", "label": "sizing", "rag_calls": 0}
+    unused = {"halted": "example_retrieval_repo_unused", "agents": [agent]}
+    assert wd.validate_doe_digest(_doe_digest(halted_by=unused)) == []
+    not_serving = {"halted": "example_retrieval_repo_not_serving", "agents": []}
+    assert wd.validate_doe_digest(_doe_digest(halted_by=not_serving)) != []
+    with_layer = {**not_serving, "layer": "semantic", "queries": ["q"]}
+    assert wd.validate_doe_digest(_doe_digest(halted_by=with_layer)) == []
+
+
+def test_doe_digest_accepts_a_project_health_rag_degraded_item():
+    item = {"source": "project_health", "layer": "semantic", "verdict": "broken", "detail": "down"}
+    assert wd.validate_doe_digest(_doe_digest(rag_degraded=[item])) == []

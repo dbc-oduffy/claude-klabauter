@@ -51,7 +51,7 @@ def test_the_landing_records_its_paths_and_the_job_releases_them(tmp_path: Path,
     monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     monkeypatch.setattr(close_background, "_launch_close_review", lambda ctx: True)
     monkeypatch.setattr(
-        claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], [])
+        claims, "list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([("handoff", "b.md")], [])
     )
     out = land_run._handler(
         {"script_path": script, "incomplete_chunks": [], "session_id": driver.SESSION_ID,

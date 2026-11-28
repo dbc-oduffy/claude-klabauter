@@ -811,9 +811,77 @@ def release(owner: str, *, path: Optional[Path] = None) -> None:
         _LOG.warning("suite_mutex: release(%s) could not remove %s: %s", owner, path, exc)
 
 
+class _TrackedWork:
+    """Liveness of the work process tree a heartbeat vouches for.
+
+    Answers one question per tick, from ``root_pid``'s own tree only: is the
+    work still running? A root that is gone, a recycled pid, a zombie, or a root
+    that once had descendants (the real test process under a launcher) and now
+    has none while its own cpu time stood still across a tick, is finished
+    work. A root still burning cpu is busy in-process work and reads alive, so a
+    test that spawned one subprocess and then computes is never judged finished.
+    Doubt (psutil errors) reads alive, so a heartbeat is withheld only on
+    positive evidence.
+    """
+
+    def __init__(self, root_pid: int) -> None:
+        self._pid = root_pid
+        self._seen_descendants = False
+        self._created: Optional[float] = None
+        self._cpu: Optional[float] = None
+        try:
+            import psutil
+
+            root = psutil.Process(root_pid)
+            self._created = root.create_time()
+            self._seen_descendants = self._has_work_descendants(root)
+            self._cpu = self._cpu_total(root)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _cpu_total(proc) -> float:
+        times = proc.cpu_times()
+        return times.user + times.system
+
+    @staticmethod
+    def _has_work_descendants(proc) -> bool:
+        """True when ``proc`` has a descendant that is not a Windows console host."""
+        for child in proc.children(recursive=True):
+            try:
+                if child.name().lower() != "conhost.exe":
+                    return True
+            except Exception:
+                return True
+        return False
+
+    def alive(self) -> bool:
+        try:
+            import psutil
+        except ImportError:
+            return True
+        try:
+            proc = psutil.Process(self._pid)
+            if self._created is not None and proc.create_time() != self._created:
+                return False
+            if proc.status() == psutil.STATUS_ZOMBIE:
+                return False
+            cpu = self._cpu_total(proc)
+            busy = self._cpu is None or cpu != self._cpu
+            self._cpu = cpu
+            if self._has_work_descendants(proc):
+                self._seen_descendants = True
+                return True
+            return busy or not self._seen_descendants
+        except psutil.NoSuchProcess:
+            return False
+        except Exception:
+            return True
+
+
 @contextmanager
 def held(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = None,
-         path: Optional[Path] = None) -> Iterator[bool]:
+         path: Optional[Path] = None, track_pid: Optional[int] = None) -> Iterator[bool]:
     """Context manager holding the mutex for the block; yields whether it was acquired.
 
     ``with held(owner, cmd) as got:`` yields True when the mutex was acquired
@@ -822,16 +890,24 @@ def held(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = Non
     ceremony wants to abort. Release happens on normal exit and on exception
     alike, and only when this call actually acquired: a False yield releases
     nothing, so a failed acquire can never tear down the real holder's lock.
+
+    ``track_pid`` names the work process (the wrapped test child) whose tree the
+    heartbeat vouches for: while that tree is finished the beat is withheld, so a
+    lock outliving its work goes heartbeat-stale and a peer reclaims it within
+    ``HEARTBEAT_STALE_SECS`` even though this process lives. Beats resume if the
+    tree comes back alive. Without it the heartbeat tracks this process alone.
     """
     acquired = acquire(owner, cmd, timeout, pid=pid, path=path)
     stop = threading.Event()
     beat: Optional[threading.Thread] = None
     if acquired:
         touch_heartbeat(owner, path=path)
+        work = _TrackedWork(track_pid) if track_pid is not None else None
 
         def _beat() -> None:
             while not stop.wait(HEARTBEAT_INTERVAL_SECS):
-                touch_heartbeat(owner, path=path)
+                if work is None or work.alive():
+                    touch_heartbeat(owner, path=path)
 
         beat = threading.Thread(target=_beat, name="suite-mutex-heartbeat", daemon=True)
         beat.start()

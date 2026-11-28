@@ -136,7 +136,7 @@ def _reverts_only_own_writes(cmd: str, cwd: str, root: str, session_id: str) -> 
 def _check(cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]) -> Any:
     from coordinator_core.bash_guards._shell_write_projection import shell_writes
     from coordinator_core.hooks import _em_post_fire
-    from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
+    from coordinator_core.hooks._repo_root_walk import repo_root as _repo_root
 
     if cwd and not payload.get("cwd"):
         payload = dict(payload, cwd=cwd)

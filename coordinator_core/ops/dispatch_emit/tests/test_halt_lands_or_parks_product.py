@@ -90,10 +90,10 @@ def test_halted_land_parks_the_runs_product_and_leaves_no_run_dirt(repo):
 
     assert out["committed"] is True, out
     assert set(out["evicted"]) == {DONE_PY, OPEN_PY}
-    assert not (repo / OPEN_PY).exists()
-    assert (repo / DONE_PY).read_text(encoding="utf-8") == "VALUE = 0\n"
+    assert (repo / OPEN_PY).read_text(encoding="utf-8") == "OPEN = 1\n"
+    assert (repo / DONE_PY).read_text(encoding="utf-8") == "VALUE = 1\n"
     dirty = _dirty(repo)
-    assert not dirty & {DONE_PY, OPEN_PY, IDLE}, dirty
+    assert {DONE_PY, OPEN_PY} <= dirty and IDLE not in dirty, dirty
     index = json.loads((repo / REC / halt_tree_evict.EVICTED_FILE).read_text(encoding="utf-8"))
     assert set(index) == {DONE_PY, OPEN_PY}
     for entry in index.values():
@@ -132,12 +132,12 @@ def test_a_peer_held_product_path_is_not_parked(repo, monkeypatch):
     assert (repo / DONE_PY).read_bytes() == peer_bytes
 
 
-def test_a_refire_restores_the_parked_product(repo):
+def test_a_refire_finds_the_parked_product_already_in_the_tree(repo):
     params = _stage_run(repo)
     before = {p: (repo / p).read_bytes() for p in (DONE_PY, OPEN_PY)}
     land_run_halt.land(repo, repo, params)
 
     result = halt_tree_evict.restore(repo, repo / REC, owned_paths=[DONE_PY, OPEN_PY])
 
-    assert sorted(result["restored"]) == sorted([DONE_PY, OPEN_PY]) and result["drift"] == {}
+    assert result == {"restored": [], "drift": {}, "refused": {}}
     assert {p: (repo / p).read_bytes() for p in (DONE_PY, OPEN_PY)} == before

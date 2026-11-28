@@ -89,9 +89,9 @@ RESOLUTION PRIMITIVES -- REUSED, NEVER REIMPLEMENTED.
     operator has registered", which needs the full, open-ended set.
   - The publish-destination registry lookup (`_all_publish_destinations`,
     consumed by `target_is_publish_destination` / `publish_destination_owner`)
-    mirrors the `repos.*` lookup exactly, over the disjoint `publish.mirrors.*`
-    namespace instead -- same merge order, same `.path`-only membership
-    discipline, `.owner` carried alongside for context only. C1
+    names the open publish rounds' mirror clones (`publish_round.
+    live_round_mirrors`, one scandir) as the destination set, with
+    `publish.mirrors.<key>.owner` carried alongside for context only. C1
     (docs/plans/2026-08-03-narrow-write-confinement-bump.md).
 
 PATH COMPARISON -- BOTH OPERANDS RESOLVED AND CASE-FOLDED, per the plan's
@@ -169,6 +169,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.bash_guards._override_log_path import NO_SESSION_BUCKET
+from coordinator_core import publish_round
 from coordinator_core.bash_guards._write_bump_marker import resolve_gitdir
 from coordinator_core.bash_guards._write_bump_session_start import (
     _RECORD_FILENAME as _SESSION_RECORD_FILENAME,
@@ -211,14 +212,12 @@ _REGISTRY_REPOS_PREFIX = "repos."
 #: two copies together so they cannot drift silently.
 _CONTAINER_REGISTRY_KEYS = frozenset({"repos.fleet_root"})
 
-#: Prefix every enumerated registry key must carry to be treated as a
-#: publish-destination entry -- `publish.mirrors.<name>.path` /
+#: Prefix of the registry key carrying a mirror's owner --
 #: `publish.mirrors.<name>.owner`, disjoint from `_REGISTRY_REPOS_PREFIX` by
-#: construction (verified at HEAD -- see plan's § Design). C1
-#: (docs/plans/2026-08-03-narrow-write-confinement-bump.md).
+#: construction. A mirror clone's tree is never a registry value: it exists
+#: only inside an open publish round.
 _REGISTRY_PUBLISH_MIRRORS_PREFIX = "publish.mirrors."
 
-_PUBLISH_PATH_SUFFIX = ".path"
 _PUBLISH_OWNER_SUFFIX = ".owner"
 
 #: Append-only observability log filename (AC18), sibling to C0's own
@@ -994,72 +993,44 @@ def target_is_registered_repo(target_root: str, env: Optional[dict] = None) -> b
 
 
 def _all_publish_destinations(env: Optional[dict] = None) -> list:
-    """Every `(path, owner)` pair declared under a `publish.mirrors.<name>.*`
-    entry across the merged machine-local registry (`registry.toml` then
-    `registry.local.toml`, later wins -- identical merge order to
-    `_all_registered_repo_roots`, no second TOML parser).
+    """Every `(path, owner)` pair for the mirror clones of open publish rounds.
 
-    C1 (docs/plans/2026-08-03-narrow-write-confinement-bump.md).
+    `path` is a `publish_round.live_round_mirrors()` entry (`<round>/mirror-<key>`,
+    one scandir, no spawn); `owner` is the merged registry's
+    `publish.mirrors.<key>.owner` (`registry.toml` then `registry.local.toml`,
+    later wins; empty when undeclared). No round open yields an empty list.
 
-    DRIFT D4 -- the two mirrors' `.owner` keys live in DIFFERENT files at
-    HEAD (`publish.mirrors.coordinator_claude.owner` in `registry.toml`,
-    `publish.mirrors.claude_klabauter.owner` and BOTH `.path` values in
-    `registry.local.toml`). Reading only `registry.local.toml` would
-    silently lose `coordinator_claude`'s owner. The merge above reads both
-    files, exactly as `_all_registered_repo_roots` already does.
+    Fail open: an unreadable registry or an unset `paths.scratch_root` yields an
+    empty list, never raises.
 
-    DRIFT D5 -- an entry whose `.path` value is empty (declared but not
-    yet overridden -- the same shape `registry.toml`'s `repos.*` keys use
-    at HEAD) is skipped entirely; it must never resolve to the filesystem
-    root. `.owner` may still be declared for a name whose `.path` is empty
-    -- such a name simply does not appear in the returned list, since
-    there is no root to compare against yet.
-
-    Fail open: an unreadable/missing registry directory or file yields an
-    empty list (`_load_toml` already degrades to `{}`), never raises.
-
-    `env` is accepted for call-site symmetry with this module's other
-    functions but is not consulted directly -- registry LOCATION is
-    resolved the same way every other reader in this package resolves it
-    (`machine_resolver.registry_dir()`, which honours the real
-    `MACHINE_LOCAL_REGISTRY_DIR` process env var for test isolation, same
-    as `registry_get`).
+    `env` is accepted for call-site symmetry; registry LOCATION is resolved by
+    `machine_resolver.registry_dir()`, which honours `MACHINE_LOCAL_REGISTRY_DIR`.
     """
+    try:
+        mirrors = publish_round.live_round_mirrors()
+    except Exception:  # noqa: BLE001 -- a guard that cannot enumerate allows
+        return []
+    if not mirrors:
+        return []
     reg_dir = registry_dir()
     merged: dict = {}
     for fname in ("registry.toml", "registry.local.toml"):
-        flat = _flatten(_load_toml(Path(reg_dir) / fname))
-        merged.update(flat)
-    names = set()
-    for key in merged:
-        if key.startswith(_REGISTRY_PUBLISH_MIRRORS_PREFIX) and key.endswith(
-            _PUBLISH_PATH_SUFFIX
-        ):
-            name = key[len(_REGISTRY_PUBLISH_MIRRORS_PREFIX) : -len(_PUBLISH_PATH_SUFFIX)]
-            names.add(name)
+        merged.update(_flatten(_load_toml(Path(reg_dir) / fname)))
     destinations = []
-    for name in sorted(names):
-        path_key = f"{_REGISTRY_PUBLISH_MIRRORS_PREFIX}{name}{_PUBLISH_PATH_SUFFIX}"
-        owner_key = f"{_REGISTRY_PUBLISH_MIRRORS_PREFIX}{name}{_PUBLISH_OWNER_SUFFIX}"
-        raw_path = merged.get(path_key)
-        if isinstance(raw_path, list):
-            raw_path = "\n".join(str(i) for i in raw_path)
-        path_s = str(raw_path) if raw_path is not None else ""
-        if not path_s:
-            continue
-        raw_owner = merged.get(owner_key)
-        owner_s = str(raw_owner) if raw_owner is not None else ""
-        destinations.append((path_s, owner_s))
+    for mirror in sorted(mirrors):
+        key = mirror.name[len(publish_round.MIRROR_PREFIX) :]
+        raw_owner = merged.get(f"{_REGISTRY_PUBLISH_MIRRORS_PREFIX}{key}{_PUBLISH_OWNER_SUFFIX}")
+        destinations.append((str(mirror), str(raw_owner) if raw_owner is not None else ""))
     return destinations
 
 
 def _all_publish_destination_roots(env: Optional[dict] = None) -> list:
+    """Open publish rounds' mirror clone trees."""
     return [path for path, _owner in _all_publish_destinations(env=env)]
 
 
 def target_is_publish_destination(target_root: str, env: Optional[dict] = None) -> bool:
-    """Is `target_root` inside (or equal to) any `publish.mirrors.*.path`
-    entry in the machine-local registry?
+    """Is `target_root` inside (or equal to) any open publish round's mirror clone?
 
     Closed set, never a path-pattern match (plan § Anti-scope: "Do not
     match publish destinations by path pattern"). Membership alone decides

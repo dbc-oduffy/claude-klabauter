@@ -84,11 +84,12 @@ def test_a_sandbox_denied_record_write_neither_stalls_nor_blocks_the_mint(repo, 
 def test_a_denial_that_reaches_the_hook_is_refused_as_the_denial_with_its_remedy(repo) -> None:
     def emit(params, root):
         run_token.WRITE_GATE.get().begin()
-        raise PermissionError(13, DENIED)
+        raise PermissionError(13, DENIED, denied_dir)
 
+    denied_dir = str(repo / "state" / "warp")
     reply = _submit(repo, evaluate=lambda payload: mod.evaluate(payload, emit=emit))
     assert reply["refused"] == "gate-refused"
-    assert DENIED in reply["reason"] and ".git" in reply["reason"]
+    assert DENIED in reply["reason"] and denied_dir in reply["reason"] and "create that directory" in reply["reason"]
     assert STALL not in reply["reason"]
 
 
@@ -105,6 +106,46 @@ def test_a_slow_record_write_that_never_raises_still_refuses_as_a_stall(repo, mo
     reply = _submit(repo)
     assert reply["refused"] == "gate-refused"
     assert STALL in reply["reason"]
+
+
+def _sandbox_refusing_state_warp(monkeypatch, repo_root) -> None:
+    """The sandbox refuses the child's own create of `<repo>/state/warp`; a directory that already exists is fine."""
+    target = os.path.normcase(str(repo_root / "state" / "warp"))
+    real_mkdir = os.mkdir
+
+    def mkdir(path, *args, **kwargs):
+        if os.path.normcase(str(path)) == target:
+            raise PermissionError(5, DENIED, str(path))
+        return real_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "mkdir", mkdir)
+
+
+def _emit_writing_the_run_record_home(params, root):
+    from pathlib import Path
+
+    from coordinator_core.hooks.submit_engine_ask import _default_emit
+    from coordinator_core.session.record_homes import home_dir
+
+    Path(home_dir(str(root), "warp")).mkdir(parents=True, exist_ok=True)
+    return _default_emit(params, root)
+
+
+def test_the_run_record_home_is_refused_in_the_sandbox_unless_precreated(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    _sandbox_refusing_state_warp(monkeypatch, repo)
+    evaluate = lambda payload: mod.evaluate(payload, emit=_emit_writing_the_run_record_home)  # noqa: E731
+    reply = _submit(repo, evaluate=evaluate)
+    assert reply["refused"] == "gate-refused" and DENIED in reply["reason"] and "state" in reply["reason"]
+
+
+def test_a_precreated_run_record_home_lets_the_sandboxed_mint_proceed(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.codex_runner.sandbox_scratch import ensure_sandbox_scratch
+
+    ensure_sandbox_scratch(repo)
+    _sandbox_refusing_state_warp(monkeypatch, repo)
+    evaluate = lambda payload: mod.evaluate(payload, emit=_emit_writing_the_run_record_home)  # noqa: E731
+    reply = _submit(repo, evaluate=evaluate)
+    assert "refused" not in reply and reply["run_id"], reply
 
 
 def test_a_lock_home_denial_is_refused_naming_the_directory_and_the_grant(repo) -> None:

@@ -222,7 +222,7 @@ def test_light_python_modules_do_not_launch_heavy(command):
 )
 def test_denies_a_subagent_electron_or_dev_server(command):
     reason = _reason(check(_payload(command)))
-    assert "scoped_pytest" in reason and "Group EM slot" in reason
+    assert "scoped-pytest" in reason and "Group EM slot" in reason
 
 
 def test_denies_a_background_shell_storm_on_windows(monkeypatch):

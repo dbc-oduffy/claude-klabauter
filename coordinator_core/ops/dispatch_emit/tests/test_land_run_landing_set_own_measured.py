@@ -48,7 +48,7 @@ OTHER = "pkg/other.py"
 PEER_RUN = "ask-20261031T095959-ffffff"
 PEER_SESSION = "5e1f0000-0000-4000-8000-0000000000e3"
 LANDING_TREE_DIFFERS = "landing-tree-differs-from-measured"
-VERDICT = {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}
+VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 
 
 def _record(root, paths):

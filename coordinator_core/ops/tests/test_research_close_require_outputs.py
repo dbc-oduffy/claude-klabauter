@@ -84,6 +84,56 @@ def test_halted_segment_does_not_excuse_a_required_output(repo, scratch):
     assert out["halted_segments"] == ["repo-compare"]
 
 
+def _zero_source_close(repo: Path, scratch: Path, **extra) -> dict:
+    params = {
+        "scratch_dir": str(scratch), "tier": "corpus", "run_id": "r1", "topic_slug": "topic",
+        "segment_dirs": _SEGS,
+    }
+    params.update(extra)
+    return asyncio.run(_handler(params, repo / ".git"))
+
+
+def _assert_refused_without_commit(repo: Path, out: dict, head: str) -> None:
+    assert out["exit_code"] == 1 and out["committed"] is False, out
+    assert "no output files under any segment dir" in out["error"]
+    assert _git(repo, "rev-parse", "HEAD") == head and not (repo / "docs").exists()
+
+
+def test_every_segment_halted_with_only_root_strays_refuses_without_commit(repo, tmp_path):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    (scratch / "final.md").write_text("stray\n")
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _zero_source_close(repo, scratch, halted_segments=_SEGS)
+    _assert_refused_without_commit(repo, out, head)
+
+
+def test_present_but_empty_segment_dirs_refuse_without_commit(repo, tmp_path):
+    scratch = tmp_path / "scratch"
+    for seg in _SEGS:
+        (scratch / seg).mkdir(parents=True)
+    (scratch / "final.md").write_text("stray\n")
+    head = _git(repo, "rev-parse", "HEAD")
+    _assert_refused_without_commit(repo, _zero_source_close(repo, scratch), head)
+
+
+def test_empty_scratch_refuses_without_commit(repo, tmp_path):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    head = _git(repo, "rev-parse", "HEAD")
+    out = _zero_source_close(repo, scratch, halted_segments=_SEGS)
+    assert out["exit_code"] == 1 and out["committed"] is False, out
+    assert _git(repo, "rev-parse", "HEAD") == head
+
+
+def test_one_surviving_segment_file_still_closes_with_halted_siblings(repo, tmp_path):
+    scratch = tmp_path / "scratch"
+    (scratch / "repo-1-a").mkdir(parents=True)
+    (scratch / "repo-1-a" / "synthesis.md").write_text("syn\n")
+    out = _zero_source_close(repo, scratch, halted_segments=["repo-compare"])
+    assert out["exit_code"] == 0 and out["committed"] is True, out
+
+
 @pytest.mark.parametrize("bad", [["../x"], "repo-compare/comparison.md", [""], [3]])
 def test_escaping_entry_and_non_list_are_refused(repo, scratch, bad):
     head = _git(repo, "rev-parse", "HEAD")

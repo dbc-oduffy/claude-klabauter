@@ -53,6 +53,20 @@ def test_sample_keys_equal_fleet_live_fields_and_fill_from_readers():
     assert row["top_ram"][0]["rss_mb"] == 5
 
 
+def test_sample_carries_the_stamped_verdicts_the_fleet_row_has_keys_for(monkeypatch):
+    # The verdict keys ride the row only once fleet_live.FIELDS names them; the row is never widened here.
+    monkeypatch.setattr(fleet_live, "FIELDS", fleet_live.FIELDS + ("saturated", "mem_critical", "paused"))
+    verdicts = {"saturated": True, "mem_critical": True, "paused": 2, "top_cpu": [{"pid": 9}]}
+    row = capacity_probe.sample(now=1.0, readers={**READERS, "verdicts": lambda: verdicts})
+    assert (row["saturated"], row["mem_critical"], row["paused"]) == (True, True, 2)
+    assert row["top_cpu"] == [{"pid": 1, "comm": "a", "pcpu": 9.0}]  # the live ps list, not the stamped one
+
+
+def test_sample_without_verdict_keys_in_fields_leaves_the_row_unchanged():
+    row = capacity_probe.sample(now=1.0, readers={**READERS, "verdicts": lambda: {"saturated": True}})
+    assert "saturated" not in row and tuple(row) == tuple(fleet_live.FIELDS)
+
+
 def test_sample_never_raises_when_every_reader_fails():
     def boom():
         raise RuntimeError("x")

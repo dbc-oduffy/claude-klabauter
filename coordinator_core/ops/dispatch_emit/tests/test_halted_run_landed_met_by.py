@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -223,6 +224,29 @@ def test_a_completion_gate_halt_lands_once_the_judge_authored_met_is_recorded(tm
     out = _call(root, sha=after)
     assert out["ok"], out
     assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "landed"
+
+
+def _oracle_entry() -> dict:
+    return {
+        "owner": "oracle-team",
+        "closing_check": {"command": [sys.executable, "-c", "print('RED')"], "expect": "GREEN"},
+        "requester_citation": "PM 2026-11-23: 2) yes, but that needs to be flagged to me",
+    }
+
+
+def test_a_row_in_both_met_by_and_pending_oracle_refuses_naming_the_row(halted):
+    root, marker, _, _, after1, after2 = halted
+    out = _call(root, sha=after2, met_by={"R1": after1, "R2": after2}, pending_oracle={"R1": _oracle_entry()})
+    assert not out["ok"] and "R1" in out["error"] and "both met_by and pending_oracle" in out["error"], out
+    record = json.loads(marker.read_text(encoding="utf-8"))
+    assert record["status"] == "halted" and "met_by" not in record and "pending_oracle" not in record
+
+
+def test_met_by_for_one_row_and_pending_oracle_for_another_do_not_conflict(halted):
+    root, marker, _, _, after1, after2 = halted
+    out = _call(root, sha=after2, met_by={"R2": after1}, pending_oracle={"R1": _oracle_entry()})
+    assert not out["ok"] and out["pending_oracle_rows"] == ["R1"], out
+    assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "halted"
 
 
 RUNBASE = "warp-2026-11-18-runbase-20261118T000000-abcdef"

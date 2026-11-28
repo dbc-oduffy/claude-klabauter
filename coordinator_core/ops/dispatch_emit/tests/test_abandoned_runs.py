@@ -49,6 +49,13 @@ def test_young_run_not_abandoned():
     assert ar.abandoned_run_ids({f"{ROOT}/a/x.json"}, set(), ROOT, {"a": young}, NOW) == []
 
 
+def test_past_wall_run_reaped_despite_fresh_mtime_and_live_excludes_it():
+    young = NOW - 5
+    changed = {f"{ROOT}/a/x.json", f"{ROOT}/b/x.json"}
+    assert ar.abandoned_run_ids(changed, set(), ROOT, {"a": young, "b": young}, NOW, past_wall={"a"}) == ["a"]
+    assert ar.abandoned_run_ids(changed, {"a"}, ROOT, {"a": young, "b": young}, NOW, past_wall={"a"}) == []
+
+
 def test_missing_mtime_not_abandoned():
     assert ar.abandoned_run_ids({f"{ROOT}/a/x.json"}, set(), ROOT, {}, NOW) == []
 
@@ -911,10 +918,34 @@ def test_staged_run_whose_sizing_is_unshipped_stays_abandoned(bare):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_closed_halt_marker_reads_shipped_not_abandoned(bare):
+def test_closed_halt_marker_reads_closed_never_shipped_or_abandoned(bare):
     _terminal_run(bare, LANDED, "closed", "halted")
+
+    out = _reap(bare)
+
+    assert out["ok"] is True and LANDED in out["reaped"]
+    outcome = json.loads((bare / "state" / "run-evidence" / LANDED / "outcome.json").read_text(encoding="utf-8"))
+    assert outcome["state"] == "closed" and "halt_kind" not in outcome
+    assert "abandoned" not in _git(["log", "-1", "--format=%B"], bare)
+    assert ar._already_reaped(bare, LANDED, None, set()) is True
+    again = _reap(bare)
+    assert again["reaped"] == [] and again["committed_sha"] is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize("source", ["halted.json", "manifest.json"])
+def test_outcome_takes_sizing_rel_from_halted_or_manifest_when_run_json_is_absent(bare, source):
+    _terminal_run(bare, LANDED, "closed", "halted")
+    rec = bare / "state" / "warp" / LANDED
+    (rec / "run.json").unlink(missing_ok=True)
+    named = "state/sizings/2026-11/2026-11-01-x.yaml"
+    if source == "halted.json":
+        (rec / "halted.json").write_text(json.dumps({"status": "closed", "sizing_rel": named}), encoding="utf-8")
+    else:
+        (rec / "manifest.json").write_text(json.dumps({"sizing_rel": named}), encoding="utf-8")
 
     _reap(bare)
 
     outcome = json.loads((bare / "state" / "run-evidence" / LANDED / "outcome.json").read_text(encoding="utf-8"))
-    assert outcome["state"] == "shipped"
+    assert outcome["state"] == "closed" and outcome["sizing_rel"] == named

@@ -187,6 +187,37 @@ def test_export_writes_a_marker_and_reuses_a_valid_export(tmp_path: Path, monkey
     assert (dest / "sentinel").exists()
 
 
+def test_publish_running_from_a_commit_clone_of_the_sha_exports_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, sha1, _ = _engine_repo(tmp_path)
+    base = _managed(monkeypatch, tmp_path)
+    own_root = Path(publish.__file__).resolve().parents[2]
+
+    class _Clone:
+        @staticmethod
+        def _read_clone_marker(root: Path) -> dict:
+            return {"sha": sha1} if root == own_root else {}
+
+    monkeypatch.setattr(publish, "_commit_clone_module", lambda: _Clone)
+    assert publish._export_engine_at_ref(repo, sha1) == own_root
+    assert not base.exists()
+
+
+def test_export_leaves_out_test_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    publish._bootstrap_engine()
+    repo, _, _ = _engine_repo(tmp_path)
+    sha = _commit(repo, {
+        "coordinator_core/tests/test_x.py": "T\n",
+        "coordinator_core/sub/test_y.py": "T\n",
+        "coordinator_core/sub/real.py": "R\n",
+    }, "tests")
+    base = _managed(monkeypatch, tmp_path)
+    dest = publish._export_engine_at_ref(repo, sha)
+    assert dest == base / sha
+    assert (dest / "coordinator_core" / "sub" / "real.py").is_file()
+    assert not (dest / "coordinator_core" / "tests").exists()
+    assert not (dest / "coordinator_core" / "sub" / "test_y.py").exists()
+
+
 def test_export_missing_percolate_is_neither_reused_nor_seeded_from(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     publish._bootstrap_engine()
     repo, sha1, sha2 = _engine_repo(tmp_path)

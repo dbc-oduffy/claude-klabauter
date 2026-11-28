@@ -32,16 +32,7 @@ def _mirror(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def _mock_mirrors(monkeypatch: pytest.MonkeyPatch, _mirror):
-    def _fake_read_publish_mirrors():
-        return {
-            "coordinator_claude": {
-                "owner": "claude-central-em",
-                "path": str(_mirror),
-                "aliases": [],
-            }
-        }
-
-    monkeypatch.setattr(guard, "read_publish_mirrors", _fake_read_publish_mirrors)
+    monkeypatch.setattr(guard.publish_round, "live_round_mirrors", lambda: [_mirror])
     return _mirror
 
 
@@ -158,27 +149,17 @@ class TestHardwareGatedBoundary:
 
 
 class TestUnresolvableRegistry:
-    def test_no_mirrors_declared_allows(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setattr(guard, "read_publish_mirrors", lambda: {})
+    def test_no_open_round_allows(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(guard.publish_round, "live_round_mirrors", lambda: [])
         target = str(tmp_path / "coordinator-claude" / "cross-repo" / "inbox" / "x.md")
         result = guard.check(_payload(target))
         assert result is None
 
-    def test_mirror_with_no_path_allows(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setattr(
-            guard,
-            "read_publish_mirrors",
-            lambda: {"coordinator_claude": {"owner": "claude-central-em", "path": None, "aliases": []}},
-        )
-        target = str(tmp_path / "coordinator-claude" / "cross-repo" / "inbox" / "x.md")
-        result = guard.check(_payload(target))
-        assert result is None
-
-    def test_registry_read_raises_allows(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_round_scan_raises_allows(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         def _raise():
-            raise RuntimeError("registry unreadable")
+            raise RuntimeError("scratch root unreadable")
 
-        monkeypatch.setattr(guard, "read_publish_mirrors", _raise)
+        monkeypatch.setattr(guard.publish_round, "live_round_mirrors", _raise)
         target = str(tmp_path / "coordinator-claude" / "cross-repo" / "inbox" / "x.md")
         result = guard.check(_payload(target))
         assert result is None

@@ -5124,3 +5124,91 @@ def test_dry_run_flag_after_pathspec_separator_is_a_path_not_a_dry_run() -> None
 
 
 _HOST_CLEAN = ("git clean -f untracked.txt", "git clean -fd", "git clean -fdx")
+
+
+# --- read-only git beside a test command is never denied; a destructive segment still is ---
+
+_PYTEST = "python -m pytest coordinator_core/x/tests/test_y.py -q"
+_REPO = "D:/claude-klabauter"
+
+
+def _compound_verdict(command: str, agent_type: str = "coordinator:executor") -> str:
+    result = _enveloped(guard.check)(_payload(command, agent_type=agent_type))
+    return "deny" if result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny" else "allow"
+
+
+@pytest.mark.parametrize("agent_type", ["coordinator:executor", "coordinator:test-runner"])
+@pytest.mark.parametrize("operator", [";", "&&"])
+@pytest.mark.parametrize(
+    "git_segment",
+    [
+        f"git -C {_REPO} status",
+        f"git -C {_REPO} status --short",
+        f"git -C {_REPO} --no-optional-locks status --porcelain",
+        f"git -C {_REPO} config --get user.name",
+        f"git -C {_REPO} symbolic-ref HEAD",
+        f"git -C {_REPO} symbolic-ref --short -q HEAD",
+        f"git -C {_REPO} submodule status",
+        f"git -C {_REPO} sparse-checkout list",
+        f"git -C {_REPO} bisect log",
+    ],
+)
+def test_read_only_git_segment_beside_pytest_allows(git_segment, operator, agent_type) -> None:
+    assert _compound_verdict(f"{_PYTEST} {operator} {git_segment}", agent_type) == "allow"
+    assert _compound_verdict(f"{git_segment} {operator} {_PYTEST}", agent_type) == "allow"
+
+
+@pytest.mark.parametrize("operator", [";", "&&"])
+@pytest.mark.parametrize(
+    "git_segment",
+    [
+        f"git -C {_REPO} reset --hard",
+        f"git -C {_REPO} push --force origin main",
+        f"git -C {_REPO} stash",
+        f"git -C {_REPO} checkout -- a.py",
+        f"git -C {_REPO} config user.name evil",
+        f"git -C {_REPO} symbolic-ref HEAD refs/heads/other",
+        f"git -C {_REPO} symbolic-ref -d HEAD",
+        f"git -C {_REPO} symbolic-ref --delete HEAD",
+        f"git -C {_REPO} submodule update --init",
+        f"git -C {_REPO} sparse-checkout set a",
+        f"git -C {_REPO} bisect reset",
+        f"git -C {_REPO} gc",
+    ],
+)
+def test_destructive_git_segment_beside_pytest_still_denies(git_segment, operator) -> None:
+    assert _compound_verdict(f"{_PYTEST} {operator} {git_segment}") == "deny"
+    assert _compound_verdict(f"{git_segment} {operator} {_PYTEST}") == "deny"
+
+
+# --- a scratchpad fixture repo: `config --get` reads, a config write beyond the identity keys still denies ---
+
+
+@pytest.fixture
+def _scratchpad_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    import tempfile
+
+    temp = tmp_path / "tmp"
+    pad = temp / "claude" / "proj" / "sess-cfg" / "scratchpad"
+    fixture = pad / "fixture"
+    (fixture / ".git").mkdir(parents=True)
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    for var in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(var, str(temp))
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    return fixture, repo
+
+
+def _in_scratchpad_session(command: str, cwd: Path):
+    payload = _payload(command.replace("\\", "/"), agent_type="coordinator:executor", session_id="sess-cfg")
+    payload["cwd"] = str(cwd)
+    return guard.check(payload)
+
+
+def test_config_get_in_a_scratchpad_repo_allows_and_a_non_identity_write_still_denies(_scratchpad_fixture) -> None:
+    fixture, repo = _scratchpad_fixture
+    assert _in_scratchpad_session(f"git -C {fixture} config --get core.hooksPath", repo) is None
+    assert _in_scratchpad_session(f"git -C {fixture} config --get user.name", repo) is None
+    assert _in_scratchpad_session(f"git -C {fixture} config core.hooksPath evil", repo) is not None
+    assert _in_scratchpad_session(f"git -C {fixture} config alias.lg 'log --get'", repo) is not None

@@ -13,7 +13,7 @@ import time
 import pytest
 
 from coordinator_core import ipc
-from coordinator_core.ops.rulings import coverage, gate, index, search  # noqa: F401  (register ops)
+from coordinator_core.ops.rulings import challenge, coverage, gate, index, search  # noqa: F401  (register ops)
 from coordinator_core.rulings import store
 from coordinator_core.rulings.contract import Ruling
 
@@ -25,6 +25,12 @@ _CALLS = {
     "rulings.search": {"scope": ["plan.prep_gate"], "query": "private"},
     "rulings.gate": {"body": "plan.prep_gate scope is pending a PM ruling on thresholds?"},
     "rulings.coverage": {},
+    "deferral.challenge": {
+        "surface": "reviewer_unapplied",
+        "text": "Not now; follow-up later.",
+        "fields": {"unapplied_reason": "not now"},
+        "session_id": "budget-probe",
+    },
 }
 
 

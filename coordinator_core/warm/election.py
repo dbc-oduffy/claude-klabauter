@@ -94,6 +94,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Callable, Optional
@@ -102,6 +103,7 @@ from coordinator_core.warm.engine_root import current_engine_clone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import threading
     from socket import socket
 
 __all__ = [
@@ -110,6 +112,7 @@ __all__ = [
     "InsecureRuntimeDirError",
     "SocketPathTooLongError",
     "current_user_sid",
+    "sandbox_principal_sids",
     "pipe_name",
     "elect",
     "SOCKET_SUFFIX",
@@ -126,6 +129,11 @@ __all__ = [
     "elect_unix_socket",
     "elect_exclusive_lock",
     "release_exclusive_lock",
+    "install_predecessor",
+    "retire_predecessor",
+    "retire_superseded_server",
+    "RETIRE_TERMINATED",
+    "RETIRE_NOT_VERIFIED",
     "socket_identity",
     "unlink_if_owned",
 ]
@@ -265,6 +273,78 @@ def pipe_name(
     return f"\\\\.\\pipe\\coordinator-core.{sid}.{clone_hash}.{engine_token}"
 
 
+_SID_TEXT = re.compile(r"^S-1-[0-9-]+$")
+
+SANDBOX_PRINCIPALS_KEY = "warm.sandbox_principals"
+DEFAULT_SANDBOX_PRINCIPALS = ("CodexSandboxUsers",)
+
+
+def _configured_sandbox_principals() -> tuple:
+    from coordinator_core.machine_resolver import registry_get
+
+    raw = registry_get(SANDBOX_PRINCIPALS_KEY)
+    if raw is None:
+        return DEFAULT_SANDBOX_PRINCIPALS
+    names = tuple(n.strip() for n in str(raw).replace(";", ",").split(",") if n.strip())
+    return names or DEFAULT_SANDBOX_PRINCIPALS
+
+
+def _lookup_account_sid(name: str) -> Optional[str]:
+    """SID string for account ``name`` via ``LookupAccountNameW``, or ``None``
+    when it does not resolve on this machine."""
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32.LookupAccountNameW.argtypes = [
+        wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.LookupAccountNameW.restype = wintypes.BOOL
+    advapi32.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+
+    sid_size = wintypes.DWORD(0)
+    dom_size = wintypes.DWORD(0)
+    use = wintypes.DWORD(0)
+    advapi32.LookupAccountNameW(None, name, None, ctypes.byref(sid_size), None, ctypes.byref(dom_size), ctypes.byref(use))
+    if not sid_size.value:
+        return None
+    sid_buf = ctypes.create_string_buffer(sid_size.value)
+    dom_buf = ctypes.create_unicode_buffer(max(dom_size.value, 1))
+    if not advapi32.LookupAccountNameW(
+        None, name, sid_buf, ctypes.byref(sid_size), dom_buf, ctypes.byref(dom_size), ctypes.byref(use)
+    ):
+        return None
+    str_sid = wintypes.LPWSTR()
+    if not advapi32.ConvertSidToStringSidW(sid_buf, ctypes.byref(str_sid)):
+        return None
+    try:
+        return str_sid.value
+    finally:
+        kernel32.LocalFree(str_sid)
+
+
+@functools.lru_cache(maxsize=1)
+def sandbox_principal_sids() -> tuple:
+    """SIDs of the sandbox principals a pipe DACL admits beyond the owner:
+    settings key ``warm.sandbox_principals`` (comma-separated account names),
+    default ``CodexSandboxUsers``, each resolved in-process. An unresolvable
+    name contributes nothing. Windows-only; empty elsewhere. Cached."""
+    if not _is_windows():
+        return ()
+    sids = []
+    for name in _configured_sandbox_principals():
+        try:
+            resolved = _lookup_account_sid(name)
+        except OSError:
+            resolved = None
+        if resolved and _SID_TEXT.match(resolved) and resolved not in sids:
+            sids.append(resolved)
+    return tuple(sids)
+
+
 @functools.lru_cache(maxsize=1)
 def current_logon_sid() -> Optional[str]:
     """The calling process's logon-session SID (``S-1-5-5-X-Y``), or ``None``
@@ -397,7 +477,7 @@ def elect(name: str, *, user_sid: Optional[str] = None) -> int:
     security_attributes = _build_security_attributes(sid)
 
     try:
-        return _winapi.CreateNamedPipe(
+        handle = _winapi.CreateNamedPipe(
             name,
             _winapi.PIPE_ACCESS_DUPLEX | _winapi.FILE_FLAG_FIRST_PIPE_INSTANCE,
             _winapi.PIPE_TYPE_MESSAGE | _PIPE_READMODE_BYTE | _winapi.PIPE_WAIT,
@@ -411,6 +491,148 @@ def elect(name: str, *, user_sid: Optional[str] = None) -> int:
         if getattr(exc, "winerror", None) == ERROR_ACCESS_DENIED:
             raise ElectionLost(name) from exc
         raise
+    _retire_predecessor_if_warm_server()
+    return handle
+
+
+#: The election's per-install gap. The endpoint name embeds the engine token,
+#: so ``FILE_FLAG_FIRST_PIPE_INSTANCE`` / ``bind`` only exclude a second server
+#: of the SAME generation: a successor with a new token wins its own endpoint
+#: while a predecessor that never drained (its idle watchdog starved, or the
+#: root is unstamped so ``token_stale`` is always False) keeps serving, and two
+#: servers answer for one install. The breadcrumb is the install's single
+#: current-generation record, so a winner reads the predecessor off it BEFORE
+#: overwriting it and retires that pid after a drain-ceiling grace.
+RETIRE_GRACE_MARGIN_SECS = 5.0
+RETIRE_TERMINATED = "terminated"
+RETIRE_NOT_VERIFIED = "not-verified"
+_START_EPOCH_TOLERANCE_SECS = 1
+
+
+def _running_as_warm_server() -> bool:
+    """True only in the process whose ``__main__`` is ``warm/server.py``: the
+    retirement must never fire from a test, a client or the supervisor that
+    merely calls ``elect``."""
+    main_file = getattr(sys.modules.get("__main__"), "__file__", None)
+    if not main_file:
+        return False
+    path = Path(main_file)
+    return path.name == "server.py" and path.parent.name == "warm"
+
+
+def install_predecessor(
+    engine_clone: Optional[Path] = None, *, self_pid: Optional[int] = None
+) -> Optional[tuple]:
+    """``(pid, start_epoch)`` the install's breadcrumb names as the current server,
+    or ``None`` when it names nothing verifiable or names ``self_pid``. A record
+    without a positive start epoch is never returned: a pid alone is not an identity."""
+    from coordinator_core.warm.breadcrumb import read_breadcrumb
+
+    record = read_breadcrumb(engine_clone)
+    if not record:
+        return None
+    pid = record.get("pid")
+    epoch = record.get("stable_pid_start_epoch")
+    for value in (pid, epoch):
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            return None
+    if pid == (self_pid if self_pid is not None else os.getpid()):
+        return None
+    return pid, epoch
+
+
+def _process_start_epoch(pid: int) -> Optional[int]:
+    from coordinator_core.session.core import _win_create_time_epoch
+
+    try:
+        return _win_create_time_epoch(pid)
+    except Exception:  # noqa: BLE001 -- an unreadable identity is never a kill verdict
+        return None
+
+
+def _terminate_process_tree(pid: int) -> None:
+    import psutil
+
+    try:
+        root = psutil.Process(pid)
+        victims = root.children(recursive=True) + [root]
+    except psutil.Error:
+        return
+    for proc in victims:
+        try:
+            proc.terminate()
+        except psutil.Error:
+            pass
+    psutil.wait_procs(victims, timeout=2.0)
+    for proc in victims:
+        try:
+            if proc.is_running():
+                proc.kill()
+        except psutil.Error:
+            pass
+
+
+def retire_predecessor(
+    pid: int,
+    start_epoch: int,
+    *,
+    grace_secs: float,
+    start_epoch_of: Callable[[int], Optional[int]] = _process_start_epoch,
+    terminate: Callable[[int], None] = _terminate_process_tree,
+    sleep: Optional[Callable[[float], None]] = None,
+) -> str:
+    """After ``grace_secs`` (the predecessor's own drain window), terminate
+    ``pid`` and its workers iff it is still the process born at ``start_epoch``.
+    A dead, reused or unreadable pid is left alone (``RETIRE_NOT_VERIFIED``)."""
+    import time as _time
+
+    (sleep or _time.sleep)(grace_secs)
+    current = start_epoch_of(pid)
+    if current is None or abs(current - start_epoch) > _START_EPOCH_TOLERANCE_SECS:
+        return RETIRE_NOT_VERIFIED
+    terminate(pid)
+    return RETIRE_TERMINATED
+
+
+def retire_superseded_server(
+    engine_clone: Optional[Path] = None, *, grace_secs: Optional[float] = None
+) -> Optional["threading.Thread"]:
+    """Read the install's predecessor off the breadcrumb (call BEFORE the winner
+    rewrites it) and retire it on a daemon thread after the drain grace. Returns
+    the thread, or ``None`` when there is no predecessor. Never raises."""
+    import threading
+
+    try:
+        prior = install_predecessor(engine_clone)
+        if prior is None:
+            return None
+        if grace_secs is None:
+            from coordinator_core.warm.lifecycle import _drain_ceiling_secs
+
+            grace_secs = _drain_ceiling_secs() + RETIRE_GRACE_MARGIN_SECS
+        pid, epoch = prior
+        print(
+            f"[warm-server] retiring predecessor pid {pid} after {grace_secs:.0f}s: "
+            "one warm server per install",
+            file=sys.stderr,
+        )
+        thread = threading.Thread(
+            target=retire_predecessor,
+            args=(pid, epoch),
+            kwargs={"grace_secs": grace_secs},
+            name="warm-retire-predecessor",
+            daemon=True,
+        )
+        thread.start()
+        return thread
+    except Exception as exc:  # noqa: BLE001 -- retirement never blocks the winner's boot
+        print(f"[warm-server] predecessor retirement not armed: {exc!r}", file=sys.stderr)
+        return None
+
+
+def _retire_predecessor_if_warm_server() -> None:
+    if _running_as_warm_server():
+        retire_superseded_server()
 
 
 SOCKET_SUFFIX = ".sock"
@@ -814,6 +1036,7 @@ def elect_unix_socket(
                 pass
             unlink_if_owned(path, bound_identity)
             raise
+        _retire_predecessor_if_warm_server()
         return sock
     finally:
         _release_election_lock(lock_fd)

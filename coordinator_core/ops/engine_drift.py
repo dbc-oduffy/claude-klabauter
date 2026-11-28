@@ -43,7 +43,7 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional
 
-from coordinator_core.engine_version import MIN_KNOWN_GOOD_SHA, resolve_engine_source_head
+from coordinator_core.engine_version import MIN_KNOWN_GOOD_SHA, engine_identity, resolve_engine_source_head
 from coordinator_core.git.run import run_git
 from coordinator_core.git_scope import (
     PROBE_NO,
@@ -247,20 +247,6 @@ def _read_origin_candidate(engine_dir: Path) -> Optional[str]:
     return None
 
 
-def _merge_parent_is(head, candidate: str, engine_dir: Path) -> bool:
-    """True when HEAD is an unstamped merge whose same-tree stamped parent is `candidate`.
-
-    Installed main is a merge of candidate, so comparing the merge HEAD itself to
-    origin/candidate never matches. In-process object read: no spawn.
-    """
-    if head.basis != "merge-parent" or head.engine_head is None:
-        return False
-    from coordinator_core.git.git_state import read_commit
-
-    info = read_commit(engine_dir, head.engine_head)
-    return info is not None and any(_same_commit(p, candidate) for p in info.parents)
-
-
 def _mirror_only_verdict(head, floor: str, engine_dir: Path) -> dict:
     """Verdict for a mirror with no registered source tree, from the clone's own refs.
 
@@ -283,7 +269,7 @@ def _mirror_only_verdict(head, floor: str, engine_dir: Path) -> dict:
                 "is unreadable in the engine clone. Fetch origin in the engine checkout."
             ),
         }
-    if _same_commit(head.engine_head, candidate) or _merge_parent_is(head, candidate, engine_dir):
+    if _same_commit(head.engine_head, candidate):
         return {
             "state": "current",
             "running_sha": head.sha,
@@ -308,17 +294,19 @@ def _mirror_only_verdict(head, floor: str, engine_dir: Path) -> dict:
 def probe_engine_drift(engine_dir: Optional[Path] = None) -> dict:
     """Probe the engine at `engine_dir` (default: the running engine's own checkout).
 
-    Resolves the source-head, picks the ancestry repo (the engine repo for a source
-    tree; engine_root.engine_source_root() for a mirror, None when unregistered), and
-    delegates the three-state decision to classify_drift(). Adds `basis` and
-    `engine_head`. `running_sha` is the source-head that was checked.
+    `running_sha` is `engine_identity(...).sha` (the published `_engine_stamp` sha when
+    stamped, else the source head). The source-head resolution still picks the ancestry
+    repo (the engine repo for a source tree; engine_root.engine_source_root() for a
+    mirror, None when unregistered); classify_drift() makes the three-state decision.
+    Adds `basis` (the identity's), `source_head` (lag beside `running_sha`) and `engine_head`.
     """
     from coordinator_core.engine_root import engine_source_root
 
-    engine_dir = engine_dir if engine_dir is not None else Path(__file__).resolve().parents[2]
-    head = resolve_engine_source_head(engine_dir)
+    engine_dir = engine_dir if engine_dir is not None else Path(__file__).resolve().parent.parent
+    ident = engine_identity(engine_dir)
+    head = resolve_engine_source_head(engine_dir)._replace(sha=ident.sha)
     floor = MIN_KNOWN_GOOD_SHA
-    mirror = head.basis in ("mirror-stamp", "merge-parent", "stamp-file")
+    mirror = head.basis == "mirror-stamp"
 
     repo: Optional[Path]
     if mirror:
@@ -347,7 +335,8 @@ def probe_engine_drift(engine_dir: Optional[Path] = None) -> dict:
             head.sha, floor, is_behind, diagnose,
             unresolved_cause=CAUSE_MIRROR_UNSTAMPED if mirror else None,
         )
-    result["basis"] = head.basis
+    result["basis"] = ident.basis
+    result["source_head"] = ident.source_head
     result["engine_head"] = head.engine_head
     return result
 
@@ -360,13 +349,7 @@ def _engine_drift(params: dict, repo_root=None) -> dict:
     repo_root: unused — this op inspects the engine's OWN checkout (Path(__file__)),
     not the caller's repo.
 
-    Returns probe_engine_drift()'s result: state, running_sha (the source-head
-    checked), floor_sha, basis, engine_head, plus offer/notice/cause per state.
+    Returns probe_engine_drift()'s result: state, running_sha (the engine identity
+    checked), floor_sha, basis, source_head, engine_head, plus offer/notice/cause per state.
     """
-    result = probe_engine_drift()
-    from coordinator_core import agy_grant_guard
-
-    tamper = agy_grant_guard.read_marker()
-    if tamper:
-        result["agy_grant_tamper"] = tamper
-    return result
+    return probe_engine_drift()

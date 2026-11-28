@@ -14,6 +14,7 @@ import pytest
 
 from coordinator_core import engine_root as engine_root_module
 from coordinator_core.install.engine_root_for_install import (
+    is_scratch_engine_root,
     resolve_engine_root_for_install,
 )
 from coordinator_core.warm import engine_root as warm_engine_root_module
@@ -123,6 +124,23 @@ def test_claude_klabauter_dev_case_self_unstamped_falls_to_none(tmp_path, monkey
     assert result.root is None
     assert result.remediation is not None
     assert "machine-local set repos.claude_klabauter" in result.remediation
+
+
+def test_scratch_predicate_flags_a_tree_under_a_repo_scratch_dir(tmp_path):
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    assert is_scratch_engine_root(tmp_path / "repo" / "scratch" / "arm-x")
+    assert is_scratch_engine_root(str(tmp_path / "repo" / "scratch" / "a" / "b"))
+
+
+def test_scratch_predicate_accepts_a_repo_root_and_a_scratch_named_dir_outside_a_repo(tmp_path):
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    assert not is_scratch_engine_root(tmp_path / "repo")
+    assert not is_scratch_engine_root(tmp_path / "repo" / "engine")
+    assert not is_scratch_engine_root(tmp_path / "loose" / "scratch" / "engine")
+
+
+def test_scratch_predicate_does_not_raise_on_a_missing_path(tmp_path):
+    assert is_scratch_engine_root(tmp_path / "does" / "not" / "exist") is False
 
 
 def test_no_published_engine_registry_key_absent_or_unstamped(tmp_path, monkeypatch):

@@ -35,6 +35,8 @@ _BARE_ARGV0 = re.compile(
     r"(?<![\w./\\-])(?<!bare `)(python3?)(?=[ \t]+(?:-m[ \t]+(?!coordinator_core\b)\w|-c[ \t]|[^\s`'\"<>|;&-]*[/\\][^\s`]*|[^\s`/\\]+\.py\b))"
 )
 # Trap: a wrapper that leaves COORDINATOR_ENGINE_ROOT unset makes a child's `import coordinator_core` fail.
+# Trap: engine-site belongs on this process's sys.path only; in the child env it shadows a consumer pytest's own
+# third-party versions (tree-sitter cotenant conflict), so PYTHONPATH carries the engine root alone.
 _BOOTSTRAP = (
     "import os,runpy,sys;"
     "from pathlib import Path;"
@@ -45,7 +47,7 @@ _BOOTSTRAP = (
     "site=str(engine_site_dir(home));"
     "paths=[root,site] if stamp(home)==tuple(sys.version_info[:2]) else [root];"
     "sys.path[:1]=paths;"
-    "os.environ['PYTHONPATH']=os.pathsep.join(paths);"
+    "os.environ['PYTHONPATH']=root;"
     "os.environ['COORDINATOR_ENGINE_ROOT']=root;"
     "runpy.run_module(sys.argv.pop(1),run_name='__main__',alter_sys=True)"
 )

@@ -86,6 +86,8 @@ def test_build_writes_a_record_whose_script_and_verdict_equal_the_inline_path(re
     rd = record_dir(repo, RUN)
     record = hrb.build(repo, RUN)
     stored = hrr.read(rd, 1000)
+    launch = stored.pop(hrr.LAUNCH_IDENTITY_FIELD)
+    assert launch["sha"] == hrr.engine_sha()
     assert stored == json.loads(json.dumps(record))
     script = (repo / stored["composed_script_rel"]).read_text(encoding="utf-8")
     assert script and "phases" in script

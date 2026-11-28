@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -98,7 +99,7 @@ def withheld_register_rows(worktree_root: Path, plan_path: Optional[str], criter
 
 def register_gate(
     worktree_root: Path, plan_path: Optional[str], inline_review: dict, ledger_judged: Sequence[str] = (),
-    *, run_id: Optional[str] = None,
+    *, run_id: Optional[str] = None, verdict_covers_unclaimed: bool = False,
 ) -> Optional[str]:
     """Demote a ``met`` criterion to ``not_met`` when a row this plan claims in its
     cited register-bearing sizing is not judged met, wired, on its register surface
@@ -108,6 +109,8 @@ def register_gate(
     A claimed row in ``withheld_register_rows`` stays open and never demotes. ``ledger_judged`` names rows the run's passed requirements ledger already judged: they are
     not owed to a plan, and a judge verdict of ``met`` on one needs no wired/observed_ref evidence. Embedded PM turns are owed only when cited or timestamped after the run's
     submission; ``run_id`` (else the sizing's ``resolution.run_id``) locates that submission.
+    ``verdict_covers_unclaimed`` (a recorded rejudge) lets a claimant-less row the verdict judges
+    met, wired and observed pass the orphan check, since the write-back claims and stamps it.
     """
     criterion = inline_review.get("criterion")
     if not plan_path or not isinstance(criterion, dict) or criterion.get("status") != "met":
@@ -197,7 +200,14 @@ def register_gate(
         criterion["observation"] = reason
         return reason
     if is_own and register is not None:
-        orphan = rr.blocking_unclaimed(register, [r.get(rr.ROW_ID) for r in claimed] + list(ledger_judged))
+        covered = [
+            rid for rid, got in judged.items()
+            if verdict_covers_unclaimed and got.get(rr.ROW_STATUS) == rr.STATUS_MET
+            and got.get(rr.ROW_WIRED) is True and str(got.get(rr.JUDGE_OBSERVED_REF) or "").strip()
+        ]
+        orphan = rr.blocking_unclaimed(
+            register, [r.get(rr.ROW_ID) for r in claimed] + list(ledger_judged) + covered
+        )
         if orphan is not None:
             reason = f"register row {orphan}: owed and claimed by no plan"
             criterion["status"] = "not_met"
@@ -209,11 +219,15 @@ def register_gate(
 
 def register_writeback(
     worktree_root: Path, plan_path: Optional[str], inline_review: Optional[dict], sha: str,
-    also_claim: Sequence[str] = (),
+    also_claim: Sequence[str] = (), *, verdict_ref: Optional[str] = None,
 ) -> dict:
     """Cascade the judge's per-row verdicts into the cited sizing's register and recompute its
     rollup, in place; the caller adds ``sizing`` to the coded-stamp commit's paths. ``also_claim``
     names row ids the plan claims beyond its frontmatter (rows the requirements ledger judged).
+    ``verdict_ref`` (the recorded rejudge's repo-relative path) applies the verdict to every
+    open/partial row it judges met, claimed or not; a met, wired verdict with an ``observed_ref``
+    but no command/observed is stamped wired on that ref, and ``met_by`` names ``<verdict>@<sha>``.
+    The rows still refusing a ship return as ``register_unreconciled``.
 
     Returns ``{}`` when nothing applies, ``{"register_sizing": rel}`` on a write, or
     ``{"register_writeback_error": reason}`` when the result fails the sizing schema (the file is
@@ -242,10 +256,18 @@ def register_writeback(
     schema_path = Path(__file__).parent.parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
     now = datetime.now(timezone.utc)
 
+    owed: list = []
+    verdicts = _verdict_evidence(judged, verdict_ref) if verdict_ref else judged
+
     def mutate(old: str) -> str:
         if rr.read_register(old) is None:
             raise MutateAbort("")
-        new = rr.apply_verdicts(old, judged, plan_path, sha, now, claim_ids)
+        if verdict_ref:
+            new, still = rr.reconcile_open_rows(old, verdicts, plan_path, sha, now, claim_ids)
+            owed[:] = still
+            new = _name_verdict_in_met_by(old, new, plan_path, sha, f"{verdict_ref}@{sha}", now)
+        else:
+            new = rr.apply_verdicts(old, judged, plan_path, sha, now, claim_ids)
         if new == old:
             raise MutateAbort("")
         try:
@@ -263,4 +285,45 @@ def register_writeback(
         return {"register_writeback_error": reason} if reason else {}
     except Exception as exc:  # noqa: BLE001 -- lock timeout, I/O: refuse, keep the commit
         return {"register_writeback_error": f"register write-back refused: {exc!r}"}
-    return {"register_sizing": sizing_rel}
+    return {"register_sizing": sizing_rel, **({"register_unreconciled": owed} if owed else {})}
+
+
+def _verdict_evidence(judged: Sequence[dict], verdict_ref: str) -> list:
+    """``judged`` with each met, wired verdict that has an ``observed_ref`` but no command/observed
+    given the evidence pair the register row records, so the write-back agrees with the gate that
+    admitted it."""
+    from coordinator_core.ops import requirement_register as rr
+
+    out: list = []
+    for row in judged:
+        observed = str(row.get(rr.JUDGE_OBSERVED_REF) or "").strip()
+        if row.get(rr.ROW_WIRED) is True and rr.wired_evidence(row) is None and observed:
+            row = {**row, "command": f"recorded judge verdict {verdict_ref}", "observed": observed}
+        out.append(row)
+    return out
+
+
+def _name_verdict_in_met_by(
+    old: str, new: str, plan_path: str, sha: str, verdict_ref: str, now: "datetime"
+) -> str:
+    """``new`` with each ``met_by`` entry the write-back just added as ``<plan>@<sha>`` renamed
+    ``verdict_ref``; ``old`` when nothing but ``last_progress_at`` differs after that rename (a repeat)."""
+    from coordinator_core.ops import requirement_register as rr
+
+    old_reg, new_reg = rr.read_register(old), rr.read_register(new)
+    if old_reg is None or new_reg is None or new == old:
+        return new
+    auto = f"{str(plan_path).replace(chr(92), '/').removeprefix('./')}@{sha}"
+    prior = {str(r.get(rr.ROW_ID)): list(r.get(rr.ROW_MET_BY) or []) for r in old_reg.rows}
+    for row in new_reg.rows:
+        added = [m for m in row.get(rr.ROW_MET_BY) or [] if m not in prior.get(str(row.get(rr.ROW_ID)), ())]
+        if auto in added:
+            met_by = [verdict_ref if m == auto else m for m in row[rr.ROW_MET_BY]]
+            row[rr.ROW_MET_BY] = list(dict.fromkeys(met_by))
+
+    def settled(rows: Sequence[dict]) -> list:
+        return [{k: v for k, v in r.items() if k != rr.ROW_LAST_PROGRESS_AT} for r in rows]
+
+    if settled(old_reg.rows) == settled(new_reg.rows):
+        return old
+    return rr.write_register_text(new, {**new_reg.raw, rr.ROWS_KEY: new_reg.rows}, now)

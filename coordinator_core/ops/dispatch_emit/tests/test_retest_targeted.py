@@ -1436,6 +1436,7 @@ def test_isolated_body_exports_the_overlay_sha_when_the_record_names_one(tmp_pat
     monkeypatch.setattr(le, "build_head_export", build)
     monkeypatch.setattr(retest_targeted, "_landing_paths", lambda *a: (["a.py"], "t"))
     monkeypatch.setattr(retest_targeted, "_overlay_sha", lambda root, rid: "b" * 40)
+    monkeypatch.setattr(retest_targeted, "_untracked_at_overlay", lambda *a: [])
     retest_targeted._isolated_body(tmp_path, tmp_path / "r.json", tmp_path / "l.log", "r1", {}, ["a.py"], [], "", None, None, None)
     assert calls == [([], "b" * 40)]
     monkeypatch.setattr(retest_targeted, "_overlay_sha", lambda root, rid: None)

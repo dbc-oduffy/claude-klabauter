@@ -140,10 +140,12 @@ class EngineIdentity(NamedTuple):
 
 
 def engine_identity(engine_dir: Path | None = None) -> EngineIdentity:
-    """The one identity every engine reader reports: stamp first, head second.
+    """The one identity every engine reader reports: source-head record, stamp, head.
 
-    `sha` is the published `_engine_stamp` sha (basis "published-stamp") when the
-    tree carries a readable one, else `resolve_engine_source_head(...).sha`
+    `sha` is the publish round's `_engine_source_head` record (basis
+    "published-source-head") when the tree carries a readable one; else the
+    published `_engine_stamp` sha (basis "published-stamp", an older mirror);
+    else `resolve_engine_source_head(...).sha`
     (basis "source-tree", or "mirror-stamp" for an unstamped mirror).
     `source_head` is always the source-head resolution, so a publish lagging the
     source head is visible beside `sha` rather than hidden by it. Never raises;
@@ -164,9 +166,12 @@ def engine_identity(engine_dir: Path | None = None) -> EngineIdentity:
             root = start.parent if start.name == "coordinator_core" else start
         from coordinator_core.warm import skew
 
+        recorded = skew.read_engine_source_head(root)
         stamped = skew.read_engine_stamp_sha(root)
     except OSError:
-        stamped = None
+        recorded = stamped = None
+    if recorded:
+        return EngineIdentity(recorded, "published-source-head", head.sha)
     if stamped:
         return EngineIdentity(stamped, "published-stamp", head.sha)
     return EngineIdentity(head.sha, head.basis, head.sha)

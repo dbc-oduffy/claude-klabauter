@@ -1,75 +1,58 @@
-"""Pins the binding reader and the per-run opt-in predicate; tmp_path DoE roots only."""
+"""Pins `from_sizing`: the EM's `stage_families` choice is the only source; none means Claude."""
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 
 from coordinator_core.codex_runner import grok
 from coordinator_core.ops.dispatch_emit import stage_family
 from coordinator_core.ops.dispatch_emit import stage_family_binding as sfb
-from coordinator_core.ops.emit import doe_drift
-
-_GOOD = (
-    "schema_version: 1\nopt_in: per-run\nrunner: coordinator:family-stage-runner\n"
-    "fallback: claude\nroles:\n  scout: grok\n  research: agy\n  review: codex\n"
-)
 
 
-def _root(tmp_path, text):
-    f = tmp_path / "coordinator" / "pipelines" / "stage-family-binding.yaml"
-    f.parent.mkdir(parents=True)
-    f.write_text(text, encoding="utf-8")
-    return tmp_path
+def test_no_choice_is_none():
+    assert sfb.from_sizing({}) is None
+    assert sfb.from_sizing(None) is None
+    assert sfb.from_sizing({"stage_families": None}) is None
+    assert sfb.from_sizing({"stage_families": {}}) is None
+    assert sfb.from_sizing({"stage_family_binding": ""}) is None
 
 
-def test_opted_in_only_on_exact_ref():
-    assert sfb.opted_in({"stage_family_binding": sfb.BINDING_REF}) is True
-    assert sfb.opted_in({}) is False
-    assert sfb.opted_in({"stage_family_binding": ""}) is False
-    assert sfb.opted_in(None) is False
-    with pytest.raises(ValueError, match="coordinator-content-repo:coordinator/pipelines"):
-        sfb.opted_in({"stage_family_binding": "somewhere/else.yaml"})
+def test_choice_yields_roles_runner_and_fallback():
+    b = sfb.from_sizing({"stage_families": {"review": "codex"}})
+    assert b.roles == {"review": "codex"}
+    assert b.runner == stage_family.RUNNER_AGENT and b.fallback == stage_family.FALLBACK
 
 
-def test_load_reads_roles(tmp_path: Path):
-    b = sfb.load(_root(tmp_path, _GOOD))
-    assert b.runner == "coordinator:family-stage-runner" and b.fallback == "claude"
-    assert b.roles == {"scout": "grok", "research": "agy", "review": "codex"}
+def test_all_roles_pass_through():
+    chosen = {"scout": "grok", "research": "agy", "review": "codex"}
+    assert sfb.from_sizing({"stage_families": chosen}).roles == chosen
+
+
+def test_claude_choice_is_dropped():
+    assert sfb.from_sizing({"stage_families": {"review": "claude"}}) is None
+    assert sfb.from_sizing({"stage_families": {"review": "claude", "scout": "grok"}}).roles == {"scout": "grok"}
 
 
 @pytest.mark.parametrize(
-    "old,new,match",
+    "chosen,match",
     [
-        ("schema_version: 1", "schema_version: 2", "schema_version"),
-        ("runner: coordinator:family-stage-runner", "runner: other", "runner"),
-        ("fallback: claude", "fallback: codex", "fallback"),
-        ("  scout: grok", "  build: grok", "role"),
-        ("  scout: grok", "  scout: gpt", "family"),
+        ({"build": "grok"}, "role"),
+        ({"scout": "gpt"}, "unknown stage family"),
+        (["review"], "mapping"),
     ],
 )
-def test_load_refuses_contract_violations(tmp_path: Path, old, new, match):
+def test_contract_violations_raise(chosen, match):
     with pytest.raises(sfb.BindingError, match=match):
-        sfb.load(_root(tmp_path, _GOOD.replace(old, new)))
+        sfb.from_sizing({"stage_families": chosen})
 
 
-def test_load_missing_file_is_binding_error(tmp_path: Path):
-    with pytest.raises(sfb.BindingError, match="cannot read"):
-        sfb.load(tmp_path)
+def test_retired_key_names_the_replacement():
+    with pytest.raises(sfb.BindingError, match="stage_families"):
+        sfb.from_sizing({"stage_family_binding": "somewhere/else.yaml"})
 
 
-def test_unresolved_content_root_names_registry_key(monkeypatch: pytest.MonkeyPatch):
-    def boom():
-        raise doe_drift.DoeResolveError("nope")
-
-    monkeypatch.setattr(doe_drift, "resolve_doe_clone", boom)
-    with pytest.raises(sfb.BindingError, match=r"engine\.working_repos\.content_root"):
-        sfb.load()
-
-
-def test_grok_role_brief_carries_sign_in_and_binding_does_not_override_it(tmp_path: Path):
+def test_grok_role_brief_carries_sign_in_and_binding_does_not_override_it():
     """The binding names the family; sign-in locators stay on the stage-family child env."""
-    binding = sfb.load(_root(tmp_path, _GOOD))
+    binding = sfb.from_sizing({"stage_families": {"scout": "grok"}})
     assert binding.roles["scout"] == "grok"
     brief = stage_family.runner_brief(binding.roles["scout"], "scout", "p.md", "scratch/x")
     assert stage_family.SIGN_IN_LINE in brief

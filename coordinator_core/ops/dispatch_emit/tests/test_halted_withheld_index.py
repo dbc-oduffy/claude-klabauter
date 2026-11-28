@@ -306,3 +306,25 @@ def test_publish_bare_writes_the_whole_body_and_reports_its_stat(tmp_path: Path)
     data = b"x" * 200_000
     st = idx._publish_bare(os.fspath(target), data)
     assert st is not None and st.st_size == len(data) == target.stat().st_size
+
+
+def test_a_stalled_cache_write_is_retried_by_the_next_listing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
+
+    _marker(tmp_path, "run-a", "halted", {"a.py": "x"})
+    idx.rebuild(tmp_path)
+    real = halt_resume_record.bounded_write
+    outcomes = [halt_resume_record.STALLED]
+
+    def bw(path, data, deadline_ms, **kw):
+        if Path(path).name == "halt-withheld-cache.json" and outcomes:
+            return outcomes.pop()
+        return real(path, data, deadline_ms, **kw)
+
+    monkeypatch.setattr(halt_resume_record, "bounded_write", bw)
+    idx._persist(os.fspath(tmp_path), os.fspath(idx._dir(tmp_path)))
+    assert str(tmp_path) in idx._PERSIST_DIRTY
+    idx._SNAPSHOT.clear()
+    idx.entries(tmp_path)
+    assert str(tmp_path) not in idx._PERSIST_DIRTY
+    assert (tmp_path / idx._CACHE_FILE).is_file()

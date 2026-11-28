@@ -121,15 +121,15 @@ def _open_append_fd_windows(path: str) -> int:
     The correct fix (and the one Win32 itself documents as atomic for
     concurrent appenders) is to open the handle directly via CreateFileW
     with ``dwDesiredAccess = FILE_APPEND_DATA`` (not GENERIC_WRITE) rather
-    than going through the CRT's O_APPEND emulation. ``ctypes`` is stdlib —
-    no new dependency — and the handle is adapted to a normal Python fd via
+    than going through the CRT's O_APPEND emulation. The handle is opened
+    through the builtin ``_winapi`` (never ``ctypes``: its import costs a cold
+    hook ~9ms on every telemetry append) and adapted to a normal Python fd via
     ``msvcrt.open_osfhandle`` so the rest of this module (``os.write``,
     ``os.close``) stays platform-uniform. See this module's docstring for
     the negative-spec this fixes.
     """
-    import ctypes
+    import _winapi
     import msvcrt
-    from ctypes import wintypes
 
     GENERIC_READ = 0x80000000
     FILE_APPEND_DATA = 0x0004
@@ -139,25 +139,15 @@ def _open_append_fd_windows(path: str) -> int:
     OPEN_ALWAYS = 4
     FILE_ATTRIBUTE_NORMAL = 0x80
 
-    CreateFileW = ctypes.windll.kernel32.CreateFileW
-    CreateFileW.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
-        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
-    ]
-    CreateFileW.restype = wintypes.HANDLE
-
-    handle = CreateFileW(
+    handle = _winapi.CreateFile(
         path,
         FILE_APPEND_DATA | GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        None,
+        0,
         OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL,
-        None,
+        0,
     )
-    if handle in (None, 0, -1, 0xFFFFFFFF):
-        raise OSError(ctypes.get_last_error(), f"CreateFileW failed for {path!r}")
-
     return msvcrt.open_osfhandle(int(handle), os.O_APPEND)
 
 

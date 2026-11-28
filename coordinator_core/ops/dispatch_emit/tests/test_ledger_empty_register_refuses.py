@@ -78,7 +78,7 @@ def test_gate_passes_a_one_row_slice_register(tmp_path):
     rl.bind(root, RUN, REL)
     ledger = rl.read_ledger(root, dir_)
     assert len(ledger.items) == 1
-    assert _gate(root, dir_, {"items": [{"id": ledger.items[0].id, "status": "met", "met_by": "a.py"}]})[0] is None
+    assert _gate(root, dir_, {"items": [{"id": ledger.items[0].id, "status": "met", "evidence": "verified"}]})[0] is None
 
 
 def test_advisory_names_every_non_register_id_and_the_gate_still_passes(tmp_path, monkeypatch):
@@ -87,7 +87,7 @@ def test_advisory_names_every_non_register_id_and_the_gate_still_passes(tmp_path
     root, dir_ = _repo(tmp_path, doc)
     rl.bind(root, RUN, REL)
     ghosts = [f"X{n}" for n in range(12)]
-    verdict = {"items": [{"id": "R1", "status": "met", "met_by": "a.py"}] + [{"id": g, "status": "met", "met_by": "a.py"} for g in ghosts]}
+    verdict = {"items": [{"id": "R1", "status": "met", "evidence": "verified"}] + [{"id": g, "status": "met", "evidence": "verified"} for g in ghosts]}
     advisories: list = []
     out = land_run._ledger_gate(root, dir_, verdict, None, (), {}, None, {}, None, None, advisories=advisories)[0]
     assert out is None

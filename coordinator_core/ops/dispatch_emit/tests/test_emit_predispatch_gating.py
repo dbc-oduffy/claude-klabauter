@@ -335,7 +335,8 @@ def test_fresh_review_spec_persists_its_verdict_through_its_own_last_act():
     )
     script = _compose(WAVES, specs=review_specs([fresh]), repo_root=Path("/repo"))
     assert "label: 'falsifier-integrity:1'" in script
-    assert "/repo/state/mi/.can-report-red/x.verdict.json" in script
+    assert "write the file `' + _repoRoot + '/state/mi/.can-report-red/x.verdict.json`" in script
+    assert "/repo/state" not in script
     assert '"falsifier_sha": "fsha"' in script and '"plan_sha": "psha"' in script
     assert "label: 'verdict-cache'" not in script
     assert "_verdictCacheWrites" not in script

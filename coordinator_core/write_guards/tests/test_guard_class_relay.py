@@ -198,6 +198,7 @@ _GOLDEN_SNAPSHOT = json.loads(
 "nudge_baton_body_bar": ["advisory", ["Write", "Edit", "MultiEdit"], 130],
 "nudge_dangling_sizing_citation": ["advisory", ["Write", "Edit", "MultiEdit"], 224],
 "nudge_em_code_dispatch": ["advisory", ["Write", "Edit", "MultiEdit"], 105],
+"nudge_executor_added_comment": ["advisory", ["Write", "Edit", "MultiEdit"], 109],
 "nudge_handoff_ac_shape": ["advisory", ["Write", "Edit", "MultiEdit"], 220],
 "nudge_handoff_author_lint": ["advisory", ["Write", "Edit", "MultiEdit"], 225],
 "nudge_improvement_queue_write": ["hard-deny", ["Write", "Edit", "MultiEdit"], 120],

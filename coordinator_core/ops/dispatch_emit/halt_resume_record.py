@@ -8,13 +8,15 @@ through `bounded_read`, which a stalled disk cannot hold past its deadline.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import json
 import queue
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Union
+from typing import Generator, Optional, Union
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 
@@ -141,14 +143,40 @@ def write_outstanding(path: Union[str, Path]) -> bool:
         return str(path) in _write_inflight
 
 
-def bounded_write(path: Union[str, Path], data: bytes, deadline_ms: float) -> Optional[_Sentinel]:
+MAX_OUTSTANDING_WRITES = 8
+_write_budget: contextvars.ContextVar = contextvars.ContextVar("bounded_write_budget", default=None)
+
+
+@contextlib.contextmanager
+def write_budget(total_ms: float) -> Generator[None]:
+    """Every `bounded_write` inside the block (and in contexts copied from it) shares `total_ms` of caller wait: each waits at most what is left."""
+    token = _write_budget.set([float(total_ms)])
+    try:
+        yield
+    finally:
+        _write_budget.reset(token)
+
+
+def write_admitted(path: Union[str, Path]) -> bool:
+    """False when a `bounded_write` to `path` would be refused unstarted: one is outstanding for it, or `MAX_OUTSTANDING_WRITES` are in flight."""
+    with _write_inflight_lock:
+        return str(path) not in _write_inflight and len(_write_inflight) < MAX_OUTSTANDING_WRITES
+
+
+def bounded_write(
+    path: Union[str, Path], data: bytes, deadline_ms: float, *, preserve_mode: bool = True
+) -> Optional[_Sentinel]:
     """Atomically write `data` to `path`: `None` on success, `STALLED` when the write outlives
-    `deadline_ms`; an `OSError` on the worker is re-raised here. The write keeps running on a daemon
+    `deadline_ms` (or the enclosing `write_budget`'s remainder); an `OSError` on the worker is re-raised here. The write keeps running on a daemon
     thread after a stall (it may still land). At most one write per path is in flight, so a second
-    call while one is outstanding returns `STALLED` at once."""
+    call while one is outstanding returns `STALLED` at once, as does any call past `MAX_OUTSTANDING_WRITES` in flight."""
+    budget = _write_budget.get()
+    if budget is not None:
+        deadline_ms = min(deadline_ms, budget[0])
+    waited_from = time.monotonic()
     key = str(path)
     with _write_inflight_lock:
-        if key in _write_inflight:
+        if key in _write_inflight or len(_write_inflight) >= MAX_OUTSTANDING_WRITES:
             return STALLED
         _write_inflight.add(key)
     box: list = []
@@ -156,7 +184,7 @@ def bounded_write(path: Union[str, Path], data: bytes, deadline_ms: float) -> Op
 
     def work() -> None:
         try:
-            atomic_write_bytes(Path(key), data)
+            atomic_write_bytes(Path(key), data, preserve_mode=preserve_mode)
         except BaseException as exc:
             box.append(exc)
         finally:
@@ -170,7 +198,10 @@ def bounded_write(path: Union[str, Path], data: bytes, deadline_ms: float) -> Op
         with _write_inflight_lock:
             _write_inflight.discard(key)
         return STALLED
-    if not done.wait(max(deadline_ms, 0) / 1000.0):
+    finished = done.wait(max(deadline_ms, 0) / 1000.0)
+    if budget is not None:
+        budget[0] = max(budget[0] - (time.monotonic() - waited_from) * 1000.0, 0.0)
+    if not finished:
         return STALLED
     if box:
         raise box[0]

@@ -398,14 +398,27 @@ int build_hook_spooled_envelope(buf_t *out, const char *spool_id, const char *ev
 
 int build_hook_deny_envelope(buf_t *out, const char *reason);
 
-/* 1 when `payload` is a PreToolUse Bash call whose `tool_input.command` has a
- * segment running an irreversible-external verb (`door_irreversible_command_shapes`
+/* 1 when `payload` is a PreToolUse Bash or PowerShell call whose `tool_input.command`
+ * has a segment running an irreversible-external verb (`door_irreversible_command_shapes`
  * in door_core.c); 0 for anything else, including an unparseable payload. */
 int door_payload_is_irreversible(const char *payload, size_t plen);
 
-/* The deny reason for such a command when the engine gave no usable answer;
- * `detail` is what `emit_post_delivery_failure` was handed. */
-void door_irreversible_deny_reason(char *dst, size_t cap, const char *detail);
+/* 1 when `payload` (a Bash or PowerShell PreToolUse call) hits a deny case of
+ * block-empty-source-push, block-worktree-creation or guard-uncapped-pytest-plugin
+ * (`door_native_guard_rows` in door_core.c); `reason` (when `rcap` > 0) is then the
+ * deny text naming the guard, else "". 0 for an allow, an unparseable payload, a
+ * non-command tool, or an override the guard honours. No allocation beyond the
+ * command's own tokens, no spawn, no file read. */
+int door_native_guard_verdict(const char *payload, size_t plen, char *reason, size_t rcap);
+
+/* Same match as door_payload_is_irreversible; on a match `dst` (when `cap` > 0) receives the
+ * command with control characters as spaces, cut with a trailing "..." when it does not fit.
+ * `dst` is "" on no match. */
+int door_payload_irreversible_command(const char *payload, size_t plen, char *dst, size_t cap);
+
+/* The warning for such a command allowed without a verdict (a guard that cannot run allows and
+ * says so); `detail` is why no verdict arrived, `command` the unchecked command. */
+void door_irreversible_unchecked_reason(char *dst, size_t cap, const char *detail, const char *command);
 
 
 #define JSONRPC_PARSE_ERROR (-32700)

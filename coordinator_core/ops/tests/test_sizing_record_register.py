@@ -216,6 +216,29 @@ def test_empty_sources_refused_with_shape(repo, sources):
     assert p.read_bytes() == before
 
 
+def _seed_unbacked_unrelated(repo: Path) -> Path:
+    path = _seed_with_turn(repo, "fix the coverage check")
+    doc = _doc(path)
+    doc["requirement_register"] = _register(_row("a"), unrelated_turns=[{"turn": 1, "reason": "conversational"}])
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def test_amend_keeps_an_on_disk_unbacked_unrelated_entry(repo):
+    p = _seed_unbacked_unrelated(repo)
+    r = _run(repo, {"rows": [{"id": "b", "source_text": "text b"}]}, amend=True)
+    assert r["exit_code"] == 0 and r["applied"] is True, r
+    assert _doc(p)["requirement_register"]["unrelated_turns"] == [{"turn": 1, "reason": "conversational"}]
+
+
+def test_amend_refuses_a_new_or_changed_unbacked_unrelated_entry(repo):
+    p = _seed_unbacked_unrelated(repo)
+    before = p.read_bytes()
+    r = _run(repo, {"unrelated_turns": [{"turn": 1, "reason": "off topic"}]}, amend=True)
+    assert r["exit_code"] == 1 and r["applied"] is False and "turn 1" in str(r), r
+    assert p.read_bytes() == before
+
+
 def test_amend_without_sources_on_recorded_register_records(repo):
     p = _seed(repo)
     assert _run(repo, _register(_row("a")))["applied"] is True

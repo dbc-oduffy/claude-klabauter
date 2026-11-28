@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core import publish_round
 from coordinator_core.bash_guards import _write_bump_applicability as applicability
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 from coordinator_core.session_hub_path import hub_for_common
@@ -121,6 +122,16 @@ def _write_toml(path: Path, table: dict) -> None:
     emit("", table, lines)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _open_round_mirror(tmp_path: Path, monkeypatch, key: str) -> Path:
+    """Create `<scratch>/publish-round-<this pid>-ab12/mirror-<key>` (a live round's
+    mirror clone) under a stubbed round root and return the mirror tree."""
+    root = tmp_path / "scratch-root"
+    monkeypatch.setattr(publish_round, "round_root", lambda: root)
+    mirror = root / f"round.20261128T000000Z.{os.getpid()}" / f"mirror-{key}"
+    mirror.mkdir(parents=True, exist_ok=True)
+    return mirror
 
 
 # ---------------------------------------------------------------------------
@@ -655,21 +666,41 @@ def test_ac1_target_is_publish_destination_true_for_a_mirror_path(tmp_path, monk
     _bump_applies_precondition(tmp_path, "sess-c1-publish-true")
 
     reg_dir = tmp_path / "registry"
-    mirror_root = tmp_path / "mirror-repo"
-    mirror_root.mkdir()
+    mirror_root = _open_round_mirror(tmp_path, monkeypatch, "coordinator_claude")
     _write_toml(
         reg_dir / "registry.toml",
         {"publish": {"mirrors": {"coordinator_claude": {"owner": "claude-central-em"}}}},
-    )
-    _write_toml(
-        reg_dir / "registry.local.toml",
-        {"publish": {"mirrors": {"coordinator_claude": {"path": str(mirror_root)}}}},
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
     nested_target = mirror_root / "nested" / "file.txt"
 
     assert applicability.target_is_publish_destination(str(nested_target)) is True
+
+
+def test_a_registry_path_value_is_not_a_publish_destination_without_an_open_round(
+    tmp_path, monkeypatch
+):
+    """Refusal side: a standing `publish.mirrors.<key>.path` is never read, and a
+    round dir whose owner pid is dead is not a destination."""
+    _bump_applies_precondition(tmp_path, "sess-c6-no-round")
+
+    reg_dir = tmp_path / "registry"
+    standing = tmp_path / "standing-mirror"
+    standing.mkdir()
+    _write_toml(
+        reg_dir / "registry.local.toml",
+        {"publish": {"mirrors": {"coordinator_claude": {"path": str(standing)}}}},
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    root = tmp_path / "scratch-root"
+    monkeypatch.setattr(publish_round, "round_root", lambda: root)
+    dead = root / "round.20261128T000000Z.2000000000" / "mirror-coordinator_claude"
+    dead.mkdir(parents=True)
+    (dead.parent / ".owner.json").write_text('{"pid": 2000000000, "procStart": null}', encoding="utf-8")
+
+    assert applicability.target_is_publish_destination(str(standing)) is False
+    assert applicability.target_is_publish_destination(str(dead)) is False
 
 
 def test_ac1_target_is_publish_destination_false_for_every_repos_value(tmp_path, monkeypatch):
@@ -687,17 +718,12 @@ def test_ac1_target_is_publish_destination_false_for_every_repos_value(tmp_path,
     claude_klabauter_root.mkdir()
     other_repo_root = tmp_path / "some-registered-repo"
     other_repo_root.mkdir()
-    mirror_root = tmp_path / "mirror-repo"
-    mirror_root.mkdir()
+    mirror_root = _open_round_mirror(tmp_path, monkeypatch, "coordinator_claude")
 
     _write_registry(
         reg_dir,
         claude_klabauter=str(claude_klabauter_root),
         some_repo=str(other_repo_root),
-    )
-    _write_toml(
-        reg_dir / "registry.local.toml",
-        {"publish": {"mirrors": {"coordinator_claude": {"path": str(mirror_root)}}}},
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
@@ -717,10 +743,8 @@ def test_d4_publish_destination_owner_reads_the_merged_view_across_both_files(
     _bump_applies_precondition(tmp_path, "sess-d4-merged-view")
 
     reg_dir = tmp_path / "registry"
-    cc_root = tmp_path / "coordinator-claude-mirror"
-    cc_root.mkdir()
-    klabauter_root = tmp_path / "klabauter-mirror"
-    klabauter_root.mkdir()
+    cc_root = _open_round_mirror(tmp_path, monkeypatch, "coordinator_claude")
+    klabauter_root = _open_round_mirror(tmp_path, monkeypatch, "claude_klabauter")
 
     _write_toml(
         reg_dir / "registry.toml",
@@ -728,17 +752,7 @@ def test_d4_publish_destination_owner_reads_the_merged_view_across_both_files(
     )
     _write_toml(
         reg_dir / "registry.local.toml",
-        {
-            "publish": {
-                "mirrors": {
-                    "coordinator_claude": {"path": str(cc_root)},
-                    "claude_klabauter": {
-                        "path": str(klabauter_root),
-                        "owner": "claude-klabauter-em",
-                    },
-                }
-            }
-        },
+        {"publish": {"mirrors": {"claude_klabauter": {"owner": "claude-klabauter-em"}}}},
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
@@ -748,21 +762,20 @@ def test_d4_publish_destination_owner_reads_the_merged_view_across_both_files(
     assert applicability.publish_destination_owner(str(klabauter_root)) == "claude-klabauter-em"
 
 
-def test_d5_empty_publish_path_value_is_skipped_not_resolved_to_filesystem_root(
+def test_d5_no_open_round_is_no_destination_and_never_the_filesystem_root(
     tmp_path, monkeypatch
 ):
-    """DRIFT D5 -- `registry.toml` declares a `publish.mirrors.*.path` key
-    with an empty value at HEAD; an empty `.path` must never resolve to the
-    filesystem root (which is a prefix of every path, so an unguarded empty
-    string would make every target a publish destination)."""
+    """An owner declared with no open round yields no destination; nothing resolves
+    to the filesystem root (a prefix of every path)."""
     _bump_applies_precondition(tmp_path, "sess-d5-empty-path")
 
     reg_dir = tmp_path / "registry"
     _write_toml(
         reg_dir / "registry.toml",
-        {"publish": {"mirrors": {"coordinator_claude": {"path": "", "owner": "claude-central-em"}}}},
+        {"publish": {"mirrors": {"coordinator_claude": {"owner": "claude-central-em"}}}},
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    monkeypatch.setattr(publish_round, "round_root", lambda: tmp_path / "no-scratch")
 
     arbitrary_target = tmp_path / "anything"
     arbitrary_target.mkdir()

@@ -466,6 +466,102 @@ def test_manifest_is_read_once_per_plan(repo, monkeypatch):
     assert len(reads) == 1
 
 
+def _link_dir(link: Path, target: Path) -> None:
+    from coordinator_core.install.junction import JunctionUnsupported, create_junction
+
+    try:
+        create_junction(link, target)
+    except (OSError, JunctionUnsupported) as exc:
+        pytest.skip(f"cannot create junction/symlink here: {exc}")
+
+
+def _outside_with_entries(tmp_path: Path) -> Path:
+    outside = tmp_path / "outside-target"
+    (outside / "structural-store").mkdir(parents=True)
+    (outside / "structural-store" / "structural.sqlite3").write_bytes(b"precious")
+    (outside / "loose.txt").write_bytes(b"precious")
+    _backdate(outside)
+    return outside
+
+
+def _hygiene(repo: Path, apply: bool = False) -> list[dict]:
+    from coordinator_core.ops.fleet.scratch_hygiene import run_hygiene
+
+    out = run_hygiene({"repo_root": str(repo), "cadence": "workday_start", "apply": apply})
+    return [r for r in out["records"] if r.get("kind") == "purge"]
+
+
+@pytest.mark.parametrize("rel", ["scratch", "state/scratch"])
+@pytest.mark.parametrize("apply", [False, True], ids=["plan", "apply"])
+def test_linked_candidate_root_lists_nothing_and_records_one_refusal(tmp_path: Path, monkeypatch, rel, apply) -> None:
+    """POSIX symlink and Windows junction shape (create_junction picks per host)."""
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+    repo = tmp_path / "repo"
+    (repo / "state").mkdir(parents=True)
+    outside = _outside_with_entries(tmp_path)
+    _link_dir(repo / rel, outside)
+
+    assert str(repo / rel) in plan.purge_candidates(repo)
+    assert not any(str(outside) in p or "structural-store" in p for p in plan.purge_candidates(repo))
+    records = _hygiene(repo, apply)
+    assert len(records) == 1
+    rec = records[0]
+    assert rec["action"] == "skipped-link"
+    assert rec["path"] == rel
+    assert str(os.path.realpath(outside)) in rec["reason"]
+    assert (outside / "structural-store" / "structural.sqlite3").read_bytes() == b"precious"
+    assert (outside / "loose.txt").exists()
+
+
+def test_candidate_root_escaping_via_a_linked_parent_is_refused(tmp_path: Path, monkeypatch) -> None:
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside-state"
+    (outside / "scratch" / "victim").mkdir(parents=True)
+    _backdate(outside)
+    _link_dir(repo / "state", outside)
+
+    assert not os.path.islink(repo / "state" / "scratch")
+    records = _hygiene(repo, apply=True)
+    assert [r["action"] for r in records] == ["skipped-link"]
+    assert "root-outside-anchor" in records[0]["reason"]
+    assert (outside / "scratch" / "victim").is_dir()
+
+
+def test_temp_leg_root_that_leaves_the_coordinator_temp_root_is_refused(tmp_path: Path, monkeypatch) -> None:
+    import tempfile
+
+    from coordinator_core.temp_layout import coordinator_temp_root
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = _outside_with_entries(tmp_path)
+    temp_root = coordinator_temp_root(repo)
+    temp_root.parent.mkdir(parents=True)
+    _link_dir(temp_root, outside)
+
+    records = _hygiene(repo, apply=True)
+    assert [r["action"] for r in records] == ["skipped-link"]
+    assert str(os.path.realpath(outside)) in records[0]["reason"]
+    assert (outside / "loose.txt").exists()
+
+
+def test_real_candidate_roots_are_still_listed(tmp_path: Path, monkeypatch) -> None:
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+    repo = tmp_path / "repo"
+    (repo / "scratch" / "old").mkdir(parents=True)
+    (repo / "state" / "scratch" / "old2").mkdir(parents=True)
+    assert set(plan.purge_candidates(repo)) == {str(repo / "scratch" / "old"), str(repo / "state" / "scratch" / "old2")}
+
+
 def test_repo_manifest_seeds_the_gipsy_entries() -> None:
     root = Path(plan.__file__).resolve().parents[3]
     # The manifest is box-local and untracked: a clean checkout or a published stamp has none.

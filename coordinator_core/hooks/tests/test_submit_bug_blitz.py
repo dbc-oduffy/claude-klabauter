@@ -38,6 +38,11 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
+    from coordinator_core import machine_resolver
+
+    monkeypatch.setattr(
+        machine_resolver, "registry_get", lambda key: str(tmp_path / "scratch") if key == "paths.scratch_root" else None
+    )
     root = tmp_path / "repo"
     (root / "state" / "bug-backlog").mkdir(parents=True)
     git = root / ".git"
@@ -114,6 +119,20 @@ def test_targets_submission_emits_the_grind_and_rewrites_the_call(repo, monkeypa
     _no_grant_records(repo)
 
 
+def test_a_cone_write_failure_refuses_before_any_row_is_minted(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    minted: list = []
+
+    def _boom(run_dir, tests) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mod, "_write_cone", _boom)
+    env = _call(repo, {"targets": "red-set"}, mint=lambda *a, **k: minted.append(1) or [])
+
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny", env
+    assert "sparse cone was not written" in _reason(env)
+    assert minted == []
+
+
 def test_decisions_name_the_run_clone_path_without_provisioning_it(repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import tempfile
 
@@ -122,11 +141,14 @@ def test_decisions_name_the_run_clone_path_without_provisioning_it(repo, monkeyp
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
     with _count_spawns_attributed(monkeypatch) as spawns:
         env = _call(repo, {"targets": "red-set"})
+        expected = worker_clone._clones_dir(repo) / RUN_ID
 
     script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
     decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
     work_root = Path(decisions["work_root"])
     assert work_root.parent.name == worker_clone.CLONES_DIRNAME and work_root.name == RUN_ID
+    assert work_root.is_relative_to(tmp_path / "scratch")
+    assert work_root == expected
     assert not work_root.exists()
     assert worker_clone.clone_root(repo, RUN_ID) is None
     assert len(spawns) == _budget(), [s.argv for s in spawns]
@@ -897,3 +919,59 @@ def test_a_run_parent_failure_does_not_refuse_the_submission(repo, monkeypatch: 
 
     monkeypatch.setattr(ask_fanout_contract, "mint_run_parent", refuse)
     assert _call(repo, {"targets": "red-set"})["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
+_RED_SET = "alpha/tests/test_a.py::test_one\nbeta/sub/test_b.py::test_two\nalpha/tests/test_a2.py\ntest_root.py::test_r\n"
+
+
+def _red_set_file(root: Path) -> str:
+    (root / "state" / "red-sets").mkdir(parents=True)
+    (root / "state" / "red-sets" / "x.txt").write_text(_RED_SET, encoding="utf-8")
+    return "state/red-sets/x.txt"
+
+
+def _submit_from(root: Path, cwd: Path, targets: str) -> dict:
+    payload = _payload(root, {"targets": targets})
+    payload["cwd"] = str(cwd)
+    return mod.evaluate(payload, resolve=None, parse=None, mint=None, run_id=RUN_ID)
+
+
+@pytest.mark.parametrize("cwd_sub", ["", "deep/er"])
+def test_a_repo_relative_targets_path_is_accepted_exactly_as_its_absolute_spelling(real_repo, cwd_sub: str) -> None:
+    rel = _red_set_file(real_repo)
+    cwd = real_repo / cwd_sub if cwd_sub else real_repo
+    cwd.mkdir(parents=True, exist_ok=True)
+
+    relative = _submit_from(real_repo, cwd, rel)
+    assert relative["hookSpecificOutput"]["permissionDecision"] == "allow", relative
+    script = Path(relative["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    rel_decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
+
+    absolute = _submit_from(real_repo, cwd, (real_repo / rel).as_posix())
+    assert absolute["hookSpecificOutput"]["permissionDecision"] == "allow", absolute
+    abs_decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
+    assert rel_decisions["parse"] == abs_decisions["parse"] == {"parsed": 4}
+    assert rel_decisions["minted"] == abs_decisions["minted"]
+
+
+def test_a_relative_targets_path_that_does_not_exist_is_still_refused(real_repo) -> None:
+    env = _submit_from(real_repo, real_repo, "state/red-sets/missing.txt")
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny", env
+
+
+def test_the_submission_writes_the_cone_of_the_parsed_tests_top_level_directories(real_repo) -> None:
+    from coordinator_core.bug_blitz import worker_clone
+
+    env = _submit_from(real_repo, real_repo, _red_set_file(real_repo))
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    assert worker_clone.read_cone(script.parent) == ("alpha", "beta")
+
+
+def test_a_root_level_only_submission_writes_no_cone_file(real_repo) -> None:
+    from coordinator_core.bug_blitz import worker_clone
+
+    (real_repo / "red.txt").write_text("test_root.py::test_r\n", encoding="utf-8")
+    env = _submit_from(real_repo, real_repo, "red.txt")
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    assert not (script.parent / worker_clone.CONE_FILE).exists()

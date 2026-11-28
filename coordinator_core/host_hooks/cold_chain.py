@@ -8,13 +8,15 @@ so the allow record names it (its verdict is never a deny). A guard that raises 
 """
 from __future__ import annotations
 
+import contextlib
 import importlib
-from typing import Any, Dict, List, Mapping, Optional
+import re
+from typing import Any, Callable, Dict, Generator, List, Mapping, NamedTuple, Optional, Tuple
 
-# Pinned against deny_registry.GUARD_DENY_CLASS (BOX_DEGRADING) by tests/test_cold_chain.py; the
-# registry itself is a heavy import this module avoids.
+# The registry itself is a heavy import this module avoids; the table below is pinned against
+# deny_registry.GUARD_DENY_CLASS and dispatch's GuardEntry names by the ratchet tests.
 _PATCH_GUARD_PACKAGE = "coordinator_core.write_guards."
-SHELL_DENY_GUARDS = ("destructive-rm", "destructive-git-clean", "block-stash-destruction", "guard-disk-fill")
+_SHELL_GUARD_PACKAGE = "coordinator_core.bash_guards."
 SUBAGENT_DENY_GUARD = "block-subagent-destructive-action"
 # Evaluated for the record only: the guard is advisory by ruling, so its verdict is traced and never forwarded as a deny.
 BRANCH_GUARD = "block-noncanonical-branch-creation"
@@ -24,11 +26,33 @@ _BRANCH_VERBS = frozenset({"branch", "checkout", "switch"})
 # Must hold every deny-class write guard id (a write_guards module named by the id); advisory write guards run warm only.
 PATCH_DENY_GUARDS = ("block-drive-root-new-dir-write",)
 
+#: Irreversible-class Bash dispatch guards with no spawn-free, in-budget cold form: guard -> why. They run warm only,
+#: and the ratchet reads this mapping so none is ever silently absent from the table.
+NO_COLD_FORM = {
+    "destructive-git-orphan": "resolves the reset target and counts lost commits with git rev-parse / rev-list, which needs the object store",
+    "guard-heavy-command-admission": "denies by caller identity and measured host load, which no command text carries",
+    "check-test-suite-invocation": "a 470ms process-time check on the sentinel, over the 200ms cold budget",
+}
+#: Table guards whose cold form errs open on a shape that needs a process: guard -> the shape. Reported, never dropped.
+COLD_PARTIAL = {
+    "destructive-git-revert": "a path-scoped revert needs git status to name the affected paths; only the whole-tree forms deny cold",
+    "block-external-workspace-vcs-write": "a verb the guard resolves with a git spawn fails open cold",
+}
+
 _SHELL_TOOLS = frozenset({"Bash", "PowerShell", "exec_command", "shell"})
 _RM_WORDS = frozenset({"rm", "remove-item", "ri", "rd", "del", "erase"})
 _FILL_WORDS = frozenset({
     "cp", "rsync", "dd", "truncate", "tar", "zip", "copy-item", "copy", "cpi", "robocopy", "xcopy", "fsutil",
 })
+_SCAN_WORDS = frozenset({"find", "rg", "grep", "egrep", "fgrep", "fd", "fdfind", "du"})
+_PYTEST_WORDS = frozenset({"pytest", "py.test"})
+_REVERT_VERBS = frozenset({"checkout", "restore", "reset", "stash", "switch"})
+_EDITOR_MARKS = ("unrealeditor", "ue5editor", "shadercompileworker", "livecodingconsole", "unrealtraceserver")
+_SCRIPT_MARKS = (".sh", ".bash", ".ps1", ".py", ".cmd", ".bat")
+_DETACH_MARKS = ("nohup", "setsid", "disown", "start-process", "saps")
+# A lone `&` backgrounds; `&&`, `2>&1` and `&>` do not.
+_LONE_AMP = re.compile(r"(?<![&>])&(?![&>])")
+_KILL_MARKS = ("kill", "stop-process", "spps", "fuser", ".sh", ".bash", ".ps1", ".py")
 _PATCH_MARKERS = ("*** Add File:", "*** Move to:")
 
 #: Per-guard outcomes of the last `evaluate`, in run order: [(guard id, "allow"|"deny"|"raised")]. Read only through
@@ -67,25 +91,131 @@ def _forces(words: frozenset) -> bool:
     return "--force" in words or any(w[:1] == "-" and w[1:2] != "-" and "f" in w for w in words)
 
 
+class _ColdSpawn(BaseException):
+    """A guard tried to start a process on the cold path. BaseException so a guard's own `except Exception` cannot swallow it into an allow."""
+
+
+@contextlib.contextmanager
+def _spawn_free(module: Any) -> Generator[None, None, None]:
+    """Refuse `subprocess.Popen` and swap the module's `resolve_git_root` for the file-walk resolver; both restored on exit."""
+    import subprocess
+
+    refused = subprocess.Popen
+
+    def no_spawn(*args: Any, **kwargs: Any) -> Any:
+        raise _ColdSpawn("a guard spawned a process on the cold chain")
+
+    spawning = getattr(module, "resolve_git_root", None)
+    setattr(subprocess, "Popen", no_spawn)
+    if spawning is not None:
+        from coordinator_core.subagent_sandbox.engine import resolve_git_root_cheap
+
+        setattr(module, "resolve_git_root", resolve_git_root_cheap)
+    try:
+        yield
+    finally:
+        setattr(subprocess, "Popen", refused)
+        if spawning is not None:
+            setattr(module, "resolve_git_root", spawning)
+
+
+def _run_guard(module_name: str, call: Callable[[Any], Any]) -> Any:
+    """`call(module)` under the spawn-free swap; a spawn attempt surfaces as a RuntimeError (the chain skips the guard)."""
+    module = importlib.import_module(module_name)
+    try:
+        with _spawn_free(module):
+            return call(module)
+    except _ColdSpawn as exc:
+        raise RuntimeError(str(exc)) from None
+
+
+def _check_in(name: str) -> Callable[[Dict[str, Any], str], Any]:
+    """Invoker running `<bash_guards module for `name`>.check(payload)`."""
+    module_name = _SHELL_GUARD_PACKAGE + _MODULE_FOR.get(name, name.replace("-", "_"))
+    return lambda payload, command: _run_guard(module_name, lambda m: m.check(payload))
+
+
+def _invoke_rm(payload: Dict[str, Any], command: str) -> Any:
+    # The spawn-free `.git` walk classifier the launcher-timeout backstop also uses; the full guard spawns git.
+    from coordinator_core.host_hooks import backstop
+
+    return {"decision": "deny", "reason": backstop.RM_DENY_REASON} if backstop._recursive_rm(command, str(payload.get("cwd") or "")) else None
+
+
+def _invoke_git_clean(payload: Dict[str, Any], command: str) -> Any:
+    """Deny on an untracked load-bearing path the clean would discard (the warm oracle's question), else on any forced clean in a work tree."""
+    from coordinator_core.host_hooks import backstop
+
+    cwd = str(payload.get("cwd") or "")
+    lost = backstop._git_clean_loses_loadbearing(command, cwd)
+    if lost:
+        return {"decision": "deny", "reason": backstop.CLEAN_LOADBEARING_REASON % (len(lost), ", ".join(lost[:8]))}
+    return {"decision": "deny", "reason": backstop.CLEAN_DENY_REASON} if backstop._git_clean_forced(command, cwd) else None
+
+
+def _invoke_revert(payload: Dict[str, Any], command: str) -> Any:
+    return _run_guard(
+        _SHELL_GUARD_PACKAGE + "_dc_git_misc",
+        lambda m: m._check_destructive_git_revert_full(command, str(payload.get("session_id") or ""), hook_payload=payload)[0],
+    )
+
+
+def _invoke_runaway_find(payload: Dict[str, Any], command: str) -> Any:
+    return _run_guard(
+        _SHELL_GUARD_PACKAGE + "_dc_rewrites",
+        lambda m: m.check_runaway_find(command, str(payload.get("session_id") or ""), payload=payload),
+    )
+
+
+class ShellGuard(NamedTuple):
+    """One cold shell candidate: `wanted(words, lowered command, subagent)` is the token prefilter, `invoke(payload, command)` the spawn-free check."""
+
+    name: str
+    wanted: Callable[[frozenset, str, bool], bool]
+    invoke: Callable[[Dict[str, Any], str], Any]
+
+
+def _any_in(text: str, marks: Tuple[str, ...]) -> bool:
+    return any(mark in text for mark in marks)
+
+
+# Guard ids whose bash_guards module is not the id with underscores.
+_MODULE_FOR = {"deny-kill-by-port-or-tree": "block_kill_by_port_or_tree"}
+
+#: Chain order. Every irreversible-class Bash dispatch guard is here or in `NO_COLD_FORM` (or `backstop.GUARD_MODULES`,
+#: which carries the push/p4 guards); the ratchet fails on one in none. The advisory branch guard is traced, never denied.
+SHELL_GUARDS: Tuple[ShellGuard, ...] = (
+    ShellGuard(SUBAGENT_DENY_GUARD, lambda w, t, sub: sub and "git" in w, _check_in(SUBAGENT_DENY_GUARD)),
+    ShellGuard("destructive-rm", lambda w, t, sub: bool(w & _RM_WORDS), _invoke_rm),
+    ShellGuard("destructive-git-clean", lambda w, t, sub: "git" in w and "clean" in w and _forces(w), _invoke_git_clean),
+    ShellGuard("block-stash-destruction", lambda w, t, sub: "stash" in w, _check_in("block-stash-destruction")),
+    ShellGuard("guard-disk-fill", lambda w, t, sub: bool(w & _FILL_WORDS), _check_in("guard-disk-fill")),
+    ShellGuard(BRANCH_GUARD, lambda w, t, sub: "git" in w and bool(w & _BRANCH_VERBS), _check_in(BRANCH_GUARD)),
+    ShellGuard("block-worktree-creation", lambda w, t, sub: "worktree" in w, _check_in("block-worktree-creation")),
+    ShellGuard("block-whole-filesystem-scan", lambda w, t, sub: bool(w & _SCAN_WORDS), _check_in("block-whole-filesystem-scan")),
+    ShellGuard("guard-uncapped-pytest-plugin", lambda w, t, sub: bool(w & _PYTEST_WORDS), _check_in("guard-uncapped-pytest-plugin")),
+    ShellGuard("block-external-workspace-vcs-write", lambda w, t, sub: "git" in w, _check_in("block-external-workspace-vcs-write")),
+    ShellGuard("destructive-git-revert", lambda w, t, sub: "git" in w and bool(w & _REVERT_VERBS), _invoke_revert),
+    ShellGuard("runaway-find", lambda w, t, sub: "find" in w, _invoke_runaway_find),
+    ShellGuard("block-editor-kill-by-name", lambda w, t, sub: _any_in(t, _EDITOR_MARKS) or _any_in(t, _SCRIPT_MARKS), _check_in("block-editor-kill-by-name")),
+    ShellGuard("deny-kill-by-port-or-tree", lambda w, t, sub: _any_in(t, _KILL_MARKS), _check_in("deny-kill-by-port-or-tree")),
+    ShellGuard("refuse-unrecordable-detached-spawn", lambda w, t, sub: _any_in(t, _DETACH_MARKS) or bool(_LONE_AMP.search(t)),_check_in("refuse-unrecordable-detached-spawn")),
+    ShellGuard("block-drive-root-new-dir-bash-write", lambda w, t, sub: sub and ("/" in t or "\\" in t), _check_in("block-drive-root-new-dir-bash-write")),
+)
+_BY_NAME = {guard.name: guard for guard in SHELL_GUARDS}
+#: The deny-class shell guard ids the cold chain evaluates (the advisory branch guard is not one).
+SHELL_DENY_GUARDS = tuple(g.name for g in SHELL_GUARDS if g.name not in ADVISORY_SHELL_GUARDS)
+
+
 def shell_candidates(command: str, subagent: bool = False) -> List[str]:
-    """The shell deny guards whose command shape `command` could match, in chain order (the subagent guard first, so its verdict names it).
+    """The shell guards whose command shape `command` could match, in table order (the subagent guard first, so its verdict names it).
 
     A subagent's git command also draws the subagent destructive-action guard, whose irreversible
-    git verbs (`clean`, `reset --hard`, forced push) the EM-class guards above let through.
+    git verbs (`clean`, `reset --hard`, forced push) the EM-class guards let through.
     """
     words = _words(command)
-    hits: List[str] = [SUBAGENT_DENY_GUARD] if subagent and "git" in words else []
-    if words & _RM_WORDS:
-        hits.append("destructive-rm")
-    if "git" in words and "clean" in words and _forces(words):
-        hits.append("destructive-git-clean")
-    if "stash" in words:
-        hits.append("block-stash-destruction")
-    if words & _FILL_WORDS:
-        hits.append("guard-disk-fill")
-    if "git" in words and words & _BRANCH_VERBS:
-        hits.append(BRANCH_GUARD)
-    return hits
+    lowered = command.lower()
+    return [guard.name for guard in SHELL_GUARDS if guard.wanted(words, lowered, subagent)]
 
 
 def _guard_module(name: str) -> Any:
@@ -94,37 +224,7 @@ def _guard_module(name: str) -> Any:
 
 
 def _invoke_shell(name: str, payload: Dict[str, Any], command: str) -> Any:
-    if name in ("destructive-rm", "destructive-git-clean"):
-        # The spawn-free `.git` walk classifiers the launcher-timeout backstop also uses; the full guards spawn git.
-        from coordinator_core.host_hooks import backstop
-
-        cwd = str(payload.get("cwd") or "")
-        if name == "destructive-rm":
-            return {"decision": "deny", "reason": backstop.RM_DENY_REASON} if backstop._recursive_rm(command, cwd) else None
-        return {"decision": "deny", "reason": backstop.CLEAN_DENY_REASON} if backstop._git_clean_forced(command, cwd) else None
-    if name == "block-stash-destruction":
-        from coordinator_core.bash_guards.block_stash_destruction import check
-
-        return check(payload)
-    if name == SUBAGENT_DENY_GUARD:
-        from coordinator_core.bash_guards.block_subagent_destructive_action import check as subagent_check
-
-        return subagent_check(payload)
-    if name == BRANCH_GUARD:
-        from coordinator_core.bash_guards import block_noncanonical_branch_creation as branch
-        from coordinator_core.subagent_sandbox.engine import resolve_git_root_cheap
-
-        # Trap: the guard's own root lookup spawns `git rev-parse`; the cold chain is spawn-free, so the
-        # file-walk resolver stands in for the call and is restored after it.
-        spawning = branch.resolve_git_root
-        setattr(branch, "resolve_git_root", resolve_git_root_cheap)
-        try:
-            return branch.check(payload)
-        finally:
-            setattr(branch, "resolve_git_root", spawning)
-    from coordinator_core.bash_guards.guard_disk_fill import check
-
-    return check(payload)
+    return _BY_NAME[name].invoke(payload, command)
 
 
 def _flat_deny(result: Any, guard: str) -> Optional[Dict[str, Any]]:

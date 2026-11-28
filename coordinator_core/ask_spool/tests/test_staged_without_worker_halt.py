@@ -12,7 +12,7 @@ import pytest
 from coordinator_core.ask_spool import drain
 from coordinator_core.ask_spool.tests.test_drain import _notices
 from coordinator_core.ops.dispatch_emit import run_token
-from coordinator_core.ops.dispatch_emit.ask_contract import PLAN_STARTED_FIELD, RECORD_DIR_ROOT, RUN_DIR_ROOT, write_run_stage_at
+from coordinator_core.ops.dispatch_emit.ask_contract import PLAN_STARTED_FIELD, RECORD_DIR_ROOT, write_run_stage_at
 
 BOUND = drain.MINTED_DISPATCH_DEADLINE_SECONDS
 RUN = "ask-20261122T100000-aaaaaa"
@@ -98,18 +98,3 @@ def test_a_plan_started_run_keeps_the_four_hour_bound(tmp_path, monkeypatch):
     drain.run(str(tmp_path))
 
     assert _marker(tmp_path) is None
-
-
-def test_a_built_run_with_a_run_dir_and_no_token_is_left_for_the_land(tmp_path, monkeypatch):
-    """A `staged` run whose run dir holds artifacts is built and awaiting land, not workerless."""
-    rec = _staged(tmp_path)
-    run_dir = tmp_path / RUN_DIR_ROOT / RUN
-    run_dir.mkdir(parents=True)
-    (run_dir / "manifest.json").write_text("{}", encoding="utf-8")
-    _age(rec, BOUND + 60)
-    monkeypatch.setattr(run_token, "is_live", lambda root, run_id: False)
-
-    drain.run(str(tmp_path))
-
-    assert _marker(tmp_path) is None
-    assert _halts(tmp_path, "sess-a") == []

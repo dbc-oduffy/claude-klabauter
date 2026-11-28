@@ -68,6 +68,7 @@ CLASS, docstring/negative-spec layout, offer-not-nag advisory text).
 
 from __future__ import annotations
 
+import heapq
 import os
 import re
 from pathlib import Path
@@ -126,6 +127,11 @@ _FINDINGS_SENTINEL = (
 #: obviously-generic false positives (`__init__.py`, `test.py`) without
 #: requiring a structured citation field.
 _MIN_BASENAME_MATCH_LEN = 8
+
+#: Per-share-dir cap on sidecars whose body is read per `check()`: a reviewer
+#: sidecar still citing a file being hand-edited is recent, so the newest
+#: window bounds the question "which sidecars could cover this target".
+_MAX_CANDIDATES_READ = 40
 
 _AGENT_TYPE_RE = re.compile(r"^agent_type:[ \t]*(.*)$")
 
@@ -255,6 +261,26 @@ def _in_scope_agent_type(agent_type: str, lazy_roster: "_LazyRoster") -> bool:
     return roster is None or agent_type not in roster
 
 
+def _newest_sidecars(sidecar_dir: Path) -> List[Path]:
+    """The `_MAX_CANDIDATES_READ` newest `*.md` files in `sidecar_dir`,
+    newest first. One `scandir` pass with no per-entry open and no
+    per-entry body read; any listing failure yields an empty list."""
+    entries: List[tuple] = []
+    try:
+        with os.scandir(sidecar_dir) as it:
+            for entry in it:
+                try:
+                    if not entry.name.endswith(".md") or not entry.is_file():
+                        continue
+                    entries.append((entry.stat().st_mtime_ns, entry.name))
+                except OSError:
+                    continue
+    except OSError:
+        return []
+    newest = heapq.nlargest(_MAX_CANDIDATES_READ, entries)
+    return [sidecar_dir / name for _mtime, name in newest]
+
+
 def _find_sentinel_retained_sidecar(
     sidecar_dir: Path, normalized_target: str, basename: str, lazy_roster: "_LazyRoster"
 ) -> Optional[Path]:
@@ -263,11 +289,10 @@ def _find_sentinel_retained_sidecar(
     unfilled-scaffold sentinel AND carrying real findings content anyway,
     covering the target file, with NO verified findings_ledger stamp yet.
     Or None. Every per-file failure degrades to "skip this candidate",
-    never a raise."""
-    try:
-        candidates: List[Path] = sorted(sidecar_dir.glob("*.md"))
-    except OSError:
-        return None
+    never a raise. Only the `_MAX_CANDIDATES_READ` most recently modified
+    sidecars are opened, so files opened per call are constant however many
+    sidecars the dir holds."""
+    candidates = _newest_sidecars(sidecar_dir)
 
     for candidate in candidates:
         try:

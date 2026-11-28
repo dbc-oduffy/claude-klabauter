@@ -38,6 +38,7 @@ Negative-spec (RAG-bait):
 from __future__ import annotations
 
 import os
+import stat
 import sys
 import tempfile
 import time
@@ -138,7 +139,7 @@ def _replace_with_retry(src: str, dst: str) -> None:
 _TEMP_PREFIX = ".atomic-write."
 _SWEEP_INTERVAL_SECS = 60.0
 _SWEEP_MEMO_MAX = 256
-_last_sweep: dict[tuple[str, str], float] = {}
+_last_sweep: dict[str, float] = {}
 
 
 def _pid_alive(pid: int) -> bool:
@@ -178,16 +179,11 @@ def _in_submit_hook_budget() -> bool:
     return var is not None and var.get() is not None
 
 
-def _sweep_dead_temps(out_dir: Path, name: str) -> None:
-    """Unlink ``<_TEMP_PREFIX><name>.<pid>.<rand>`` temps whose writer pid is dead (a hard-killed writer).
-
-    Scans a directory at most once per ``_SWEEP_INTERVAL_SECS`` per target and never inside the submit
-    hook's budget (the next write outside it sweeps). The remainder after the
-    target name must be exactly ``<digits>.<one dot-free token>``, so a dotted sibling target's temp
-    (``out.txt.123`` as a target name) and live-pid temps are spared."""
+def _sweep_dead_temps(out_dir: Path) -> None:
+    """Unlink dead-pid temps in ``out_dir``, scanning it at most once per interval and never inside the submit hook budget."""
     if _in_submit_hook_budget():
         return
-    key = (str(out_dir), name)
+    key = str(out_dir)
     now = time.monotonic()
     last = _last_sweep.get(key)
     if last is not None and now - last < _SWEEP_INTERVAL_SECS:
@@ -195,17 +191,16 @@ def _sweep_dead_temps(out_dir: Path, name: str) -> None:
     if len(_last_sweep) >= _SWEEP_MEMO_MAX:
         _last_sweep.clear()
     _last_sweep[key] = now
-    head = f"{_TEMP_PREFIX}{name}."
     try:
-        with os.scandir(str(out_dir)) as it:
-            names = [e.name for e in it if e.name.startswith(head)]
+        with os.scandir(key) as it:
+            names = [e.name for e in it if e.name.startswith(_TEMP_PREFIX)]
     except OSError:
         return
     for entry in names:
-        pid_s, dot, rand = entry[len(head):].partition(".")
-        if not (dot and pid_s.isdigit() and rand and "." not in rand):
+        parts = entry[len(_TEMP_PREFIX):].rsplit(".", 2)
+        if len(parts) != 3 or not (parts[0] and parts[1].isdigit() and parts[2]):
             continue
-        if _pid_alive(int(pid_s)):
+        if _pid_alive(int(parts[1])):
             continue
         try:
             os.remove(out_dir / entry)
@@ -241,12 +236,22 @@ def atomic_write_bytes(
     function's."""
     target = Path(target)
     out_dir = target.parent if str(target.parent) else Path(".")
-    out_dir.mkdir(parents=True, exist_ok=True)
     prior_mode = None
-    if preserve_mode and target.is_file():
-        prior_mode = os.stat(target).st_mode
-    _sweep_dead_temps(out_dir, target.name)
-    fd, tmp_name = tempfile.mkstemp(prefix=f"{_TEMP_PREFIX}{target.name}.{os.getpid()}.", dir=str(out_dir))
+    if preserve_mode:
+        try:
+            st = os.stat(target)
+        except OSError:
+            pass
+        else:
+            if stat.S_ISREG(st.st_mode):
+                prior_mode = st.st_mode
+    _sweep_dead_temps(out_dir)
+    prefix = f"{_TEMP_PREFIX}{target.name}.{os.getpid()}."
+    try:
+        fd, tmp_name = tempfile.mkstemp(prefix=prefix, dir=str(out_dir))
+    except FileNotFoundError:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(prefix=prefix, dir=str(out_dir))
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)

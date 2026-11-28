@@ -79,7 +79,7 @@ def _review() -> dict:
     review["prep"] = {"run_base_sha": "a" * 40, "product_files": 0, "foreign_claims": [], "slice_files": []}
     review["delivery"] = {"verdict": "PASS", "product_files": 0, "claims_unbacked": 0}
     review["criterion"]["register_rows"] = [
-        {"id": "R1", "claim": "this-plan", "status": "met", "met_by": "a.py", "wired": True, "surface": "api",
+        {"id": "R1", "claim": "this-plan", "status": "met", "wired": True, "evidence": "verified", "surface": "api",
          "command": "python a.py", "observed": "a.py ran", "observed_ref": "a.py::f"}
     ]
     return review
@@ -110,7 +110,7 @@ def _landed(tmp_path, monkeypatch, *, slice_sizing: bool) -> dict:
     monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
     monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     monkeypatch.setattr(
-        claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], [])
+        claims, "list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([("handoff", "b.md")], [])
     )
     monkeypatch.setattr(close_background, "_launch_close_review", lambda ctx: True)
     out = land_run._handler(
@@ -208,7 +208,7 @@ def test_delivered_report_gets_ledger_credit_only_with_a_clean_integration_verdi
         review["integration"] = integration
     got = land_run._grade(
         tmp_path, request, {"C1"}, review, SimpleNamespace(items=[]),
-        {"items": [{"id": "R1", "status": "met", "met_by": "a.py"}, {"id": "R2", "status": "met", "met_by": "a.py"}]},
+        {"items": [{"id": "R1", "status": "met", "evidence": "verified"}, {"id": "R2", "status": "met", "evidence": "verified"}]},
         set(), None, None, None, None, {},
     )
     assert got == expected
@@ -230,7 +230,7 @@ def test_delivery_credit_still_requires_row_evidence(tmp_path, case):
         review["delivery"] = {"verdict": "FAIL"}
     assert land_run._grade(
         tmp_path, request, {"C1"}, review, None if case == "no-ledger" else SimpleNamespace(items=[]),
-        {"items": [{"id": "R1", "status": "met", "met_by": "a.py"}]}, {"C1"} if case == "held" else set(),
+        {"items": [{"id": "R1", "status": "met", "evidence": "verified"}]}, {"C1"} if case == "held" else set(),
         None, None, None, None, {},
     ) == {}
 
@@ -315,7 +315,7 @@ def test_default_sizing_refire_delivers_discharge_and_consistent_result(tmp_path
     script = root / "scratch" / "warp" / f"{run_id}.workflow.mjs"
     gate = agent_gate_reply(root, ask_gate._handler({"sizing_path": SIZING_REL, "run_id": run_id}, repo_root=root))
     assert gate.get("resume_plan") == plan_rel, json.dumps(gate, indent=2)
-    verdict = {"items": [{"id": rid, "status": "met", "met_by": "a.py", "wired": True,
+    verdict = {"items": [{"id": rid, "status": "met", "wired": True, "evidence": "verified",
                           "command": "python a.py", "observed": "a.py ran"} for rid in ("R1", "R2")]}
     cfg = {"script": str(script), "token": emitted["fire_args"]["runToken"]}
     landed = None

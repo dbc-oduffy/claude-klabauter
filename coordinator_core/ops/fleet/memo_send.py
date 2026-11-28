@@ -168,6 +168,7 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.ignore_match import IgnoreMatcher
 from coordinator_core.git import git_state
 from coordinator_core.git.git_objects import (
+    PackReadDeadline,
     _read_object,
     read_object_header,
     read_ref_loose_or_packed,
@@ -2341,7 +2342,16 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     record_relpath = _relpath(record_path)
     # "delivered" is reported only when the receiver's local branch tip holds the
     # memo, whichever arm (fresh, local-tip CAS, reconciled) put it there.
-    on_branch = _on_receiver_branch(receiver_repo_path, probe.branch, rel_path)
+    # The delivery has landed: a pack-read stall from here on is a warning on a sent receipt,
+    # never a REFUSED that invites a duplicate resend.
+    post_delivery_warnings: list = []
+    try:
+        on_branch = _on_receiver_branch(receiver_repo_path, probe.branch, rel_path)
+    except PackReadDeadline as exc:
+        on_branch = False
+        post_delivery_warnings.append(
+            f"receiver-branch check stalled ({exc}); reported pinned, the memo is delivered"
+        )
     sender_message = apply_missing_trailers(
         _receipt_subject(
             topic, to, pinned=not on_branch, sha=delivery_commit_sha,
@@ -2369,23 +2379,31 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     # stale duplicate into a failed send. The leftover draft stays tracked,
     # which is the same "stale duplicate, not data loss" the warning already
     # accepts.
-    sender_deleted = (
-        [outbox_relpath]
-        if draft_removed
-        and git_native._head_entry_for(sender_worktree, outbox_relpath) is not None
-        else []
-    )
-
-    # A receipt whose paths are git-ignored and untracked (a group-EM home
-    # ignores .coordinator-local/) has nothing to commit; force-adding it
-    # would put ignored bytes in history. A matcher gap (None) commits.
-    matcher = IgnoreMatcher(sender_worktree)
-    receipt_ignored = all(
-        matcher.ignored(rel, False) is True
-        and git_native._head_entry_for(sender_worktree, rel) is None
-        for rel in (sent_relpath, record_relpath)
-    )
+    sender_deleted = []
+    receipt_ignored = False
+    precompute_stall = None
     try:
+        sender_deleted = (
+            [outbox_relpath]
+            if draft_removed
+            and git_native._head_entry_for(sender_worktree, outbox_relpath) is not None
+            else []
+        )
+
+        # A receipt whose paths are git-ignored and untracked (a group-EM home
+        # ignores .coordinator-local/) has nothing to commit; force-adding it
+        # would put ignored bytes in history. A matcher gap (None) commits.
+        matcher = IgnoreMatcher(sender_worktree)
+        receipt_ignored = all(
+            matcher.ignored(rel, False) is True
+            and git_native._head_entry_for(sender_worktree, rel) is None
+            for rel in (sent_relpath, record_relpath)
+        )
+    except PackReadDeadline as exc:
+        precompute_stall = exc
+    try:
+        if precompute_stall is not None:
+            raise precompute_stall
         if receipt_ignored:
             sender_commit = _SenderCommit(True, None, "")
         else:
@@ -2410,6 +2428,12 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         sender_commit = _SenderCommit(
             True, getattr(landed, "sha", None), ""
         )
+    except PackReadDeadline as exc:
+        post_delivery_warnings.append(
+            f"sender receipt commit stalled on a pack read ({exc}); the memo is "
+            f"delivered, sent/ copy and sent record are on disk uncommitted"
+        )
+        sender_commit = _SenderCommit(False, None, str(exc))
     except (CommitRefused, FilterUnsupported, IndexWriteError) as exc:
         # `IndexWriteError` (and its `IndexWriteLockBusy` subclass) belongs
         # here for the SAME reason the other two do: by this line the receiver
@@ -2477,6 +2501,8 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         )
     if delivery_warning:
         acted_item["anchor_warning"] = delivery_warning
+    if post_delivery_warnings:
+        acted_item["post_delivery_warnings"] = post_delivery_warnings
     if push_pending_record is not None:
         acted_item["push_pending_record"] = push_pending_record
         acted_item["push_pending"] = True

@@ -136,11 +136,62 @@ def test_restricted_token_is_denied_by_the_base_dacl(monkeypatch):
     monkeypatch.setattr(
         election,
         "_pipe_sddl",
-        lambda sid, logon_sid=None: f"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{sid})",
+        lambda sid, logon_sid=None, extra_sids=(): f"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{sid})",
     )
     name = election.pipe_name(uuid.uuid4().hex)
     handle = election.elect(name)
     try:
         assert _open_pipe_as_restricted_token(name, restricting, 0) == 5
+    finally:
+        _winapi.CloseHandle(handle)
+
+
+# Stand-in for an engine owned by another account: the pipe is elected with a
+# foreign owner SID and no logon ACE, so the test process's own user SID is a
+# non-owner caller admitted only through extra_sids (the sandbox-principal ACE).
+_FOREIGN_OWNER = "S-1-5-21-1-2-3-1001"
+
+
+def _elect_foreign_owned_pipe(monkeypatch, extra_sids):
+    name = election.pipe_name(uuid.uuid4().hex, user_sid=_FOREIGN_OWNER)
+    monkeypatch.setattr(election, "current_logon_sid", lambda: None)
+    monkeypatch.setattr(election, "sandbox_principal_sids", lambda: tuple(extra_sids))
+    return name, election.elect(name, user_sid=_FOREIGN_OWNER)
+
+
+def test_restricted_token_whose_user_sid_is_in_extra_sids_opens_the_pipe(monkeypatch):
+    import _winapi
+
+    own = election.current_user_sid()
+    name, handle = _elect_foreign_owned_pipe(monkeypatch, [own])
+    try:
+        assert _open_pipe_as_restricted_token(name, _BASE_RESTRICTING + [own], 0) == 0
+    finally:
+        _winapi.CloseHandle(handle)
+
+
+def test_restricted_token_whose_user_sid_is_not_in_extra_sids_is_refused(monkeypatch):
+    import _winapi
+
+    own = election.current_user_sid()
+    name, handle = _elect_foreign_owned_pipe(monkeypatch, ["S-1-5-21-1-2-3-1006"])
+    try:
+        assert _open_pipe_as_restricted_token(name, _BASE_RESTRICTING + [own], 0) == 5
+    finally:
+        _winapi.CloseHandle(handle)
+
+
+def test_restricted_token_without_sandbox_user_in_restricting_set_is_refused_even_when_user_admitted(monkeypatch):
+    """An admitted user SID is not enough: the restricting-SID pass needs an
+    ACE too. The owner's logon ACE cannot serve a sandbox user (a different
+    logon session), so a sandbox token restricted to Everyone/Users/its logon
+    SID only is refused; one whose restricting set carries a SID in the DACL
+    (its user or an admitted group) passes."""
+    import _winapi
+
+    own = election.current_user_sid()
+    name, handle = _elect_foreign_owned_pipe(monkeypatch, [own])
+    try:
+        assert _open_pipe_as_restricted_token(name, _BASE_RESTRICTING, 0) == 5
     finally:
         _winapi.CloseHandle(handle)

@@ -25,7 +25,13 @@ def _git(cwd: Path, *args: str) -> str:
 
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    from coordinator_core import machine_resolver
+
+    (tmp_path / "tmp").mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
+    monkeypatch.setattr(
+        machine_resolver, "registry_get", lambda key: str(tmp_path / "scratch") if key == "paths.scratch_root" else None
+    )
     root = tmp_path / "proj"
     root.mkdir()
     _git(root, "init", "-q")
@@ -181,7 +187,7 @@ def test_provision_spawn_count_and_process_time(repo: Path, monkeypatch: pytest.
     record_property("provision_parent_process_s", round(time.process_time() - t0, 4))
     record_property("provision_git_spawns", len(calls))
     assert (clone / "a.txt").is_file()
-    assert calls == ["rev-parse", "clone", "checkout"]
+    assert calls == ["rev-parse", "clone", "ls-tree", "checkout"]
 
 
 def _write_cone(repo: Path, run_id: str, text: str) -> None:
@@ -216,10 +222,65 @@ def test_provision_with_a_cone_checks_out_only_the_cone_and_root_files(repo: Pat
     assert worker_clone.base_sha(clone) == _git(repo, "rev-parse", "HEAD")
 
 
-def test_provision_with_an_empty_cone_file_checks_out_everything(repo: Path) -> None:
+def test_provision_with_an_empty_cone_file_checks_out_a_small_tree_whole(repo: Path) -> None:
     _write_cone(repo, "run-1", "\n")
     clone = worker_clone.provision(repo, "run-1", is_live=_dead)
     assert (clone / "sub" / "b.txt").is_file() and (clone / "a.txt").is_file()
+
+
+def test_an_unresolved_cone_on_a_large_tree_narrows_to_root_files(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(worker_clone, "FULL_CHECKOUT_MAX_FILES", 1)
+    argvs: list = []
+    real = worker_clone.run_git
+    monkeypatch.setattr(worker_clone, "run_git", lambda argv, **k: (argvs.append(list(argv)), real(argv, **k))[1])
+    clone = worker_clone.provision(repo, "run-1", is_live=_dead)
+    assert (clone / "a.txt").is_file()
+    assert not (clone / "sub").exists()
+    sparse = [a for a in argvs if a[0] == "sparse-checkout"]
+    assert len(sparse) == 1 and sparse[0][-1] == "--sparse-index"
+    assert worker_clone.base_sha(clone) == _git(repo, "rev-parse", "HEAD")
+
+
+def test_a_failed_tree_listing_narrows_rather_than_checking_out_everything(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = worker_clone.run_git
+
+    def slow(argv, **kw):
+        if argv[0] == "ls-tree":
+            return type("R", (), {"returncode": -1, "timed_out": True, "stderr": "", "stdout": ""})()
+        return real(argv, **kw)
+
+    monkeypatch.setattr(worker_clone, "run_git", slow)
+    clone = worker_clone.provision(repo, "run-1", is_live=_dead)
+    assert (clone / "a.txt").is_file() and not (clone / "sub").exists()
+
+
+def test_a_named_cone_never_lists_the_tree(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_cone(repo, "run-1", "sub\n")
+    seen: list = []
+    real = worker_clone.run_git
+    monkeypatch.setattr(worker_clone, "run_git", lambda argv, **k: (seen.append(argv[0]), real(argv, **k))[1])
+    worker_clone.provision(repo, "run-1", is_live=_dead)
+    assert "ls-tree" not in seen
+
+
+def test_clones_land_under_the_machine_local_scratch_root_not_gettempdir(repo: Path, tmp_path: Path) -> None:
+    clone = worker_clone.provision(repo, "run-1", is_live=_dead)
+    scratch = tmp_path / "scratch"
+    assert clone.is_relative_to(scratch)
+    assert clone == scratch / repo.name / worker_clone.CLONES_DIRNAME / "run-1"
+    assert not (tmp_path / "tmp").exists() or not any((tmp_path / "tmp").rglob(worker_clone.CLONES_DIRNAME))
+    assert worker_clone.reap(repo, "run-1") is True and not clone.exists()
+
+
+def test_without_a_scratch_root_clones_fall_back_to_the_managed_temp_root(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core import machine_resolver, temp_layout
+
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key: None)
+    assert worker_clone._clones_dir(repo) == temp_layout.coordinator_temp_root(repo) / worker_clone.CLONES_DIRNAME
 
 
 def test_provision_with_a_cone_adds_one_sparse_checkout_spawn_and_no_timeout(
@@ -234,6 +295,95 @@ def test_provision_with_a_cone_adds_one_sparse_checkout_spawn_and_no_timeout(
     assert all("timeout" not in c[1] for c in calls)
 
 
+def test_the_clone_sparse_checkout_and_checkout_legs_run_on_the_bulk_lane_and_rev_parse_stays_local(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_cone(repo, "run-1", "sub\n")
+    lanes: list = []
+    real = worker_clone.run_git
+
+    def spy(argv, **kw):
+        lanes.append((argv[0], bool(kw.get("remote", False)), kw.get("timeout")))
+        return real(argv, **kw)
+
+    monkeypatch.setattr(worker_clone, "run_git", spy)
+    worker_clone.provision(repo, "run-1", is_live=_dead)
+    assert [name for name, _, _ in lanes] == ["rev-parse", "clone", "sparse-checkout", "checkout"]
+    by_leg = {name: (remote, timeout) for name, remote, timeout in lanes}
+    assert by_leg["rev-parse"] == (False, None)
+    for leg in ("clone", "sparse-checkout", "checkout"):
+        assert by_leg[leg] == (True, None)
+
+
+def test_the_plain_cone_fallback_leg_also_runs_on_the_bulk_lane(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_cone(repo, "run-1", "sub\n")
+    real = worker_clone.run_git
+    sparse: list = []
+
+    def old_git(argv, **kw):
+        if argv[0] == "sparse-checkout":
+            sparse.append((bool(kw.get("remote", False)), kw.get("timeout")))
+            if "--sparse-index" in argv:
+                return type("R", (), {"returncode": 129, "timed_out": False, "stderr": "unknown option", "stdout": ""})()
+        return real(argv, **kw)
+
+    monkeypatch.setattr(worker_clone, "run_git", old_git)
+    worker_clone.provision(repo, "run-1", is_live=_dead)
+    assert sparse == [(True, None), (True, None)]
+
+
+def test_the_cone_is_set_with_a_sparse_index_so_the_checkout_never_builds_every_out_of_cone_entry(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_cone(repo, "run-1", "sub\n")
+    argvs: list = []
+    real = worker_clone.run_git
+    monkeypatch.setattr(worker_clone, "run_git", lambda argv, **k: (argvs.append(list(argv)), real(argv, **k))[1])
+    worker_clone.provision(repo, "run-1", is_live=_dead)
+    sparse = [a for a in argvs if a[0] == "sparse-checkout"]
+    assert len(sparse) == 1 and "--sparse-index" in sparse[0] and "--cone" in sparse[0]
+
+
+def test_a_git_without_sparse_index_falls_back_to_a_plain_cone_and_still_checks_out_only_the_cone(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (repo / "other").mkdir()
+    (repo / "other" / "c.txt").write_bytes(b"gamma\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "more")
+    _write_cone(repo, "run-1", "sub\n")
+    real = worker_clone.run_git
+    seen: list = []
+
+    def old_git(argv, **kw):
+        seen.append(list(argv))
+        if argv[0] == "sparse-checkout" and "--sparse-index" in argv:
+            return type("R", (), {"returncode": 129, "timed_out": False, "stderr": "unknown option", "stdout": ""})()
+        return real(argv, **kw)
+
+    monkeypatch.setattr(worker_clone, "run_git", old_git)
+    clone = worker_clone.provision(repo, "run-1", is_live=_dead)
+    assert [a[0] for a in seen].count("sparse-checkout") == 2
+    assert (clone / "sub" / "b.txt").is_file() and not (clone / "other").exists()
+
+
+def test_a_timed_out_sparse_index_cone_is_not_retried(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_cone(repo, "run-1", "sub\n")
+    real = worker_clone.run_git
+    seen: list = []
+
+    def slow(argv, **kw):
+        seen.append(list(argv))
+        if argv[0] == "sparse-checkout":
+            return type("R", (), {"returncode": -1, "timed_out": True, "stderr": "", "stdout": ""})()
+        return real(argv, **kw)
+
+    monkeypatch.setattr(worker_clone, "run_git", slow)
+    with pytest.raises(worker_clone.WorkerCloneError, match="timed out"):
+        worker_clone.provision(repo, "run-1", is_live=_dead)
+    assert [a[0] for a in seen].count("sparse-checkout") == 1
+
+
 def test_a_failed_sparse_checkout_leaves_no_clone(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_cone(repo, "run-1", "sub\n")
     real = worker_clone.run_git
@@ -243,7 +393,14 @@ def test_a_failed_sparse_checkout_leaves_no_clone(repo: Path, monkeypatch: pytes
             return type("R", (), {"returncode": 1, "timed_out": False, "stderr": "boom", "stdout": ""})()
         return real(argv, **kw)
 
-    monkeypatch.setattr(worker_clone, "run_git", fail)
+    seen: list = []
+
+    def counted(argv, **kw):
+        seen.append(list(argv))
+        return fail(argv, **kw)
+
+    monkeypatch.setattr(worker_clone, "run_git", counted)
     with pytest.raises(worker_clone.WorkerCloneError, match="sparse-checkout of sub failed: boom"):
         worker_clone.provision(repo, "run-1", is_live=_dead)
+    assert [a[0] for a in seen].count("sparse-checkout") == 1
     assert not (worker_clone._clones_dir(repo) / "run-1").exists()

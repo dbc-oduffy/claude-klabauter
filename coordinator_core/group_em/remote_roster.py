@@ -69,7 +69,7 @@ def read_snapshot(
 
 
 REFRESH_INTERVAL_S = SNAPSHOT_TTL_S / 2
-_FIELDS = ("session_id", "name", "cwd", "status", "address")
+_FIELDS = ("session_id", "name", "cwd", "status", "address", "role")
 
 
 def _trim(rows: object) -> list:
@@ -89,6 +89,11 @@ def _raw(path: Path) -> Optional[dict]:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def read_published(path: Path) -> list:
+    """Trimmed sessions of the snapshot file at `path`, any age; [] when unreadable."""
+    return _trim((_raw(path) or {}).get("sessions"))
 
 
 def _write_snapshot(directory: Path, box_id: str, ok: bool, sessions: list, now: float) -> bool:

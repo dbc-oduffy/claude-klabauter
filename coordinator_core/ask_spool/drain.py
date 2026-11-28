@@ -521,12 +521,12 @@ def _fail(root: str, sid: str, path: str, header: dict, payload: bytes, why: str
             counts["notified"] += 1
 
 
-def _drain_remote_failover() -> None:
-    """Run the queued remote-engine failover retries (bounded batch); never raises, not counted."""
+def _drain_remote_failover(root: Optional[Path] = None) -> None:
+    """Run the queued remote-engine failover retries (bounded batch) and, given `root`, the remote_run blocker status checks; never raises, not counted."""
     try:
         from coordinator_core.remote_engine import background
 
-        background.drain_pending()
+        background.drain_pending(root=root)
     except Exception:  # noqa: BLE001 - the ask entries are already settled
         pass
 
@@ -563,7 +563,7 @@ def _late_duplicates(repo_root: str, seen: set, by_key: dict) -> Iterator[str]:
     The tail runs first so no work sits between the final listing and the drain's exit.
     Entries are read unclaimed; a concurrent claimer winning the race is handled by `record.claim` returning None in `run`."""
     root = Path(repo_root)
-    _drain_remote_failover()
+    _drain_remote_failover(root)
     for _ in range(_MAX_PASSES):
         found = False
         for sid in record.list_pending(repo_root):

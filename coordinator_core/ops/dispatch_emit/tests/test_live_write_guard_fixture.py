@@ -1,4 +1,4 @@
-"""End to end: a halt eviction whose HEAD-based bytes would drop a peer run's unlanded hunk is refused naming the peer."""
+"""End to end: a halt records a file carrying a peer run's unlanded hunk and leaves the tree bytes as they are."""
 
 from __future__ import annotations
 
@@ -50,36 +50,18 @@ def _world(tmp_path: Path) -> tuple[Path, Path, str]:
     return root, tmp_path / "rec", peer
 
 
-def _stage_own(root: Path, baseline: bytes) -> None:
-    from coordinator_core.git import git_objects
-    from coordinator_core.git.git_dir import resolve_git_common_dir
-
-    sha = git_objects.write_object(resolve_git_common_dir(root), b"blob", baseline)
-    rdir = root / "state" / "warp" / OWN
-    rdir.mkdir(parents=True)
-    (rdir / "manifest.json").write_text(
-        json.dumps({"rows": [], "doc_writes": [], "write_baseline": {PATH: sha}}), encoding="utf-8"
-    )
-
-
-def test_a_reset_that_would_drop_peer_hunks_is_refused_and_peer_hunks_survive(tmp_path, monkeypatch):
-    root, rec, peer = _world(tmp_path)
-    monkeypatch.setattr(halt_tree_evict, "_reset_plan", lambda *a: (HEAD, None))
-    refused: dict = {}
-    index = halt_tree_evict.evict(root, rec, [PATH], {PATH: HEAD}, run_id=OWN, refused=refused)
-    assert peer in refused[PATH]
-    assert index == {}
+def test_halt_over_a_file_carrying_peer_hunks_records_it_and_keeps_the_tree(tmp_path):
+    root, rec, _peer = _world(tmp_path)
+    index = halt_tree_evict.evict(root, rec, [PATH])
+    assert index[PATH]["head"] == index[PATH]["blob"]
+    assert (rec / halt_tree_evict.BLOBS_DIR / index[PATH]["blob"]).read_bytes() == PEER_LIVE
     assert (root / PATH).read_bytes() == PEER_LIVE
-    assert not (rec / halt_tree_evict.EVICTED_FILE).exists()
 
 
-def test_evict_over_a_hunk_the_peer_delta_also_covers_is_refused_and_tree_kept(tmp_path):
+def test_halt_over_an_own_edit_on_a_peer_hunk_keeps_the_tree(tmp_path):
     root, rec, _peer = _world(tmp_path)
     mine = PEER_LIVE + b"mine = 1\n"
     (root / PATH).write_bytes(mine)
-    _stage_own(root, PEER_LIVE)
-    refused: dict = {}
-    index = halt_tree_evict.evict(root, rec, [PATH], {PATH: HEAD}, run_id=OWN, refused=refused)
-    assert PATH in refused
-    assert index == {}
+    index = halt_tree_evict.evict(root, rec, [PATH])
+    assert PATH in index
     assert (root / PATH).read_bytes() == mine

@@ -22,6 +22,17 @@ from pathlib import Path
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
+@pytest.fixture(autouse=True)
+def _wired_commands_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The verdict's `wired` command is a placeholder; `apply_verdict` would demote it unrerunnable."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    monkeypatch.setattr(
+        rl, "_rerun_wired_commands",
+        lambda repo_root, items: {i["command"]: {"passed": True, "reason": "", "output": ""} for i in items if i.get("command")},
+    )
+
+
 def test_ledger_resume_verdict_carries_a_whole_manifest(halted) -> None:  # noqa: F811
     _met_out_of_band(halted)
 

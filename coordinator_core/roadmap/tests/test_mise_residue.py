@@ -437,6 +437,14 @@ def test_gate_class_strings_are_keyed(tmp_path, fm, spine, expected):
     assert expected in mr.SPINE_REPAIR_CLASSES
 
 
+def test_anchor_classes_are_residue_repairs_in_input_order():
+    failing = ["ANCHOR/anchor-check-mismatch", "PRIME_EXIT/x", "ANCHOR/anchor-check-malformed"]
+    assert [g.split(" — ")[0] for g in mr.spine_repairs(failing)] == [
+        "spine-repair: ANCHOR/anchor-check-mismatch",
+        "spine-repair: ANCHOR/anchor-check-malformed",
+    ]
+
+
 def test_unquoted_on_key_yields_no_failing_class(tmp_path):
     spine = _ROW_T.format(ck="code-edit", w="[src/a.py]", x="on: push\n  ", b="do")
     assert _gate_classes(tmp_path, _FM, spine) == []

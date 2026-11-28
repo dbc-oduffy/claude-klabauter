@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.contract.cockpit_schema.entities.sizing_summary import SizingSummary
 from coordinator_core.contract.cockpit_schema.entities.workflow_run import WorkflowRun
 from coordinator_core.ops.emit.context import EmitContext
@@ -141,11 +142,98 @@ def test_workflow_runs_includes_in_flight_run_recorded_only_under_scratch(tmp_pa
     assert records[0]["status"] == "live"
 
 
+def test_workflow_runs_memo_holds_a_bounded_number_of_roots(tmp_path, pinned):
+    workflow_runs._MEMO.clear()
+    for i in range(workflow_runs._MEMO_MAX_ROOTS + 4):
+        root = tmp_path / f"root{i}"
+        root.mkdir()
+        workflow_runs.collect(_ctx(root))
+    assert len(workflow_runs._MEMO) == workflow_runs._MEMO_MAX_ROOTS
+    assert str(tmp_path / f"root{workflow_runs._MEMO_MAX_ROOTS + 3}") in workflow_runs._MEMO
+    assert str(tmp_path / "root0") not in workflow_runs._MEMO
+
+
+def test_workflow_runs_rereads_only_runs_whose_files_moved(tmp_path, pinned, monkeypatch):
+    for i in range(30):
+        _run(tmp_path, f"r-old-{i:02d}", _stage("landed", last="2026-01-01T00:00:00Z"))
+    _run(tmp_path, "r-live", _stage("staged", steps_planned=2))
+    ctx = _ctx(tmp_path)
+    reads: list[str] = []
+    real = workflow_runs._read_json
+    monkeypatch.setattr(workflow_runs, "_read_json", lambda p: (reads.append(p), real(p))[1])
+
+    first, _ = workflow_runs.collect(ctx)
+    assert [r["run_id"] for r in first] == ["r-live"]
+    assert len([p for p in reads if p.endswith("run-stage.json")]) == 31
+
+    reads.clear()
+    again, _ = workflow_runs.collect(ctx)
+    assert again == first
+    assert reads == []  # unchanged corpus: no JSON read, old terminal runs included
+
+    stage_file = tmp_path / "state" / "warp" / "r-live" / "run-stage.json"
+    stage_file.write_text(json.dumps(_stage("landed", last="2026-10-24T11:30:00Z", steps_planned=22)), encoding="utf-8")
+    reads.clear()
+    moved, _ = workflow_runs.collect(ctx)
+    assert [r["steps_planned"] for r in moved] == [22] and moved[0]["status"] == "closed"
+    assert [Path(p).parent.name for p in reads] == ["r-live", "r-live"]  # its stage and run.json, nothing else
+
+    (stage_file.parent / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/y.yaml"}), encoding="utf-8")
+    refreshed, _ = workflow_runs.collect(ctx)
+    assert refreshed[0]["sizing_rel"] == "state/sizings/y.yaml"
+
+
+def test_workflow_runs_cold_engine_adopts_the_snapshot_without_reading_run_files(tmp_path, pinned, monkeypatch):
+    (tmp_path / ".coordinator-local").mkdir()
+    for i in range(20):
+        _run(tmp_path, f"r-old-{i:02d}", _stage("landed", last="2026-01-01T00:00:00Z"))
+    (tmp_path / "state" / "warp" / "r-empty").mkdir()
+    _run(tmp_path, "r-live", _stage("staged", steps_planned=2))
+    ctx = _ctx(tmp_path)
+    first, _ = workflow_runs.collect(ctx)
+    assert (tmp_path / ".coordinator-local" / "workflow-runs-index.json").is_file()
+
+    workflow_runs._MEMO.clear()  # engine restart
+    reads: list[str] = []
+    real = workflow_runs._read_json
+    monkeypatch.setattr(workflow_runs, "_read_json", lambda p: (reads.append(p), real(p))[1])
+    cold, _ = workflow_runs.collect(ctx)
+    assert cold == first == [r for r in first if r["run_id"] == "r-live"]
+    assert [p for p in reads if "warp" in p] == []  # no run file read; only the snapshot itself
+
+    # A run dir whose mtime moved is re-read; the rest stay snapshot-served.
+    workflow_runs._MEMO.clear()
+    reads.clear()
+    atomic_write_bytes(
+        tmp_path / "state" / "warp" / "r-live" / "run-stage.json",
+        json.dumps(_stage("landed", last="2026-10-24T11:30:00Z", steps_planned=9)).encode("utf-8"),
+    )
+    moved, _ =workflow_runs.collect(ctx)
+    assert [(r["steps_planned"], r["status"]) for r in moved] == [(9, "closed")]
+    assert {Path(p).parent.name for p in reads if "warp" in p} == {"r-live"}
+
+
+def test_workflow_runs_ignores_a_snapshot_from_another_schema(tmp_path, pinned):
+    (tmp_path / ".coordinator-local").mkdir()
+    _run(tmp_path, "r-live", _stage("staged", steps_planned=2))
+    ctx = _ctx(tmp_path)
+    workflow_runs.collect(ctx)
+    snap = tmp_path / ".coordinator-local" / "workflow-runs-index.json"
+    data = json.loads(snap.read_text(encoding="utf-8"))
+    data["f"] = [-1, 0]
+    data["e"] = {k: [v[0], 1, "staged", v[3], {"run_id": "stale"}, None] for k, v in data["e"].items()}
+    snap.write_text(json.dumps(data), encoding="utf-8")
+    workflow_runs._MEMO.clear()
+    again, _ = workflow_runs.collect(ctx)
+    assert [r["run_id"] for r in again] == ["r-live"]
+
+
 def test_live_corpus_sections_stay_under_the_500ms_bar(pinned):
     if len(list((_REPO_ROOT / "state" / "sizings").glob("*.yaml"))) < 100:
         pytest.skip("live sizing corpus absent")
     ctx = _ctx(_REPO_ROOT)
     sizings.collect(ctx)  # populate the parse memo and per-worktree record cache
+    workflow_runs.collect(ctx)  # populate the per-run memo the warm engine carries
     t = time.process_time()
     records, _ = sizings.collect(ctx)
     sizings_secs = time.process_time() - t

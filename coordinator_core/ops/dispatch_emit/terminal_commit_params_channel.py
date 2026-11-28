@@ -430,7 +430,7 @@ def materialize_from_prompt(repo_root: object, prompt: object) -> tuple[Optional
         return None, "params-path"
     rid, tok, script = params["run_id"], params["run_token"], params["script_path"]
     root = str(repo_root)
-    if not (run_token.halt_admits(root, rid, tok, script) or run_token.spent_receipt(root, rid, tok, script) is not None):
+    if not (run_token.halt_own_token(root, rid, tok, script) or run_token.spent_receipt(root, rid, tok, script) is not None):
         return canonical, "params-token"
     if not materialize(canonical, params):
         return canonical, "params-write"

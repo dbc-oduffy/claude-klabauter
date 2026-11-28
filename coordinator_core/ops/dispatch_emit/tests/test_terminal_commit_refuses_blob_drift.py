@@ -329,7 +329,7 @@ def _call(repo: Path, **extra) -> dict:
     """The ask-run call over `ask`'s fixture, driven through the retained `dispatch.terminal_commit`."""
     params = {
         "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": ask._REVIEWED, "session_id": ask._SID,
-        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]}, **extra,
+        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "wired": True}]}, **extra,
     }
     return terminal_commit._handler(params, repo_root=repo / ".git")
 

@@ -1311,7 +1311,8 @@ _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 def em_discharge_closes(row: dict, entry: object) -> bool:
     """True when a recorded discharge closes ``row``: the row is em-performed, or ``entry`` is a
     dict carrying a non-empty ``evidence`` and either a non-empty ``commit`` or
-    ``writes_verified: true`` (the discharge found every declared write on disk)."""
+    ``writes_verified: true`` (the discharge found every declared write on disk), or the entry
+    and the row both carry ``deliverable_outside_repo: true``."""
     from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
 
     if row_is_em_performed(row):
@@ -1321,11 +1322,18 @@ def em_discharge_closes(row: dict, entry: object) -> bool:
         and (
             (isinstance(entry.get("commit"), str) and bool(entry["commit"].strip()))
             or entry.get("writes_verified") is True
+            or (entry.get("deliverable_outside_repo") is True and row.get("deliverable_outside_repo") is True)
         )
         and isinstance(entry.get("evidence"), str)
         and bool(entry["evidence"].strip())
     )
 
+
+_DISCHARGE_ACCEPTS = (
+    "an executor row is discharged by 'evidence' plus 'commit', or by 'evidence' with every "
+    "declared write on disk and changed against HEAD; a row with `deliverable_outside_repo: true` "
+    "needs 'evidence' alone"
+)
 
 _HEX_PREFIX = re.compile(r"[0-9a-f]{4,39}")
 
@@ -1482,24 +1490,27 @@ def _em_discharge(
         evidence_s = f"{evidence_s}; {ue_evidence}" if evidence_s else ue_evidence
     executor_row = not row_is_em_performed(row)
     writes_verified = False
-    if executor_row and evidence_s and not commit_s:
+    outside_repo = executor_row and row.get("deliverable_outside_repo") is True and bool(evidence_s)
+    if outside_repo:
+        pass
+    elif executor_row and evidence_s and not commit_s:
         absent = _writes_absent(row, worktree)
         if absent:
             return _err(
-                f"em-discharge: row {row_id!r} is not performer: em; evidence without 'commit' "
-                f"needs every declared write on disk; absent: {absent}"
+                f"em-discharge: row {row_id!r} is not performer: em; {_DISCHARGE_ACCEPTS}; "
+                f"absent: {absent}"
             )
         unchanged = _writes_unchanged(row, worktree)
         if unchanged:
             return _err(
-                f"em-discharge: row {row_id!r} is not performer: em; evidence without 'commit' "
-                f"needs every declared write changed against HEAD; unchanged: {unchanged}"
+                f"em-discharge: row {row_id!r} is not performer: em; {_DISCHARGE_ACCEPTS}; "
+                f"unchanged: {unchanged}"
             )
         writes_verified = True
     elif executor_row and not (commit_s and evidence_s):
         return _err(
-            f"em-discharge: row {row_id!r} is not performer: em; "
-            "an executor row needs 'evidence' and either 'commit' or declared writes on disk"
+            f"em-discharge: row {row_id!r} is not performer: em; {_DISCHARGE_ACCEPTS}; "
+            f"given: commit={'yes' if commit_s else 'no'}, evidence={'yes' if evidence_s else 'no'}"
         )
 
     from coordinator_core.ops.dispatch_emit.spine_read import (
@@ -1518,7 +1529,7 @@ def _em_discharge(
         return _err(f"em-discharge: row {row_id!r} is execution_mode: operator; the operator releases it")
     if (row.get("disposition") or "open") != "open":
         return _err(f"em-discharge: row {row_id!r} disposition is {row.get('disposition')!r}, not open")
-    if executor_row and not writes_verified:
+    if executor_row and not writes_verified and not (outside_repo and not commit_s):
         resolved = _commit_resolves(repo_root, commit_s)
         if resolved is None:
             return _err(
@@ -1539,6 +1550,8 @@ def _em_discharge(
         entry["commit"] = commit_s
     if writes_verified:
         entry["writes_verified"] = True
+    if outside_repo:
+        entry["deliverable_outside_repo"] = True
     if evidence_s:
         entry["evidence"] = relativize_text(evidence_s, [(str(worktree), "")])
     state = {"applied": False}
@@ -3111,9 +3124,14 @@ async def _handler_core(params: dict, repo_root: Optional[Path] = None) -> dict:
                    automation report, which is recorded as evidence) — records that the EM performed
                    `performer: em` row `id` under `em_discharged` in the
                    evidence sidecar; read back with `read_em_discharges`. An
-                   executor row is discharged only with both `commit` (a full
-                   40-hex sha resolving to a commit) and non-empty `evidence`;
-                   the entry carries both. Refuses unknown, uncited executor,
+                   executor row is discharged only with non-empty `evidence`
+                   plus `commit` (a sha resolving to a commit), or `evidence`
+                   with every declared write on disk and changed against HEAD;
+                   a row declaring `deliverable_outside_repo: true` (its
+                   deliverable lives outside the repo by design, e.g. a
+                   cross-repo-memo send) discharges with `evidence` alone and
+                   the entry records `deliverable_outside_repo`, never
+                   `writes_verified`. Refuses unknown, uncited executor,
                    memo-send, operator and non-open rows; a repeat is a no-op
                    (applied false).
         premise-record : id (str), verdict ('yes'|'no'|'widened'), ref (str,

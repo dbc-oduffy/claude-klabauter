@@ -420,3 +420,110 @@ def test_a_held_election_lock_reads_as_a_loss(tmp_path: Path) -> None:
 @posix_only
 def test_a_probe_of_a_never_created_path_is_absent(short_runtime_base: Path) -> None:
     assert election.probe_endpoint(short_runtime_base / "nothing.sock") == election.PROBE_ABSENT
+
+
+# --- one warm server per install: the predecessor the breadcrumb names is retired ---
+
+
+def _spawn_sleeper():
+    import subprocess
+
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def _epoch_of(pid: int) -> int:
+    from coordinator_core.session.core import _win_create_time_epoch
+
+    epoch = _win_create_time_epoch(pid)
+    assert epoch
+    return epoch
+
+
+def _name_in_breadcrumb(pid: int, epoch: int) -> None:
+    from coordinator_core.warm import breadcrumb
+
+    breadcrumb.write_breadcrumb(pipe="p", pid=pid, stable_pid_start_epoch=epoch, engine_sha=None)
+
+
+def test_install_predecessor_reads_the_breadcrumbs_verified_pid() -> None:
+    _name_in_breadcrumb(os.getpid() + 1, 1700000000)
+    assert election.install_predecessor() == (os.getpid() + 1, 1700000000)
+
+
+def test_install_predecessor_never_names_self_or_an_unverified_record() -> None:
+    assert election.install_predecessor() is None
+    _name_in_breadcrumb(os.getpid(), 1700000000)
+    assert election.install_predecessor() is None
+    _name_in_breadcrumb(4242, 0)
+    assert election.install_predecessor() is None
+
+
+@pytest.mark.spawns_process
+def test_a_parent_dead_duplicate_that_lost_the_install_is_terminated() -> None:
+    child = _spawn_sleeper()
+    try:
+        _name_in_breadcrumb(child.pid, _epoch_of(child.pid))
+        thread = election.retire_superseded_server(grace_secs=0)
+        assert thread is not None
+        thread.join(15)
+        assert child.wait(timeout=10) is not None
+    finally:
+        child.kill()
+
+
+@pytest.mark.spawns_process
+def test_a_reused_pid_is_not_terminated() -> None:
+    """A pid whose birth instant differs from the breadcrumb's is another process."""
+    child = _spawn_sleeper()
+    try:
+        _name_in_breadcrumb(child.pid, _epoch_of(child.pid) - 3600)
+        thread = election.retire_superseded_server(grace_secs=0)
+        assert thread is not None
+        thread.join(15)
+        assert child.poll() is None
+    finally:
+        child.kill()
+
+
+def test_retire_waits_out_the_drain_grace_before_terminating() -> None:
+    slept = []
+    killed = []
+    outcome = election.retire_predecessor(
+        7, 1700000000, grace_secs=35.0,
+        start_epoch_of=lambda pid: 1700000000, terminate=killed.append, sleep=slept.append,
+    )
+    assert outcome == election.RETIRE_TERMINATED
+    assert slept == [35.0] and killed == [7]
+
+
+def test_no_retirement_outside_the_warm_server_process(monkeypatch) -> None:
+    armed = []
+    monkeypatch.setattr(election, "retire_superseded_server", lambda *a, **k: armed.append(1))
+    monkeypatch.setattr(election, "_running_as_warm_server", lambda: False)
+    election._retire_predecessor_if_warm_server()
+    assert armed == []
+    monkeypatch.setattr(election, "_running_as_warm_server", lambda: True)
+    election._retire_predecessor_if_warm_server()
+    assert armed == [1]
+
+
+@posix_only
+def test_a_winning_server_process_retires_its_predecessor(short_runtime_base: Path, monkeypatch) -> None:
+    armed = []
+    monkeypatch.setattr(election, "_running_as_warm_server", lambda: True)
+    monkeypatch.setattr(election, "retire_superseded_server", lambda *a, **k: armed.append(1))
+    sock = election.elect_unix_socket(short_runtime_base / "svc" / "tok.sock")
+    try:
+        assert armed == [1]
+    finally:
+        sock.close()
+    with pytest.raises(election.ElectionLost):
+        winner = election.elect_unix_socket(short_runtime_base / "svc" / "tok.sock")
+        try:
+            election.elect_unix_socket(short_runtime_base / "svc" / "tok.sock")
+        finally:
+            winner.close()
+    assert armed == [1, 1]

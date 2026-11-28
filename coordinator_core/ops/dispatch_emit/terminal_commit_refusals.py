@@ -1172,14 +1172,11 @@ def _peer_held(
             answer = claim_index.classify_paths(session_id, paths, cwd=str(worktree_root))
         except Exception:
             return set()
-        from coordinator_core.ops.dispatch_emit.land_run import _without_landed_claimants
+        from coordinator_core.ops.dispatch_emit.land_run import _foreign_peers, _without_landed_claimants
 
-        held = set(
-            _without_landed_claimants(
-                worktree_root,
-                {p: list(o.peers) for p, o in answer.by_path.items() if o.verdict == claim_index.OWNERSHIP_PEER},
-            )
-        )
+        peers = {p: _foreign_peers(o.peers, session_id) for p, o in answer.by_path.items()
+                 if o.verdict == claim_index.OWNERSHIP_PEER}
+        held = set(_without_landed_claimants(worktree_root, {p: s for p, s in peers.items() if s}))
     from coordinator_core.ops import warp_run_deliverable
 
     try:

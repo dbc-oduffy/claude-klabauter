@@ -57,7 +57,7 @@ def _argv_seeds(root: Path, argv: Sequence[str], tracked: Collection[str]) -> tu
                 seeds.append(rel)
             continue
         prefix = rel.rstrip("/") + "/"
-        if any(p.startswith(prefix) for p in tracked):
+        if test_reach.has_tracked_prefix(tracked, prefix):
             dirs.append(rel)
     return seeds, dirs
 
@@ -128,6 +128,11 @@ def _conftest_reach(root: Path, conftests: Set[str], tracked: Collection[str]) -
     modules = test_reach._module_map(tracked)
     by_last: dict = {}
     helpers: Set[str] = set()
+    by_dir: dict = {}
+    # Trap: a repo-root module has no "/" and its dir is "" -- the root conftest's path-loaded sibling
+    # (drive_root_write_guard.py) must still be found, or every scoped mirror fails pytest_configure.
+    for p in modules.values():
+        by_dir.setdefault(p.rpartition("/")[0], []).append(p)
     for conftest in conftests:
         try:
             text = (root / conftest).read_text(encoding="utf-8", errors="replace")
@@ -136,13 +141,10 @@ def _conftest_reach(root: Path, conftests: Set[str], tracked: Collection[str]) -
         helpers |= {modules[name] for name in _pytest_plugins(text) if name in modules}
         helpers |= {modules[name] for name in _QUOTED_DOTTED_RE.findall(text) if name in modules}
         here = conftest.rpartition("/")[0]
-        # Trap: a repo-root module has no "/" (its dir is ""); the root conftest's path-loaded sibling
-        # (drive_root_write_guard.py) must still ride, or every scoped mirror fails pytest_configure.
-        for p in modules.values():
-            if p.rpartition("/")[0] == here:
-                stem = p.rpartition("/")[2][:-3]
-                if not stem.startswith(("test_", "conftest")) and (f'"{stem}' in text or f"'{stem}" in text):
-                    helpers.add(p)
+        for p in by_dir.get(here, ()):
+            stem = p.rpartition("/")[2][:-3]
+            if not stem.startswith(("test_", "conftest")) and (f'"{stem}' in text or f"'{stem}" in text):
+                helpers.add(p)
     reach: Set[str] = set(conftests) | helpers
     frontier = sorted(reach)
     # Trap: no depth cap. pytest runs every conftest import at collection, so a truncated walk leaves a
@@ -150,8 +152,9 @@ def _conftest_reach(root: Path, conftests: Set[str], tracked: Collection[str]) -
     while frontier:
         nxt: Set[str] = set()
         for rel in frontier:
-            nxt |= test_reach._imported_modules(root, rel, modules)
-            for rec in test_reach._records_for(root, rel):
+            records = test_reach._records_for(root, rel)
+            nxt |= test_reach._imported_modules(root, rel, modules, records=records)
+            for rec in records:
                 top = rec.module.split(".", 1)[0]
                 if rec.level or not top or top in modules or top in sys.stdlib_module_names:
                     continue

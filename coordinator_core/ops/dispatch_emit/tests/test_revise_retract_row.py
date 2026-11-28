@@ -77,8 +77,39 @@ def test_unknown_row_refuses(repo) -> None:
     _refused(repo, "R9", "no register row")
 
 
-def test_a_non_revision_row_refuses(repo) -> None:
-    _refused(repo, "R1", "not a revision row")
+def test_a_pm_verbatim_row_refuses(repo) -> None:
+    _refused(repo, "R1", "not a revision or relayed row")
+
+
+def _add_relayed_row(repo, text: str = "Context files: a.md") -> str:
+    def edit(rows):
+        rid = rl._next_id(rows)
+        rows.append({
+            "id": rid, "source_text": text, "anchor": rl.ORIGIN_RELAYED, "surface": rl.ROW_SURFACE,
+            "status": rr.STATUS_OPEN, "claimed_by": [],
+        })
+        return rows
+
+    rl._mutate_register(repo, REL, edit)
+    return _rows(repo)[-1]["id"]
+
+
+def test_retract_withdraws_an_open_unclaimed_relayed_row(repo) -> None:
+    row = _add_relayed_row(repo)
+    out = _retract(repo, row)
+    assert out["ok"], out
+    assert [r["id"] for r in _rows(repo)] == ["R1"]
+
+
+def test_a_claimed_relayed_row_refuses(repo) -> None:
+    row = _add_relayed_row(repo)
+    _edit_row(repo, row, claimed_by=["docs/plans/p.md"])
+    _refused(repo, row, "claimed")
+
+
+def test_a_raw_ask_row_refuses(repo) -> None:
+    _edit_row(repo, "R1", anchor=rl.ORIGIN_ASK)
+    _refused(repo, "R1", "not a revision or relayed row")
 
 
 def test_a_claimed_row_refuses(repo) -> None:

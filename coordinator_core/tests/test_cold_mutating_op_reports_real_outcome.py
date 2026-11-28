@@ -93,8 +93,8 @@ def test_cold_ask_gate_hung_fails_at_backstop_not_ceiling(monkeypatch: pytest.Mo
     env, _ = _dispatch(monkeypatch, hung, op_latency.IN_PROCESS, op="dispatch.ask_gate", origin=tmp_path)
     assert env["error"]["code"] == -32004
     data = env["error"]["data"]
-    assert data["retry_safe"] is False
-    assert "reconcile" in data["next_action"]
+    assert data["retry_safe"] is True
+    assert "same params once" in data["next_action"]
     assert "dispatch.ask_gate" in env["error"]["message"]
     diag = data["diagnosis"]
     assert diag["case"] == "hung_past_ceiling"
@@ -129,3 +129,11 @@ def test_warm_route_still_reports_indeterminate(monkeypatch: pytest.MonkeyPatch)
     env, _ = _dispatch(monkeypatch, slow, op_latency.WARM_SERVER)
     assert env["error"]["code"] == -32004
     assert "result" not in env
+
+
+def test_warm_ask_gate_indeterminate_envelope_stays_not_retry_safe() -> None:
+    import coordinator_core.warm.client as wc
+
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "dispatch.ask_gate", "params": {}}
+    env = wc._indeterminate_envelope(msg, "no reply")
+    assert env["error"]["data"]["retry_safe"] is False

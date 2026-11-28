@@ -1394,21 +1394,47 @@ def cs_repark_handoff(handoff_path: str) -> int:
 
 
 def cs_close_handoff(handoff_path: str, reason: str) -> int:
-    """Close transition: deployment_state -> closed + closed_reason: <reason>
-    (DR-084 human/session-only terminal — cancelled | displaced | stale).
-
-    Refuses (exit_code=1, no write) an empty or out-of-enum reason, and
-    refuses to overwrite an already-shipped/continued handoff — see
-    coordinator_core.ops.handoff_transition._close's docstring for the full
-    contract. This is the verb archive-stamp-cli lacked when an executor
-    tried to close a genuinely dead baton (roadmap-lvv-07) and instead
-    archived it via chain-archive-handoff with a zero-byte frontmatter diff,
-    leaving status: open on an archived record (reverted f145480d)."""
+    """Close (cancelled | displaced | stale), then archive; non-zero names the failing step."""
+    # trap: restage_src makes the move commit the closed frontmatter, not HEAD's stale blob.
     result = _call_handoff_transition(handoff_path, {"verb": "close", "reason": reason})
     rc = int(result.get("exit_code", 1))
     if rc != 0:
         print(f"cs_close_handoff: {result.get('error', 'unknown error')}", file=sys.stderr)
-    return rc
+        return rc
+    archived = _call_handoff_archive_transition(
+        handoff_path, {"mode": "chain", "restage_src": True}
+    )
+    arc = int(archived.get("exit_code", 1))
+    if arc != 0:
+        print(
+            f"cs_close_handoff: archive step failed after close: "
+            f"{archived.get('error', 'unknown error')}",
+            file=sys.stderr,
+        )
+        return arc
+    if archived.get("retained"):
+        print(
+            f"cs_close_handoff: {handoff_path} closed but NOT archived (retained): "
+            f"{archived.get('retain_reason') or archived.get('message') or 'no reason given'}",
+            file=sys.stderr,
+        )
+        return SHIP_RC_RETAINED
+    worktree, _ = _resolve_repo_root_for(Path(handoff_path))
+    if not _archive_move_landed(handoff_path, worktree):
+        print(
+            f"cs_close_handoff: {handoff_path} closed but the archive move did not land "
+            "(source still present or archive/handoffs/ destination missing)"
+            f"{_op_detail_suffix(archived)}",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def _op_detail_suffix(result: dict) -> str:
+    """` — message=…; warnings=…` from an op result, empty when it carries neither."""
+    parts = [f"{k}={result[k]}" for k in ("message", "warnings") if result.get(k)]
+    return f" — {'; '.join(parts)}" if parts else ""
 
 
 def cs_unclaim_handoff(

@@ -9,7 +9,7 @@ import sys
 from unittest import mock
 
 from coordinator_core.ops.dispatch_emit import ask_compose, ask_plan_blitz, ask_roadmap, emit, prompt_fragments
-from coordinator_core.ops.dispatch_emit.compose_size import component_sizes
+from coordinator_core.ops.dispatch_emit.compose_size import ASK_SCRIPT_CEILING_BYTES, component_sizes
 from coordinator_core.session import record_homes
 from coordinator_core.warm.caller_context import resolve_caller_context
 
@@ -195,8 +195,6 @@ def measure_headroom(repo_root: str) -> dict:
 
 _REFUSAL_RE = re.compile(r"(\d+) bytes(?:; largest inlined component (.+?) \((\d+) bytes\))?")
 _ROADMAP_SIZING_REL = record_homes.home_rel("sizings") + "/probe-roadmap.yaml"
-#: Share of the Workflow runner byte cap a composed script may use; the margin ratchet and this probe both read it.
-CEILING_RATIO = 0.90
 
 
 def parse_cap_refusal(text: str) -> dict:
@@ -276,7 +274,7 @@ def measure_roadmap_fanout(repo_root: str) -> dict:
         finally:
             os.chdir(cwd)
     cap = emit._WORKFLOW_SCRIPT_BYTE_CAP
-    ceiling = int(CEILING_RATIO * cap)
+    ceiling = ASK_SCRIPT_CEILING_BYTES
     return {"cap": cap, "ceiling": ceiling, "standalone": standalone, "in_run": in_run}
 
 

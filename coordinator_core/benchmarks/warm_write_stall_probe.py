@@ -1,7 +1,10 @@
 """Warm write stall probe: does a caller wait on a blocked filesystem write, and where do the stalls come from.
 
-Five measurements, each on a fixture under `--root` (default: a managed dir under the repo's `scratch/`),
-never on the live record homes:
+Seven measurements, each on a fixture under `--root` (default: a managed dir under the repo's `scratch/`),
+never on the live record homes. Beyond the five below, `halted_landing` calls `note_halt_landing`,
+`halted_withheld_index._persist` and `op._write_staged_prompt` plain and under `SlowFs`, and
+`atomic_write_cost` times each step of `atomic_write_bytes` (fresh vs seeded dir, stat/scandir calls per
+write, MsMpEng CPU):
 
 1. admits: N concurrent writers call `run_token.admits` (its heartbeat stamp is the write) against a run
    record whose `last_activity_at` is stale, so every call owes one stamp;
@@ -393,6 +396,163 @@ def measure_raw_latency(fresh: Path, large: Path, samples: int) -> dict:
     return out
 
 
+def measure_halted_landing(fx: Fixture, writers: int, rounds: int, stall_secs: Optional[float]) -> dict:
+    """note_halt_landing, halted_withheld_index._persist and op._write_staged_prompt under N writers; `stall_secs` arms `SlowFs`."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index, op, run_token
+
+    script = "scratch/warp/probe-script.js"
+    tag = "plain" if stall_secs is None else "slow"
+    ids = [f"warp-probe-halt-{tag}-{i}" for i in range(writers)]
+    tokens = [run_token.mint(fx.repo, rid, script) for rid in ids]
+    prompts = [fx.root / "staged" / f"prompt-{i}.md" for i in range(writers)]
+    prompts[0].parent.mkdir(parents=True, exist_ok=True)
+    index = str(fx.repo / "index")
+    landed = {"sha": "0" * 40, "paths": [], "halted": "probe"}
+    frames: tuple = (
+        ("run_token.note_halt_landing", lambda i: None, lambda i: run_token.note_halt_landing(
+            fx.repo, ids[i], tokens[i], script, landed),
+         lambda: all(run_token.halt_landing(fx.repo, ids[i], tokens[i], script) is not None for i in range(writers))),
+        ("halted_withheld_index._persist", lambda i: None, lambda i: halted_withheld_index._persist(str(fx.repo), index),
+         lambda: Path(halted_withheld_index._cache_path(fx.repo)).is_file()),
+        ("op._write_staged_prompt", lambda i: prompts[i].write_bytes(b"old"), lambda i: _bounded_raise_ok(op._write_staged_prompt, prompts[i], b"new"),
+         lambda: all(p.read_bytes() == b"new" for p in prompts)),
+    )
+    out: dict = {}
+    for label, setup, call, landed_check in frames:
+        shim = SlowFs(fx.root.parent, stall_secs) if stall_secs is not None else None
+        with shim if shim is not None else contextlib.nullcontext():
+            phase = _drive(writers, rounds, setup, call)
+            if shim is not None:
+                shim.release()
+                phase["shim_hits"] = dict(shim.hits)
+        phase["write_landed"] = _landed_within(landed_check, 5.0)
+        out[label] = phase
+    return out
+
+
+def _bounded_raise_ok(fn: Callable[..., None], *args: Any) -> None:
+    """Runs `fn`; the staged-prompt stall verdict is the designed bounded outcome, not a probe error."""
+    from coordinator_core.ops.dispatch_emit import op
+
+    try:
+        fn(*args)
+    except op.StagedPromptWriteIndeterminate:
+        pass
+
+
+def _landed_within(check: Callable[[], bool], budget_s: float) -> bool:
+    """A stalled bounded write finishes on its daemon thread after release; True once `check` holds within `budget_s`."""
+    end = time.monotonic() + budget_s
+    while True:
+        if check():
+            return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.01)
+
+
+class _FsCounter:
+    """Counts `os.stat` and `os.scandir` calls whose path is under `root`, on every thread."""
+
+    def __init__(self, root: Path) -> None:
+        self._root = os.path.normcase(os.path.abspath(str(root)))
+        self.counts = {"stat": 0, "scandir": 0}
+        self._saved: dict = {}
+
+    def __enter__(self) -> "_FsCounter":
+        orig_stat, orig_scandir = os.stat, os.scandir
+        self._saved = {"stat": orig_stat, "scandir": orig_scandir}
+
+        def stat(path, *a, **kw) -> object:  # noqa: ANN001, ANN002, ANN003
+            if _under(path, self._root):
+                self.counts["stat"] += 1
+            return orig_stat(path, *a, **kw)
+
+        def scandir(path=".") -> object:  # noqa: ANN001
+            if _under(path, self._root):
+                self.counts["scandir"] += 1
+            return orig_scandir(path)
+
+        setattr(os, "stat", stat)
+        setattr(os, "scandir", scandir)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        setattr(os, "stat", self._saved["stat"])
+        setattr(os, "scandir", self._saved["scandir"])
+
+
+def _step_stats(values: list[float]) -> dict:
+    return {"p50": round(_pct(values, 0.5), 3), "p95": round(_pct(values, 0.95), 3), "max": round(max(values, default=0.0), 3)}
+
+
+def _sweep_dead_temps(module: Any, work: Path, name: str) -> None:
+    """Calls `module._sweep_dead_temps` in either signature: `(dir, name)` before the sweep cut, `(dir)` after."""
+    import inspect
+
+    if len(inspect.signature(module._sweep_dead_temps).parameters) >= 2:
+        module._sweep_dead_temps(work, name)
+    else:
+        module._sweep_dead_temps(work)
+
+
+def _timed_atomic_write(work: Path, i: int, steps: dict) -> None:
+    """`atomic_write_bytes` replayed step by step into `steps`, then called cold (sweep memo cleared) and warm."""
+    from coordinator_core import atomic_replace
+
+    target = work / f"awc-target-{i % 8}"
+    data = b"x" * 4096
+
+    def step(name: str, fn: Callable[[], Any]) -> Any:
+        t0 = time.perf_counter()
+        result = fn()
+        steps.setdefault(name, []).append((time.perf_counter() - t0) * 1000.0)
+        return result
+
+    step("mkdir", lambda: work.mkdir(parents=True, exist_ok=True))
+    step("is_file", target.is_file)
+    step("os_stat", lambda: os.stat(target) if target.exists() else None)
+    atomic_replace._last_sweep.clear()
+    step("sweep_dead_temps", lambda: _sweep_dead_temps(atomic_replace, work, target.name))
+    fd, tmp = step("mkstemp", lambda: tempfile.mkstemp(prefix=f"{atomic_replace._TEMP_PREFIX}{target.name}.{os.getpid()}.", dir=str(work)))  # type: ignore[misc]
+    step("write_close", lambda: (os.write(fd, data), os.close(fd)))
+    step("replace", lambda: atomic_replace._replace_with_retry(tmp, str(target)))
+    atomic_replace._last_sweep.clear()
+    step("total_cold_sweep", lambda: atomic_replace.atomic_write_bytes(target, data))
+    step("total_warm_sweep", lambda: atomic_replace.atomic_write_bytes(target, data))
+
+
+def measure_atomic_write_cost(fresh: Path, large: Path, samples: int) -> dict:
+    """Per-step `atomic_write_bytes` wall ms, stat/scandir calls per write and MsMpEng CPU, in `fresh` vs seeded `large`."""
+    from coordinator_core import atomic_replace
+    from coordinator_core.benchmarks.fs_create_stall_probe import _defender_cpu_s
+
+    out: dict = {}
+    for label, work in (("fresh_dir", fresh), ("large_dir", large)):
+        work.mkdir(parents=True, exist_ok=True)
+        steps: dict = {}
+        d0, w0, c0 = _defender_cpu_s(), time.perf_counter(), time.process_time()
+        for i in range(samples):
+            _timed_atomic_write(work, i, steps)
+        wall_s, d1 = time.perf_counter() - w0, _defender_cpu_s()
+        counted = work / "counted"
+        counted.mkdir(exist_ok=True)
+        atomic_replace._last_sweep.clear()
+        with _FsCounter(counted) as cold:
+            atomic_replace.atomic_write_bytes(counted / "t", b"x")
+        with _FsCounter(counted) as warm:
+            atomic_replace.atomic_write_bytes(counted / "t", b"y")
+        out[label] = {
+            "entries": sum(1 for _ in os.scandir(work)),
+            "steps_wall_ms": {name: _step_stats(vals) for name, vals in steps.items()},
+            "fs_calls_per_write": {"cold_sweep": cold.counts, "warm_sweep": warm.counts},
+            "process_ms_per_write": round((time.process_time() - c0) * 1000.0 / max(1, samples * 2), 3),
+            "msmpeng_cpu_s": None if d0 is None or d1 is None else round(d1 - d0, 3),
+            "msmpeng_cpu_pct": None if d0 is None or d1 is None or wall_s <= 0 else round((d1 - d0) / wall_s * 100.0, 1),
+        }
+    return out
+
+
 def parse_threads(text: str) -> list[list[tuple[str, str]]]:
     """Each thread block of a dump's `--- threads ---` section as `[(path, func)]`, innermost first."""
     body = text.partition("--- threads ---")[2]
@@ -490,11 +650,16 @@ def measure(
                 "plain": measure_unbounded_writes(fx, writers, rounds, None),
                 "slow_fs": measure_unbounded_writes(fx, writers, 1, stall_secs),
             }
+            result["halted_landing"] = {
+                "plain": measure_halted_landing(fx, writers, rounds, None),
+                "slow_fs": measure_halted_landing(fx, writers, 1, stall_secs),
+            }
         large = work / "large"
         large.mkdir()
         for i in range(n_entries):
             (large / f"entry-{i:05d}").mkdir()
         result["raw_latency"] = measure_raw_latency(work / "fresh", large, samples)
+        result["atomic_write_cost"] = measure_atomic_write_cost(work / "awc-fresh", large, samples)
         day_key = day if day is not None else datetime.now(timezone.utc).strftime("%Y%m%d")
         result["dump_classification"] = classify_dumps(
             dumps if dumps is not None else live_svc_dir() / "stall-dumps", "" if day_key == "all" else day_key,
@@ -527,6 +692,18 @@ def render(result: dict) -> str:
     for variant, ops in result["unbounded_writes"].items():
         for label, phase in ops.items():
             lines.append(_phase_line(f"{variant} {label}", phase))
+    lines.append("halted landing writes (note_halt_landing, _persist, _write_staged_prompt):")
+    for variant, ops in result["halted_landing"].items():
+        for label, phase in ops.items():
+            lines.append(_phase_line(f"{variant} {label}", phase))
+    lines.append("atomic_write_bytes cost per step:")
+    for label, r in result["atomic_write_cost"].items():
+        lines.append(
+            f"  {label} entries={r['entries']} fs-calls/write={r['fs_calls_per_write']} "
+            f"process-ms/write={r['process_ms_per_write']} msmpeng-cpu-s={r['msmpeng_cpu_s']} msmpeng-cpu-pct={r['msmpeng_cpu_pct']}"
+        )
+        for name, s in r["steps_wall_ms"].items():
+            lines.append(f"    {name}: p50={s['p50']} p95={s['p95']} max={s['max']} ms")
     raw = result["raw_latency"]
     lines.append("raw mkstemp+replace latency:")
     for label in ("fresh_dir", "large_dir"):

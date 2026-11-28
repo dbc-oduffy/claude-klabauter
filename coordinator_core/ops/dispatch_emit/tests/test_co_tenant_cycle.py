@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.complete
 
-from coordinator_core.ops.dispatch_emit import co_tenant_cycle, stage_wait
+from coordinator_core.ops.dispatch_emit import co_tenant_cycle, live_run_index, run_token, stage_wait
 
 SHARED = "bin/claude-klabauter-doctor-probe.py"
 A = "ask-20261121T100000-aaaaaa"
@@ -33,11 +34,29 @@ def _halt(repo: Path, run_id: str, withheld, cause: str = "co_tenant_wait", stat
     (rd / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
 
 
-def test_two_halted_runs_sharing_a_path_form_a_cycle(repo) -> None:
-    _halt(repo, A, (SHARED, "a.py"), cause="co_tenant_dependency_on_halted_run")
+def _live(repo: Path, run_id: str, footprint) -> None:
+    run_token.mint(repo, run_id, "s.mjs", marker=True, session_id=f"sess-{run_id}")
+    live_run_index.stage(repo, run_id, list(footprint), time.time())
+
+
+def _halted_edge_chain(repo: Path, *, cause: str = "co_tenant_wait", status: str = "halted") -> None:
+    """C (live) holds SHARED; B (live) is parked behind halted A; A withheld SHARED."""
+    _halt(repo, A, (SHARED,), cause=cause, status=status)
+    _live(repo, B, ("b.py",))
+    _live(repo, C, (SHARED,))
+    stage_wait.park(repo, B, [A], ["p.py"])
+
+
+def test_two_halted_runs_sharing_a_path_hold_nothing_so_form_no_cycle(repo) -> None:
+    _halt(repo, A, (SHARED, "a.py"), cause="co_tenant_dependency")
     _halt(repo, B, (SHARED, "b.py"))
-    assert co_tenant_cycle.cycle_through(repo, B, A) == (B, A)
-    assert co_tenant_cycle.cycle_through(repo, A, B) == (A, B)
+    assert co_tenant_cycle.cycle_through(repo, B, A) is None
+    assert co_tenant_cycle.cycle_through(repo, A, B) is None
+
+
+def test_halted_run_needing_a_live_owners_path_closes_the_cycle(repo) -> None:
+    _halted_edge_chain(repo)
+    assert co_tenant_cycle.cycle_through(repo, C, B) == (C, B, A)
 
 
 def test_live_owner_parked_behind_the_needer_closes_the_cycle(repo) -> None:
@@ -63,15 +82,13 @@ def test_halted_owner_holding_no_shared_path_is_none(repo) -> None:
 
 
 def test_halted_run_with_a_non_co_tenant_cause_has_no_halted_edge(repo) -> None:
-    _halt(repo, A, (SHARED,), cause="test_infra_failure")
-    _halt(repo, B, (SHARED,))
-    assert co_tenant_cycle.cycle_through(repo, B, A) is None
+    _halted_edge_chain(repo, cause="test_infra_failure")
+    assert co_tenant_cycle.cycle_through(repo, C, B) is None
 
 
 def test_resumed_marker_has_no_halted_edge(repo) -> None:
-    _halt(repo, A, (SHARED,), status="resumed")
-    _halt(repo, B, (SHARED,))
-    assert co_tenant_cycle.cycle_through(repo, B, A) is None
+    _halted_edge_chain(repo, status="resumed")
+    assert co_tenant_cycle.cycle_through(repo, C, B) is None
 
 
 def test_cycle_not_reaching_the_needer_terminates_as_none(repo) -> None:
@@ -92,11 +109,10 @@ def test_joint_remedy_is_the_land_run_call_naming_every_run() -> None:
 
 
 def test_walk_spawns_nothing(repo, monkeypatch) -> None:
-    _halt(repo, A, (SHARED,))
-    _halt(repo, B, (SHARED,))
+    _halted_edge_chain(repo)
 
     def _boom(*_a, **_k):
         raise AssertionError("spawn")
 
     monkeypatch.setattr(subprocess, "Popen", _boom)
-    assert co_tenant_cycle.cycle_through(repo, B, A) == (B, A)
+    assert co_tenant_cycle.cycle_through(repo, C, B) == (C, B, A)

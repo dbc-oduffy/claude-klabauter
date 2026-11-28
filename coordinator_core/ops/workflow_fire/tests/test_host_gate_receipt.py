@@ -135,3 +135,62 @@ def test_commit_worker_requires_gate_issued_staged_bytes(tmp_path, monkeypatch, 
     else:
         assert result["exit_code"] == 0, result.get("error")
         assert calls == ["work", "commit"]
+
+
+@pytest.mark.parametrize("binding, accepted", [
+    ({"depth": 0, "script_path": "/r/resume.mjs", "script_sha256": "a" * 64}, True),
+    ({"depth": 0, "script_path": "/r/foreign.mjs", "script_sha256": "a" * 64}, False),
+    ({"depth": 0, "script_path": "/r/resume.mjs", "script_sha256": "b" * 64}, False),
+    ({"depth": 2, "script_path": "/r/resume.mjs", "script_sha256": "a" * 64}, False),
+    ({"depth": 1, "script_path": "/r/twin.mjs", "script_sha256": "c" * 64}, True),
+    ({"depth": 0, "script_path": "/r/twin.mjs", "script_sha256": "c" * 64}, True),
+    (None, False),
+])
+def test_staged_commit_binding_accepts_issuing_root_only(binding, accepted):
+    staged = {"depth": 1, "script_path": "/r/twin.mjs", "script_sha256": "c" * 64}
+    root = {"script_path": "/r/resume.mjs", "script_sha256": "a" * 64}
+    assert headless._is_staged_commit_binding(binding, staged, root) is accepted
+
+
+@pytest.mark.parametrize("root", ["staged twin", "resume root"])
+def test_resumed_depth0_commit_worker_binding(tmp_path, monkeypatch, root):
+    import hashlib
+    from coordinator_core.ops.dispatch_emit import nested_run_contract, reply_sidecar
+    from coordinator_core.ops.workflow_fire.tests.test_headless import record
+
+    run_id = "ask-1"
+    body = ("const gate=await engineOp('gate.host_run',{});"
+            "await agent('work',{}); return await agent('commit',{phase:'commit'});")
+    source = ("export const meta={};\n// coordinator:ask-run-manifest v1 state/warp/ask-1/manifest.json\n"
+              + nested_run_contract.STAGED_INLINE_SLOT + "\n" + body)
+    base = tmp_path / "scratch/warp/ask-1.workflow.mjs"
+    base.parent.mkdir(parents=True)
+    base.write_bytes(source.encode())
+    manifest = tmp_path / "state/warp/ask-1/manifest.json"
+    (base.parent / "request.txt").write_text("fixture request", encoding="utf-8")
+    reply_sidecar.write_reply(tmp_path, manifest, {"rows": [], "run_dir": "state/warp/ask-1",
+                              "review_declared_paths": [], "marker_path": "scratch/warp/request.txt"})
+    stage = {}
+    stage["manifest_handle"], stage["twin_path"] = reply_sidecar.handle_and_twin(
+        tmp_path, manifest, source_receipt=stage)
+    twin = tmp_path / stage["twin_path"]
+    path = record(tmp_path, body)
+    row = json.loads(path.read_bytes())
+    if root == "staged twin":
+        row["script_path"] = str(twin)
+        row["script_sha256"] = hashlib.sha256(twin.read_bytes()).hexdigest()
+    else:
+        resume = tmp_path / "resume-script.workflow.mjs"
+        resume.write_bytes(Path(row["script_path"]).read_bytes())
+        row["script_path"] = str(resume)
+        assert row["script_path"] != str(twin)
+        assert row["script_sha256"] != hashlib.sha256(twin.read_bytes()).hexdigest()
+    path.write_text(json.dumps({**row, "run_id": run_id}))
+    monkeypatch.setattr(headless, "_host_gate", lambda *args: ({"stage_reply": stage}, "fixture"))
+    calls = []
+    def worker(prompt, options, **kwargs):
+        calls.append(prompt)
+        return {}
+    result = headless.execute(path, agent_runner=worker, terminal_runner=lambda *args: None)
+    assert result["exit_code"] == 0, result.get("error")
+    assert calls == ["work", "commit"]

@@ -37,21 +37,25 @@ def test_entry_point_and_check_pass(text):
         ("we did our best and it is done", "runnable check"),
         ("", "wiring path"),
         (None, "wiring path"),
-        ("`coordinator-invoke plan.validate` is reachable", None),
         ("see plan.md and notes.txt; `pytest -q` passes", "wiring path"),
         ("tests covering touched files pass", "wiring path"),
     ],
 )
 def test_refused_statements(text, missing):
     msg = wiring_clause_refusal(text)
-    if missing is None:
-        # a backticked entry point with arguments is itself a runnable command
-        assert msg is None
-        return
     assert msg is not None
     assert msg.startswith(EXIT_CRITERION_REFUSAL_HEAD)
     assert REMEDIATION_MARKER in msg
     assert missing in msg
+
+
+def test_a_backticked_entry_point_with_arguments_is_itself_a_runnable_check():
+    assert wiring_clause_refusal("`coordinator-invoke plan.validate` is reachable") is None
+
+
+def test_bare_tests_pass_prose_with_an_entry_point_names_no_runnable_check():
+    msg = wiring_clause_refusal("sizing.accept_exit_criterion refuses it and tests covering touched files pass")
+    assert msg is not None and "runnable check" in msg and "wiring path" not in msg
 
 
 def test_no_check_names_only_the_check_as_missing():

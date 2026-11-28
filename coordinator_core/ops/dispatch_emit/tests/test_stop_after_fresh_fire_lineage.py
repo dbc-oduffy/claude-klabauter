@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_PARKED,
     OP_ASK_STAGE,
     PARKED_REPLY_KEY,
+    RESUME_PARK_CUT_FILE,
     STOP_AFTER_FILE,
     STOP_AFTER_KEY,
     STOP_AFTER_PLAN,
@@ -95,6 +96,7 @@ def test_a_fresh_fire_over_a_superseded_ancestor_marker_neither_parks_nor_stage_
     fresh_dir = record_dir(repo, fresh["run_id"])
     assert not (fresh_dir / STOP_AFTER_FILE).exists()
     assert json.loads((fresh_dir / "run.json").read_text(encoding="utf-8"))["resumed_from"] == ancestor
+    assert (fresh_dir / RESUME_PARK_CUT_FILE).is_file(), "the fresh fire cuts the inherited marker at emit"
     assert PARKED_REPLY_KEY not in _stage(repo, fresh["run_id"])
 
 

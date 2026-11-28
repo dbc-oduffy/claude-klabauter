@@ -57,6 +57,15 @@ def test_invoke_route_is_the_agy_allow_rule_text():
     assert rule and rule.group(1) == warp_fire.INVOKE_SUBMIT_COMMAND
 
 
+def test_agy_hand_off_is_the_granted_command_first_with_no_prep_step():
+    step = warp_fire.fire_step(host="agy")
+    assert step.split("`")[1] == INVOKE and "as your first act" in step
+    # every other backticked span is the staged file or a flag value; no shell verb the grant would refuse
+    for verb in ("Get-ChildItem", "git ", "powershell", "`ls ", "`cat ", "`echo "):
+        assert verb not in step
+    assert step.index("first act") < step.index("em-submit.json")
+
+
 def test_write_budget_advisory_threads_host_from_payload():
     from coordinator_core.hooks import _em_write_budget as wb
 

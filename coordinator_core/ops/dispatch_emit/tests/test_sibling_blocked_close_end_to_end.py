@@ -46,7 +46,7 @@ def _build(tmp_path, monkeypatch, sib_status: str) -> Path:
     monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
     monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     monkeypatch.setattr(
-        claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], [])
+        claims, "list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([("handoff", "b.md")], [])
     )
     plan = repo / driver.PLAN_REL
     text = plan.read_text(encoding="utf-8")

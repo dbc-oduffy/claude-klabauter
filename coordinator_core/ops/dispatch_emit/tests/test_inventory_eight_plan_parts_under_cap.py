@@ -20,12 +20,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_emit_wake_digest import (
 )
 from coordinator_core.session.record_homes import home_dir
 
-pytestmark = [
-    pytest.mark.complete,
-    pytest.mark.designed_red(
-        reason="falsifier for plan 2026-11-24-hnd-inventory-emit-single-plan-par-397a54; C5 removes the marker"
-    ),
-]
+pytestmark = [pytest.mark.complete]
 
 _RUN_ID = "20261124T000000-eight"
 _PLANS = 8
@@ -33,7 +28,7 @@ _ROWS_PER_PLAN = 5
 _ROWS_LISTED = 3
 _PLAN_BYTES = 30_000
 _HOT_PLANS = 4
-_CAP = 524_288
+_CAP = emit_module._WORKFLOW_SCRIPT_BYTE_CAP
 _HEADER = (
     "| id | spec path | summary | footprint | deps | verification | complexity | disposition |\n"
     "|---|---|---|---|---|---|---|---|\n"

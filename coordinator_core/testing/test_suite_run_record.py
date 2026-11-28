@@ -60,6 +60,42 @@ def test_read_runs_empty(tmp_path: Path) -> None:
     assert srr.read_runs(tmp_path / "none") == {"current": None, "previous": None}
 
 
+def test_main_slot_only_when_head_on_main(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    head = tmp_path / ".git" / "HEAD"
+    rec = tmp_path / "rec"
+    head.write_text("ref: refs/heads/feature\n")
+    srr.write_run(rec, _fields(repo_root=str(tmp_path), head_sha="f" * 40), None)
+    assert srr.read_main(rec) is None and not (rec / "main.json").exists()
+    head.write_text("ref: refs/heads/main\n")
+    srr.write_run(rec, _fields(repo_root=str(tmp_path), head_sha="a" * 40), None)
+    head.write_text("ref: refs/heads/feature\n")
+    srr.write_run(rec, _fields(repo_root=str(tmp_path), head_sha="b" * 40), None)
+    assert srr.read_main(rec)["head_sha"] == "a" * 40
+    assert srr.read_main(rec)["log"] == "main.log" and (rec / "main.log").exists()
+    assert srr.read_runs(rec)["current"]["head_sha"] == "b" * 40
+
+
+def test_classify_failures_both_sides() -> None:
+    prev = {"head_sha": "p", "failed_ids": ["a", "b"]}
+    main = {"head_sha": "m", "failed_ids": ["b", "c"]}
+    got = srr.classify_failures(["a", "b", "c", "d"], prev, main)
+    assert got["previous_sha"] == "p" and got["main_sha"] == "m"
+    assert {k: v["red_at"] for k, v in got["ids"].items()} == {
+        "a": ["previous"], "b": ["previous", "main"], "c": ["main"], "d": []}
+    assert got["ids"]["d"]["status"] == "new" and got["ids"]["a"]["status"] == "pre-existing"
+    assert srr.classify_failures(["a"], None, None)["ids"]["a"]["status"] == "new"
+
+
+def test_classify_failures_main_is_current_is_no_baseline() -> None:
+    cur = {"head_sha": "m", "started_at": "t1", "failed_ids": ["a"]}
+    same = dict(cur)
+    got = srr.classify_failures(["a"], None, same, cur)
+    assert got["ids"]["a"]["status"] == "new" and got["main_sha"] is None
+    older = {"head_sha": "m", "started_at": "t0", "failed_ids": ["a"]}
+    assert srr.classify_failures(["a"], None, older, cur)["ids"]["a"]["red_at"] == ["main"]
+
+
 def test_repo_root_for_dir_and_file_git(tmp_path: Path) -> None:
     (tmp_path / "a" / "b").mkdir(parents=True)
     (tmp_path / "a" / ".git").write_text("gitdir: x")

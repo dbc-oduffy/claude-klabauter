@@ -60,7 +60,7 @@ def commit_close_records(
     *covered* (paths a verified landing carries) stands in for the marker landing's paths when a run has no landed marker.
 
     Returns ``{"records_commit": sha}`` plus ``worktree_sync_refused``/``sync_incomplete`` when the worktree sync refused paths; ``{}`` when nothing changed or the record dir is untracked
-    scratch; ``{"records_commit_error": ...}`` on a refusal, which never fails the caller's marker write.
+    scratch; ``{"records_commit_error": ...}`` on a refusal, which never fails the caller's marker write. A lost ref CAS is re-attempted on the new HEAD (``git.ref_cas_retry``); one that cannot be adds ``records_commit_refused`` (``ref-moved-overlap`` / ``-exhausted`` / ``-unverifiable``).
     """
     from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths, sync_report
     from coordinator_core.ops.dispatch_emit import halted_run
@@ -83,10 +83,18 @@ def commit_close_records(
     tail = _closed_trailers(root, run_id, record_dir, covered) if closed else ""
     if extra_trailers:
         tail += ("\n" if tail else "\n\n") + extra_trailers
+    from coordinator_core.git.ref_cas_retry import retry_ref_moved_raising
+
     try:
-        outcome = commit_paths(root, rels, subject + tail, allow_empty=allow_empty)
+        outcome = retry_ref_moved_raising(
+            root, rels, lambda: commit_paths(root, rels, subject + tail, allow_empty=allow_empty)
+        )
     except NothingToCommit:
         return {}
     except (CommitRefused, OSError) as exc:
-        return {"records_commit_error": f"{type(exc).__name__}: {exc}"}
+        refused = getattr(exc, "refused", None)
+        return {
+            "records_commit_error": f"{type(exc).__name__}: {exc}",
+            **({"records_commit_refused": refused} if refused else {}),
+        }
     return {"records_commit": outcome.sha, **sync_report(outcome)}

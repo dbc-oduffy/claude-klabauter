@@ -43,7 +43,7 @@ def _write(repo: Path, rel: str, text: str) -> None:
 def test_judge_classifies_an_operator_withheld_row_awaiting_operator_with_its_command():
     ledger = rl.Ledger((rl.Item("R1", "a", "pm", "t"), rl.Item("R2", "b", "pm", "t")), False)
     verdict = {"items": [
-        {"id": "R1", "status": "met", "met_by": "a.py", "wired": True},
+        {"id": "R1", "status": "met", "wired": True, "evidence": "verified"},
         {"id": "R2", "status": "not_met", "withheld_by": "C2"},
     ]}
     result = rl.judge(ledger, verdict, operator={"C2": COMMAND})
@@ -98,14 +98,14 @@ def repo(tmp_path, monkeypatch):
     rl.revise(root, RUN, verbatim="and the box-slot measurement")
     monkeypatch.setattr(cr, "_actual_loe", lambda r, s: "S")
     monkeypatch.setattr(
-        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
+        "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([], [])
     )
     return root
 
 
 def test_delivered_row_commits_and_the_operator_row_reads_awaiting_operator_with_its_command(repo):
     verdict = {"items": [
-        {"id": "R1", "status": "met", "met_by": "a.py", "wired": True},
+        {"id": "R1", "status": "met", "wired": True, "evidence": "verified"},
         {"id": "R2", "status": "not_met", "withheld_by": "C2"},
     ]}
     params = {

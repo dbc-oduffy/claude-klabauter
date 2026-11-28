@@ -49,6 +49,17 @@ def test_oversized_legacy_file_is_not_retained_as_a_generation(monkeypatch: pyte
     assert 0 < live.stat().st_size <= cap
 
 
+def test_hook_lane_success_flush_is_one_append_smaller_than_the_full_row(tmp_path: Path) -> None:
+    spans = [{"name": f"guard_{i}", "wall_ms": 12.5} for i in range(10)]
+    kw = dict(op="hooks.preuse_bash_dispatch", enqueue_ts=1.0, start_ts=1.01, end_ts=1.05, outcome="ok", lane="hook", dispatch_key="k" * 40, slow_phase="guard_3", spans=spans)
+    telemetry.record_request(**kw)
+    full = len((telemetry.json.dumps(telemetry.request_samples()[0]) + "\n").encode())
+    telemetry.flush_requests()
+    live = tmp_path / "request-telemetry.jsonl"
+    assert 0 < live.stat().st_size < full / 2
+    assert _all_generations(tmp_path) == [live]
+
+
 def test_below_cap_flush_appends_without_rotating(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(telemetry, "REQUEST_TELEMETRY_MAX_BYTES", 1024 * 1024)
     _flush_rows(3)

@@ -195,7 +195,7 @@ def test_land_run_refire_still_withholds_a_non_inherited_footprint_breach(repo, 
 
     out = prod._land(
         repo, resume_ledger={"run_id": RUN, "sizing": _SIZING},
-        ledger_verdict={"items": [{"id": "R1", "status": "met", "met_by": "a.py", "wired": True}]},
+        ledger_verdict={"items": [{"id": "R1", "status": "met", "wired": True}]},
     )
 
     # An unbacked shipped claim is provenance, not a refusal: the own file lands, the breach stays out.

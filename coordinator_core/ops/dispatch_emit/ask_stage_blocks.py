@@ -10,12 +10,10 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping, Optional, Sequence
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
-from coordinator_core.ops._brief_premise import check_brief_claims, render_contradicted
 from coordinator_core.ops.dispatch_emit import requirements_ledger
 from coordinator_core.ops.dispatch_emit.ask_contract import RELAYED_ASK_HEADING, delivery_note_rel
 from coordinator_core.ops.dispatch_emit.pathspec import NoTestTargetError, NoWritesDeclaredError, terminal_test_scope
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
-from coordinator_core.ops.sizing_intake_contract import read_em_brief
 
 PM_INTENT_HEADING = "## PM intent (verbatim)"
 
@@ -130,21 +128,6 @@ def served_rows_block(root: Path, run_id: str, register_ids: Sequence[str]) -> s
         "when a served row has no delta."
     )
     return "\n".join(lines) + "\n"
-
-
-def em_brief_block(sizing: Optional[Mapping], root: Optional[Path] = None) -> str:
-    """The brief's EM-diagnosis section (the sizing's `em_analysis.em_brief`), marked as not the
-    PM's words and placed below the PM-intent and relayed-ask blocks. Empty when none is recorded.
-    With ``root``, the brief's tree-contradicted claims follow as CONTRADICTED lines."""
-    brief = read_em_brief(sizing) if isinstance(sizing, Mapping) else None
-    if not brief:
-        return ""
-    block = f"## EM diagnosis (not the PM's words)\n\n{brief}\n"
-    if root is not None:
-        flagged = render_contradicted(check_brief_claims(brief, root))
-        if flagged:
-            block += f"\n{flagged}\n"
-    return block
 
 
 def _run_sizing_rel(sizing_rel: Optional[str], plan_text: str) -> Optional[str]:

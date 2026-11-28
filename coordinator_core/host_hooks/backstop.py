@@ -230,14 +230,17 @@ def _segment_tokens(command: str) -> Iterator[list]:
             yield tokens[start:]
 
 
-def _under_scratch_or_tmp(target: str, cwd: str) -> bool:
-    """True when `target` resolves below a `<repo>/scratch` directory or the system temp dir. Stats only."""
+def _under_repo_scratch(target: str, cwd: str, system_tmp: bool = False) -> bool:
+    """True when `target` resolves below a `<repo>/scratch` directory, or with `system_tmp` the system temp dir. Stats only.
+
+    The warm `destructive-rm` exempts repo scratch alone, so the rm route passes `system_tmp=False`.
+    """
     import tempfile
 
     path = target if os.path.isabs(target) else os.path.join(cwd or os.getcwd(), target)
     try:
         resolved = os.path.normcase(os.path.realpath(path))
-        roots = {os.path.normcase(os.path.realpath(p)) for p in (tempfile.gettempdir(), "/tmp") if os.path.isdir(p)}
+        roots = {os.path.normcase(os.path.realpath(p)) for p in (tempfile.gettempdir(), "/tmp") if os.path.isdir(p)} if system_tmp else set()
     except OSError:
         return False
     if any(resolved.startswith(root.rstrip(os.sep) + os.sep) for root in roots):
@@ -271,7 +274,7 @@ def _destroys_tracked_tree(target: str, cwd: str) -> bool:
     """True when `target` sits in a git work tree and is not scratch, tmp or a regenerable build directory."""
     path = os.path.abspath(target if os.path.isabs(target) else os.path.join(cwd or os.getcwd(), target))
     root = _git_root_of(path)
-    if not root or _under_scratch_or_tmp(target, cwd):
+    if not root or _under_repo_scratch(target, cwd, system_tmp=True):
         return False
     parts = os.path.relpath(os.path.realpath(path), os.path.realpath(root)).replace("\\", "/").split("/")
     return not any(part in _REGENERABLE_DIRS for part in parts)
@@ -279,7 +282,7 @@ def _destroys_tracked_tree(target: str, cwd: str) -> bool:
 
 _INDEX_FIXED = 62  # bytes before the name in a v2/v3 index entry
 _INDEX_MODES = frozenset((0o100644, 0o100755, 0o120000, 0o160000))
-_WALK_CAP = 5000  # files one rm target may hold before the walk gives up
+_WALK_CAP = 5000  # files (and index entries) one rm target may hold before the check gives up
 _HASH_CAP = 1 << 20
 
 
@@ -319,8 +322,8 @@ def _index_entries(root: str, rel: bytes, tree: bool) -> Optional[Dict[bytes, tu
     `racy` is git's racily-clean case on a whole-second timestamp: the stat match proves nothing, so the content is hashed.
 
     Reads `.git/index` directly: v2/v3 only, located with a byte search because the entries are sorted by name,
-    so a tree's are contiguous. None when the index cannot be read that way (absent, v4, a split index), which
-    callers treat as not clean.
+    so a tree's are contiguous. None when the index cannot be read that way (absent, v4, a split index) or the tree
+    holds more than `_WALK_CAP` entries, which callers treat as not clean.
     """
     import struct
 
@@ -356,6 +359,8 @@ def _index_entries(root: str, rel: bytes, tree: bool) -> Optional[Dict[bytes, tu
         name = data[name_pos:data.find(b"\0", name_pos)]
         if not (name.startswith(key) if tree else name == rel):
             break
+        if len(found) >= _WALK_CAP:
+            return None
         mtime_s, mtime_ns = struct.unpack_from(">II", data, start + 8)
         (size,) = struct.unpack_from(">I", data, start + 36)
         found[name] = (size, mtime_s, mtime_ns, data[start + 40:start + 60].hex() if not flags & 0x3000 else None,
@@ -364,15 +369,18 @@ def _index_entries(root: str, rel: bytes, tree: bool) -> Optional[Dict[bytes, tu
     return found
 
 
-def _matches_index(path: str, entry: tuple) -> bool:
-    """True when the work-tree file at `path` is the content the index records: stat match, else a blob hash."""
+def _matches_index(path: str, entry: tuple, info: Optional[os.stat_result] = None) -> bool:
+    """True when the work-tree file at `path` is the content the index records: stat match, else a blob hash.
+
+    `info` is the caller's lstat of `path` (a scandir entry's is free on Windows); None stats it here.
+    """
     import stat
 
     size, mtime_s, mtime_ns, sha, racy = entry
     if sha is None:
         return False
     try:
-        info = os.lstat(path)
+        info = info or os.lstat(path)
         if not racy and info.st_size & 0xFFFFFFFF == size and divmod(info.st_mtime_ns, 10 ** 9) == (mtime_s, mtime_ns):
             return True
         if info.st_size > _HASH_CAP:
@@ -391,7 +399,7 @@ def _matches_index(path: str, entry: tuple) -> bool:
 
 def _rm_loses_work(target: str, cwd: str) -> bool:
     """True when removing `target` would lose content git cannot restore: a repo root or `.git` path, a nested
-    repo, an untracked file, or a file whose content differs from the index entry. An absent target, scratch/tmp
+    repo, an untracked file, or a file whose content differs from the index entry. An absent target, repo scratch
     and regenerable dirs lose nothing. Spawn-free: it reads `.git/index`; an unreadable index counts as lost.
 
     Staged-but-uncommitted content counts as restorable (its blob is already in the object store), where the warm
@@ -401,7 +409,7 @@ def _rm_loses_work(target: str, cwd: str) -> bool:
     if not os.path.lexists(path):
         return False
     root = _git_root_of(path)
-    if not root or _under_scratch_or_tmp(target, cwd):
+    if not root or _under_repo_scratch(target, cwd):
         return False
     real, real_root = os.path.realpath(path), os.path.realpath(root)
     rel = os.path.relpath(real, real_root).replace("\\", "/")
@@ -417,18 +425,41 @@ def _rm_loses_work(target: str, cwd: str) -> bool:
     if not tree:
         entry = entries.get(rel.encode("utf-8", "surrogateescape"))
         return entry is None or not _matches_index(real, entry)
+    return _tree_loses_work(real, rel, entries)
+
+
+def _tree_loses_work(real: str, rel: str, entries: Dict[bytes, tuple]) -> bool:
+    """True when a file under the dir `real` (index-relative `rel`) is a nested repo, untracked or differs from `entries`.
+
+    One scandir pass: the entry's own stat and a key joined from `rel` replace a per-file lstat and relpath, so the
+    walk costs one directory read per dir. A symlink counts as a file; a regenerable dir is not entered.
+    """
     seen = 0
-    for dirpath, dirnames, filenames in os.walk(real):
-        if ".git" in dirnames or ".git" in filenames:
+    stack = [(real, rel + "/")]
+    while stack:
+        base, prefix = stack.pop()
+        try:
+            with os.scandir(base) as scan:
+                children = list(scan)
+        except OSError:
             return True
-        linked = [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
-        dirnames[:] = [d for d in dirnames if d not in _REGENERABLE_DIRS and d not in linked]
-        for name in filenames + linked:
+        for child in children:
+            name = child.name
+            if name == ".git":
+                return True
+            if not child.is_symlink() and child.is_dir(follow_symlinks=False):
+                if name not in _REGENERABLE_DIRS:
+                    stack.append((child.path, prefix + name + "/"))
+                continue
             seen += 1
-            full = os.path.join(dirpath, name)
-            key = os.path.relpath(full, real_root).replace("\\", "/").encode("utf-8", "surrogateescape")
-            entry = entries.get(key)
-            if seen > _WALK_CAP or entry is None or not _matches_index(full, entry):
+            entry = entries.get((prefix + name).encode("utf-8", "surrogateescape"))
+            if seen > _WALK_CAP or entry is None:
+                return True
+            try:
+                info = child.stat(follow_symlinks=False)
+            except OSError:
+                return True
+            if not _matches_index(child.path, entry, info):
                 return True
     return False
 
@@ -439,9 +470,8 @@ def _clean_destroys(target: str, cwd: str) -> bool:
     return not _git_root_of(path) or _destroys_tracked_tree(target, cwd)
 
 
-def _git_clean_forced(command: str, cwd: str) -> Optional[bool]:
-    """None when no segment is `git clean`; else True when a forcing, non-dry-run clean would hit a tracked tree."""
-    found = None
+def _git_clean_segments(command: str) -> Iterator[tuple]:
+    """Yield (`-C` directory or "", the args after `clean`) for each `git clean` segment of `command`."""
     for tokens in _segment_tokens(command):
         if os.path.basename(tokens[0]).lower() not in ("git", "git.exe"):
             continue
@@ -455,9 +485,14 @@ def _git_clean_forced(command: str, cwd: str) -> Optional[bool]:
                 i += 1
             else:
                 break
-        if i >= len(tokens) or tokens[i] != "clean":
-            continue
-        args = tokens[i + 1:]
+        if i < len(tokens) and tokens[i] == "clean":
+            yield chdir, tokens[i + 1:]
+
+
+def _git_clean_forced(command: str, cwd: str) -> Optional[bool]:
+    """None when no segment is `git clean`; else True when a forcing, non-dry-run clean would hit a tracked tree."""
+    found = None
+    for chdir, args in _git_clean_segments(command):
         short = "".join(a[1:] for a in args if re.match(r"^-[A-Za-z]+$", a))
         forcing = "f" in short or "--force" in args
         dry = "n" in short or "--dry-run" in args
@@ -470,6 +505,274 @@ def _git_clean_forced(command: str, cwd: str) -> Optional[bool]:
     return found
 
 
+# Copied from coordinator_core.bash_guards._dc_git_shared (importing it loads the guard stack); a test pins equality.
+_LOADBEARING_RE = re.compile(
+    r"(^|/)state(/|$)|(^|/)docs/plans(/|$)|(^|/)docs/decisions(/|$)|"
+    r"(^|/)docs/wiki(/|$)|(^|/)docs/research(/|$)|"
+    r"(^|/)cross-repo/(inbox|archive|outbox)(/|$)|-handoff.*\.md$|"
+    r"(^|/)completion(/|$)|review-trail/.*\.json$"
+)
+_LOADBEARING_PREFIXES = (
+    "state", "docs/plans", "docs/decisions", "docs/wiki", "docs/research",
+    "cross-repo/inbox", "cross-repo/archive", "cross-repo/outbox",
+)
+_CLEAN_SCAN_CAP = 20000  # directory entries one clean check may read before it counts as losing work
+_GLOB_CHARS = frozenset("*?[")
+
+
+def _loadbearing(path: str) -> bool:
+    p = path.rstrip("/")
+    return bool(p) and (bool(_LOADBEARING_RE.search(p)) or any(p == f or p.startswith(f + "/") for f in _LOADBEARING_PREFIXES))
+
+
+def _index_names(root: str) -> set:
+    """The tracked names (str) in `root`'s `.git/index`. Empty when the index is absent, v4 or split: every path then counts untracked."""
+    import struct
+
+    path = _index_path(root)
+    if path is None:
+        return set()
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return set()
+    if data[:4] != b"DIRC" or struct.unpack_from(">I", data, 4)[0] not in (2, 3):
+        return set()
+    version = struct.unpack_from(">I", data, 4)[0]
+    names: set = set()
+    pos = 12
+    for _ in range(struct.unpack_from(">I", data, 8)[0]):
+        if pos + _INDEX_FIXED > len(data) - 20:
+            break
+        (flags,) = struct.unpack_from(">H", data, pos + 60)
+        extended = 2 if version >= 3 and flags & 0x4000 else 0
+        name_pos = pos + _INDEX_FIXED + extended
+        nul = data.find(b"\0", name_pos)
+        if nul < 0:
+            break
+        names.add(data[name_pos:nul].decode("utf-8", "surrogateescape"))
+        pos += (_INDEX_FIXED + extended + (nul - name_pos) + 8) & ~7
+    return names
+
+
+def _glob_regex(pattern: str) -> str:
+    out, i = [], 0
+    while i < len(pattern):
+        c = pattern[i]
+        if pattern.startswith("**/", i) and (i == 0 or pattern[i - 1] == "/"):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif c == "*":
+            out.append("[^/]*")
+            i += 1
+        elif c == "?":
+            out.append("[^/]")
+            i += 1
+        elif c == "[" and pattern.find("]", i + 2) > 0:
+            end = pattern.find("]", i + 2)
+            body = pattern[i + 1:end]
+            out.append("[" + ("^" + body[1:] if body[:1] == "!" else body).replace("\\", "\\\\") + "]")
+            i = end + 1
+        elif c == "\\" and i + 1 < len(pattern):
+            out.append(re.escape(pattern[i + 1]))
+            i += 2
+        else:
+            out.append(re.escape(c))
+            i += 1
+    return "".join(out)
+
+
+def _ignore_rules(lines, base: str) -> list:
+    """Parse gitignore `lines` found in the directory `base` into (regex, negated, dir_only, anchored, base) rules."""
+    rules = []
+    for line in lines:
+        line = line.rstrip("\r\n").rstrip(" ")
+        if not line or line.startswith("#"):
+            continue
+        negated = line.startswith("!")
+        line = line[1:] if negated else line
+        dir_only = line.endswith("/")
+        line = line.rstrip("/")
+        anchored = "/" in line
+        line = line.lstrip("/")
+        if line:
+            try:
+                rules.append((re.compile(_glob_regex(line)), negated, dir_only, anchored, base))
+            except re.error:
+                continue
+    return rules
+
+
+def _read_lines(path: str) -> list:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read(1 << 20).splitlines()
+    except OSError:
+        return []
+
+
+def _ignored(rules: list, rel: str, is_dir: bool) -> bool:
+    """Last matching rule wins. A rule matches the basename when it has no inner slash, else the path below its directory."""
+    verdict = False
+    for regex, negated, dir_only, anchored, base in rules:
+        if dir_only and not is_dir:
+            continue
+        if base:
+            if not rel.startswith(base + "/"):
+                continue
+            below = rel[len(base) + 1:]
+        else:
+            below = rel
+        if regex.fullmatch(below if anchored else below.rsplit("/", 1)[-1]):
+            verdict = not negated
+    return verdict
+
+
+class _CleanWalk:
+    """The untracked paths one `git clean -d` would remove: `-x` removes ignored too, `-X` only ignored, neither keeps ignored."""
+
+    def __init__(self, root: str, names: set, mode: str, ff: bool, excludes: list) -> None:
+        self.root, self.mode, self.ff = root, mode, ff
+        self.tracked = names
+        self.tracked_dirs: set = set()
+        for name in names:
+            parent = name.rpartition("/")[0]
+            while parent and parent not in self.tracked_dirs:
+                self.tracked_dirs.add(parent)
+                parent = parent.rpartition("/")[0]
+        self.excludes = _ignore_rules(excludes, "")
+        self.steps = 0
+        self.found: list = []
+        self.base = _ignore_rules(_read_lines(os.path.join(root, ".git", "info", "exclude")), "") if mode != "x" else []
+
+    def rules_in(self, rules: list, rel: str) -> list:
+        if self.mode == "x":
+            return rules
+        return rules + _ignore_rules(_read_lines(os.path.join(self.root, rel, ".gitignore")), rel)
+
+    def chain(self, rel_dir: str) -> list:
+        rules, parts, here = self.rules_in(self.base, ""), [p for p in rel_dir.split("/") if p], ""
+        for part in parts:
+            here = here + "/" + part if here else part
+            rules = self.rules_in(rules, here)
+        return rules
+
+    def descend(self, rel: str, rules: list) -> None:
+        try:
+            with os.scandir(os.path.join(self.root, rel)) as scan:
+                children = list(scan)
+        except OSError:
+            self.found.append((rel or ".") + " (unreadable)")
+            return
+        self.steps += len(children)
+        if self.steps > _CLEAN_SCAN_CAP:
+            raise OverflowError
+        if any(child.name == ".gitignore" for child in children):
+            rules = self.rules_in(rules, rel)
+        for child in children:
+            if child.name == ".git":
+                continue
+            is_dir = not child.is_symlink() and child.is_dir(follow_symlinks=False)
+            self.node(rel + "/" + child.name if rel else child.name, is_dir, rules)
+
+    def node(self, rel: str, is_dir: bool, rules: list) -> None:
+        if rel in self.tracked:
+            return
+        if is_dir and rel in self.tracked_dirs:
+            self.descend(rel, rules)
+            return
+        if is_dir and os.path.exists(os.path.join(self.root, rel, ".git")) and not self.ff:
+            return
+        ignored = _ignored(rules + self.excludes, rel, is_dir)
+        if self.mode == "X" and is_dir and not ignored:
+            self.descend(rel, rules)
+        elif ignored == (self.mode == "X") and _loadbearing(rel):
+            self.found.append(rel)
+
+
+def _clean_options(args: list) -> tuple:
+    """(forcing, dry, mode "x"|"X"|"", ff, exclude patterns, pathspecs) of a `git clean` argument list."""
+    letters, excludes, paths, long_forced, dry, i = "", [], [], 0, False, 0
+    while i < len(args):
+        arg = args[i]
+        i += 1
+        if arg == "--":
+            paths += args[i:]
+            break
+        if re.match(r"^-[A-Za-z]+$", arg):
+            letters += arg[1:]
+            if arg.endswith("e") and i < len(args):
+                excludes.append(args[i])
+                i += 1
+        elif arg == "--force":
+            long_forced += 1
+        elif arg == "--dry-run":
+            dry = True
+        elif arg == "--exclude" and i < len(args):
+            excludes.append(args[i])
+            i += 1
+        elif arg.startswith("--exclude="):
+            excludes.append(arg[len("--exclude="):])
+        elif not arg.startswith("-"):
+            paths.append(arg)
+    mode = "X" if "X" in letters else "x" if "x" in letters else ""
+    forced = letters.count("f") + long_forced
+    return forced > 0, dry or "n" in letters, mode, forced > 1, excludes, paths
+
+
+def _git_clean_loses_loadbearing(command: str, cwd: str) -> list:
+    """Repo-relative untracked load-bearing paths that a forcing, non-dry `git clean` segment of `command` would remove.
+
+    Spawn-free mirror of the warm `check_destructive_git_clean` oracle (`git clean -nd`): the work tree is walked
+    with scandir and checked against the `.git/index`, honouring `-C`, pathspecs, `-e`, `-x` and `-X`. A wholly
+    untracked directory is one entry and is not entered. No tmp or scratch exemption applies.
+
+    Cold errs stricter than warm where it cannot be exact: a pathspec glob scopes to its literal directory, a
+    path is named repo-relative where warm names it cwd-relative, `core.excludesFile` and `$GIT_DIR/info/exclude`
+    outside the work tree are not read, a directory holding only ignored files is reported as untracked, gitignore
+    matching is an approximation, and a walk past `_CLEAN_SCAN_CAP`
+    entries or an unreadable directory counts as a loss. A clean under no resolvable work tree returns [] (the
+    forced-clean classifier owns that case).
+    """
+    lost: list = []
+    for chdir, args in _git_clean_segments(command):
+        forcing, dry, mode, ff, excludes, paths = _clean_options(args)
+        if not forcing or dry:
+            continue
+        base = os.path.abspath(os.path.join(cwd or os.getcwd(), chdir))
+        root = _git_root_of(base)
+        if not root:
+            continue
+        real_root = os.path.realpath(root)
+        walk = _CleanWalk(real_root, _index_names(root), mode, ff, excludes)
+        try:
+            for spec in paths or ["."]:
+                parts = []
+                for part in spec.replace("\\", "/").split("/"):
+                    if _GLOB_CHARS & set(part):
+                        break
+                    parts.append(part)
+                scope = os.path.realpath(os.path.join(base, *parts)) if parts else base
+                rel = os.path.relpath(scope, real_root).replace("\\", "/")
+                if rel == ".." or rel.startswith("../") or ".git" in rel.split("/"):
+                    continue
+                rel = "" if rel == "." else rel
+                if not rel:
+                    walk.descend("", walk.base)
+                elif os.path.lexists(scope):
+                    walk.node(rel, os.path.isdir(scope) and not os.path.islink(scope), walk.chain(os.path.dirname(rel)))
+        except OverflowError:
+            walk.found.append("(scan cap exceeded)")
+        lost += [p for p in walk.found if p not in lost]
+    return lost
+
+
+CLEAN_LOADBEARING_REASON = ("BLOCKED: git clean would delete %d untracked load-bearing path(s), unrecoverable (no commit/stash/reflog): %s. "
+                            "Stash them with git stash push -u, or retry once the warm engine is up.")
 RM_DENY_REASON = "BLOCKED: recursive rm would delete untracked or uncommitted work git cannot restore. Delete under <repo>/scratch, or retry once the warm engine is up."
 CLEAN_DENY_REASON = "BLOCKED: git clean -f in a work tree destroys unrecoverable untracked data. Clean under <repo>/scratch, or retry once the warm engine is up."
 
@@ -592,6 +895,9 @@ def degrade_match(host_event: HostEvent) -> Optional[Dict[str, str]]:
         clean = _git_clean_forced(command, cwd)
         if clean:
             return {"decision": "deny", "reason": CLEAN_DENY_REASON}
+        lost = _git_clean_loses_loadbearing(command, cwd)
+        if lost:
+            return {"decision": "deny", "reason": CLEAN_LOADBEARING_REASON % (len(lost), ", ".join(lost[:8]))}
         label = _destructive_git(command)
         if clean is False and label and label.startswith("git clean"):
             label = None

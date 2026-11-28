@@ -146,3 +146,48 @@ def test_bad_stage_and_unsafe_run_id_refused(tmp_path: Path) -> None:
     assert c.read_run_stage(tmp_path, "../evil") is None
     assert c.read_run_stage(tmp_path, RUN) is None
     c.stamp_run_stage(tmp_path, "../evil", "minted")
+
+
+def test_rag_use_is_written_kept_and_absent_by_default(tmp_path: Path) -> None:
+    verdict = {"verdict": "rag_not_used", "rag_calls": 0, "per_worker": [{"label": "A", "rag_calls": 0}]}
+    c.write_run_stage(tmp_path, RUN, "staged", steps_planned=1)
+    assert "rag_use" not in c.read_run_stage(tmp_path, RUN)
+    c.write_run_stage(tmp_path, RUN, "staged", rag_use=verdict)
+    staged = c.read_run_stage(tmp_path, RUN)
+    assert set(staged) == KEYS | {"steps_planned", "staged_at", "rag_use"} and staged["rag_use"] == verdict
+    c.stamp_run_stage_at(c.record_dir(tmp_path, RUN), "halted")
+    assert c.read_run_stage(tmp_path, RUN)["rag_use"] == verdict
+
+
+def _gate_js_run(reply: str) -> dict | None:
+    import shutil
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    if shutil.which("node") is None:
+        pytest.skip("needs node to evaluate the composed build-stage gate")
+    harness = (
+        "(async () => {\n  let _halted = null; const _runId = 'r1', _SESSION_ID = 's', _sizingRel = null; const log = () => {};\n"
+        f"  const engineOp = async (op, p) => {{ if (op !== 'dispatch.stage_rag_gate') throw new Error(op); return {reply}; }};\n"
+        + ask_compose._STAGE_RAG_GATE_JS
+        + "\n  console.log(JSON.stringify(_halted));\n})();"
+    )
+    proc = subprocess.run(["node", "-e", harness], capture_output=True, text=True, check=True)
+    return json.loads(proc.stdout)
+
+
+def test_the_composed_build_stage_halts_on_rag_not_used_before_review() -> None:
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
+
+    script = _compose()
+    assert script.count("dispatch.stage_rag_gate") == 1
+    assert script.index("dispatch.stage_rag_gate") < script.index("const _reviewPaths")
+    halted = _gate_js_run("{ verdict: 'rag_not_used', rag_calls: 0, per_worker: [] }")
+    assert halted["halted"] == "rag_not_used" and halted["rag_use"]["rag_calls"] == 0
+    assert "project-rag" in halted["next_action"]
+
+
+@pytest.mark.parametrize("verdict", ["ok", "degraded", "transcript_unreadable", "not_applicable"])
+def test_the_composed_build_stage_does_not_halt_on_any_other_verdict(verdict: str) -> None:
+    assert _gate_js_run("{ verdict: '%s', rag_calls: 2, per_worker: [] }" % verdict) is None

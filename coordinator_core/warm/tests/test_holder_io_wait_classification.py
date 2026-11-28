@@ -107,3 +107,20 @@ def test_drive_verdict_stall_reads_as_infinitely_slow(monkeypatch: pytest.Monkey
     assert server._holder_drive_probe_ms("root-x") == float("inf")
     monkeypatch.setattr(server, "_drive_verdict", lambda root: {"case": "enospc"})
     assert server._holder_drive_probe_ms("root-x") is None
+
+
+def test_a_running_op_waits_out_a_slow_probe_and_fails_only_a_hung_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    release = threading.Event()
+    monkeypatch.setattr(server, "_probe_drive", lambda root, box: release.wait(10))
+    monkeypatch.setattr(server, "_drive_probes", {})
+    monkeypatch.setattr(server, "_drive_ok_until", {})
+    monkeypatch.setattr(server, "_DRIVE_PROBE_SECS", 0.05)
+    try:
+        assert server._drive_verdict(tmp_path)["case"] == "drive_stall"
+        assert server._drive_verdict(tmp_path, 30.0) is None
+        time.sleep(0.1)
+        assert server._drive_verdict(tmp_path, 0.01)["case"] == "drive_stall"
+    finally:
+        release.set()

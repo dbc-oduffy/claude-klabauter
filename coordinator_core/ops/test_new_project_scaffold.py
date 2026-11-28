@@ -137,24 +137,38 @@ def test_python_package_template_no_smoke(tmp_path, capsys):
     assert 'build-backend = "setuptools.build_meta"' in (target / "pyproject.toml").read_text()
     assert (target / "my_pkg" / "__init__.py").is_file()
     assert (target / "tests" / "test_smoke.py").is_file()
-    assert (target / "scripts" / "run_fast_tests.py").is_file()
     assert "project_type: general" in (target / "coordinator.local.md").read_text()
     assert (target / "README.md").read_text() == "# My-Pkg\n"
     manifest = _manifest(capsys.readouterr().out)
-    assert {"pyproject.toml", "my_pkg/__init__.py", "tests/test_smoke.py",
-            "scripts/run_fast_tests.py"} <= set(manifest)
+    assert {"pyproject.toml", "my_pkg/__init__.py", "tests/test_smoke.py", ".gitignore"} <= set(manifest)
+    assert "scripts/run_fast_tests.py" not in manifest
 
 
-def test_python_package_seed_tests_pass_via_fast_runner(tmp_path):
+def test_python_package_gitignore_ignores_python_artifacts(tmp_path):
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    assert main(["--name", "ignored", "--parent", str(parent), "--template", "python-package",
+                 "--no-smoke"]) == 0
+    rules = (parent / "ignored" / ".gitignore").read_text().splitlines()
+    assert {"__pycache__/", "*.pyc", ".pytest_cache/"} <= set(rules)
+
+
+def test_python_package_fast_test_cmd_is_the_only_entry_point(tmp_path):
     import subprocess
     import sys
+
+    from coordinator_core.install.detect_test_cmd import detect_python
 
     parent = tmp_path / "parent"
     parent.mkdir()
     assert main(["--name", "runme", "--parent", str(parent), "--template", "python-package",
                  "--no-smoke"]) == 0
     target = parent / "runme"
-    proc = subprocess.run([sys.executable, "scripts/run_fast_tests.py"], cwd=target,
+    assert not (target / "scripts").exists()
+    detected = detect_python(target)
+    assert detected is not None and detected.fast == 'pytest -m "not slow and not integration"'
+    proc = subprocess.run([sys.executable, "-m", "pytest", "-m", "not slow and not integration",
+                           "--strict-markers", "-q"], cwd=target,
                           capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
@@ -219,14 +233,41 @@ def test_next_app_manifest_lists_written_files_without_setup_entry_points(
     assert all((target / rel).is_file() for rel in manifest)
 
 
-def test_git_branch_is_main(tmp_path, monkeypatch):
+def test_git_branch_is_day_branch_not_main(tmp_path, monkeypatch):
+    from coordinator_core.daily_branch import day_branch_name
+    from coordinator_core.daily_day import local_day
+    from coordinator_core.machine_resolver import compute_machine, compute_owner
+
     parent = tmp_path / "parent"
     parent.mkdir()
+    cwd_before = os.getcwd()
     rc = main(["--name", "branchapp", "--parent", str(parent), "--template", "empty", "--no-smoke"])
     assert rc == 0
+    assert os.getcwd() == cwd_before
 
     head = (parent / "branchapp" / ".git" / "HEAD").read_text()
-    assert "refs/heads/main" in head
+    expected = day_branch_name(compute_owner(), compute_machine(), local_day())
+    assert f"refs/heads/{expected}" in head
+    assert "refs/heads/main" not in head
+
+
+def test_failed_day_branch_cut_warns_and_keeps_scaffold(tmp_path, monkeypatch, capsys):
+    from coordinator_core.hooks import day_branch_assert
+
+    def _boom(*a, **k):
+        raise RuntimeError("cut refused")
+
+    monkeypatch.setattr(day_branch_assert, "assert_day_branch", _boom)
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    cwd_before = os.getcwd()
+    rc = main(["--name", "stuckapp", "--parent", str(parent), "--template", "empty", "--no-smoke"])
+
+    assert rc == 0
+    assert os.getcwd() == cwd_before
+    assert "repo is on main" in capsys.readouterr().err
+    assert (parent / "stuckapp" / "README.md").is_file()
+    assert "refs/heads/main" in (parent / "stuckapp" / ".git" / "HEAD").read_text()
 
 
 def test_parent_flag_wins_over_env(tmp_path, monkeypatch):

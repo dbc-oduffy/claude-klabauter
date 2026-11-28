@@ -1768,6 +1768,59 @@ def test_docs_checker_clause_absent_without_rag_or_without_uproject_or_other_age
 
 
 # ---------------------------------------------------------------------------
+# example-retrieval-repo-first leg: any worker on a served repo
+# ---------------------------------------------------------------------------
+
+_RAG_MARK = "Code lookup: example-retrieval-repo first."
+
+
+def _serve(monkeypatch: pytest.MonkeyPatch, served: bool) -> None:
+    from coordinator_core.bash_guards import _rag_serving
+
+    monkeypatch.setattr(_rag_serving, "serves_repo", lambda cwd=None: served)
+
+
+@pytest.mark.parametrize("agent", ["coordinator:executor", "coordinator:docs-checker", "general-purpose"])
+def test_any_worker_on_a_served_repo_gets_the_rag_line_once(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch, agent: str
+) -> None:
+    _serve(monkeypatch, True)
+    result = compose_catering(_payload(agent, "s-rag", str(git_repo)), cwd=str(git_repo))
+    assert result.count(_RAG_MARK) == 1
+
+
+def test_worker_on_an_unserved_repo_gets_no_rag_line(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _serve(monkeypatch, False)
+    result = compose_catering(_payload("coordinator:executor", "s-rag", str(git_repo)), cwd=str(git_repo))
+    assert _RAG_MARK not in result
+
+
+def test_rag_line_lands_before_role_framing(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    snippet_dir = tmp_path / "plugins" / "coordinator-claude" / "coordinator" / "snippets"
+    snippet_dir.mkdir(parents=True)
+    (snippet_dir / "agent-role-dispatched.md").write_text(ROLE_APPEND_CANARY, encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    _serve(monkeypatch, True)
+    result = compose_catering(_payload("coordinator:executor", "s-rag", str(git_repo)), cwd=str(git_repo))
+    assert result.index(_RAG_MARK) < result.index(ROLE_APPEND_CANARY)
+
+
+def test_rag_line_is_not_repeated_when_the_spawn_prompt_carries_it(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    _serve(monkeypatch, True)
+    monkeypatch.setattr(chan, "read_spawn_prompt", lambda _p: f"task\n{_RAG_MARK} select it")
+    result = compose_catering(_payload("coordinator:executor", "s-rag", str(git_repo)), cwd=str(git_repo))
+    assert _RAG_MARK not in result
+
+
+# ---------------------------------------------------------------------------
 # Commit-agent params prewrite leg
 # ---------------------------------------------------------------------------
 

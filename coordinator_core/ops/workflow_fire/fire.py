@@ -730,20 +730,15 @@ def _pid_birth(pid: int) -> Optional[float]:
 
 
 def _birth_matches(pid: int, birth: object) -> bool:
-    """True only when ``pid`` was born at ``birth``; a malformed birth is some other process."""
-    if type(birth) not in (int, float):
+    """True only when ``pid`` was provably born at ``birth``; a malformed or unreadable birth is some other process."""
+    if type(birth) not in (int, float) or not isinstance(birth, (int, float)):
         return False
     current = _pid_birth(pid)
-    return current is None or abs(current - birth) <= _BIRTH_TOLERANCE_S
+    return current is not None and abs(current - birth) <= _BIRTH_TOLERANCE_S
 
 
 def _driver_live(record: dict) -> bool:
-    pid = record["pid"]
-    if not _pid_alive(pid):
-        return False
-    if record.get("pid_birth") is None and record.get("pid_birth_denied") is True:
-        return True
-    return _birth_matches(pid, record.get("pid_birth"))
+    return _pid_alive(record["pid"]) and _birth_matches(record["pid"], record.get("pid_birth"))
 
 
 def _log_size_bytes(log_path: str) -> Optional[int]:

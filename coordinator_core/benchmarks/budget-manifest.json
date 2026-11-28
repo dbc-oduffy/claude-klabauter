@@ -1,6 +1,17 @@
 {
   "schema_version": 1,
   "min_gating_sample_count": 5,
+  "_emit_worker_e2e_base": {
+    "measured_on": "2026-11-21",
+    "code_sha": "2fa733e2bc57395e17ef9a1dfa29a9d1e8132c64 + uncommitted working tree",
+    "produced_by": "python coordinator_core/benchmarks/emit_worker_e2e.py [--real-repo]: door to an isolated warm engine cloned from the working tree, admission disabled, win32",
+    "unit_note": "process_ms is door tree process time plus the warm engine's per-request CPU, median over samples; git_spawns is distinct git children the engine tree started over one k-call pass, procs is the job-accounted count.",
+    "base": {
+      "fixture": {"process_ms": 346.9, "door_ms": 28.1, "worker_ms": 318.8, "git_spawns": 10, "k": 5, "procs": 6.0, "samples": 3, "sample_process_ms": [259.4, 346.9, 559.4]},
+      "real_repo": {"process_ms": 4099.0, "door_ms": 26.0, "worker_ms": 4072.9, "git_spawns": 9, "k": 3, "procs": 8.0, "samples": 3, "sample_process_ms": [3875.0, 4099.0, 4411.5], "plan": "docs/plans/2026-11/2026-11-21-hnd-span-cpu-metric-5909a4.md"},
+      "door_lines": 7325
+    }
+  },
   "_phase0_baseline": {
     "measured_at": "2026-07-10",
     "code_sha": "1e17a6b85b27cc4e3d237102e540b5e6cebd0e85",
@@ -505,6 +516,15 @@
       },
       "spawn_count_budget": {},
       "_rationale": "Reads one parent record and the status files of that parent's siblings, bounded by fan-out size, in process; no git, no file written, no process started."
+    },
+    "dispatch.stage_wait_status": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {},
+      "_rationale": "Reads one stage wait record and the marker or flag files of its blockers, bounded by the blocker count, in process; no git, no file written, no process started."
     },
     "workflow.fire": {
       "target_ms": 20,

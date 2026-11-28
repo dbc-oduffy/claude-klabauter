@@ -52,7 +52,6 @@ POPULATION: Mapping[str, tuple] = {
     "lessons-outbox-drain": ("not_a_gate", "drains an outbox"),
     "list-week-changelog": ("not_a_gate", "lists entries"),
     "mechanical-close": ("not_a_gate", "dedupes, discards and retags open queue rows"),
-    "plan-reversibility-eligibility": ("pending_replay", "eligibility verdict vs exit code unreplayed"),
     "prune-closed-bugs": ("not_a_gate", "prunes records"),
     "query-completions": ("not_a_gate", "read-only query"),
     "query-records": ("not_a_gate", "read-only query"),

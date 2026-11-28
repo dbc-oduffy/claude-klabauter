@@ -36,8 +36,8 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
 )
 from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.write_guards._home_root import (
-    DENY_REASON,
     creates_home_root_entry,
+    deny_reason,
     home_roots,
 )
 
@@ -125,12 +125,14 @@ def _powershell_targets(cmd: str) -> Iterable[str]:
             yield from ps_home_var_redirects(tokens)
 
 
-def _creates_home_entry(cmd: str, cwd: Optional[str], dialect: Optional[Dialect]) -> bool:
+def _created_home_entry(cmd: str, cwd: Optional[str], dialect: Optional[Dialect]) -> Optional[str]:
+    """The first expanded sink target that creates a home-root entry, else None."""
     targets = _powershell_targets(cmd) if dialect is Dialect.POWERSHELL else _bash_targets(cmd)
     for raw in targets:
-        if creates_home_root_entry(_expand_home_var(raw, dialect), cwd):
-            return True
-    return False
+        target = _expand_home_var(raw, dialect)
+        if creates_home_root_entry(target, cwd):
+            return target
+    return None
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -143,24 +145,25 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         cwd = payload.get("cwd")
         if not cmd or not _prefilter(cmd, cwd):
             return None
-        if not _creates_home_entry(cmd.replace("\r", ""), cwd, dialect_from_tool_name(tool_name)):
+        target = _created_home_entry(cmd.replace("\r", ""), cwd, dialect_from_tool_name(tool_name))
+        if target is None:
             return None
-        return _deny()
+        return _deny(deny_reason(target))
     except Exception:
         return None
 
 
-def _deny() -> Any:
-    """The deny record; a non-strict guard level returns the leveled envelope instead."""
+def _deny(reason: str) -> Any:
+    """The deny record for `reason`; a non-strict guard level returns the leveled envelope instead."""
     from coordinator_core.guard_messages.alternative_record import AdaptableOffer, AlternativeRecord, Audience
     from coordinator_core.guard_messages.render import render
 
-    summary, _, offer = DENY_REASON.partition(" Instead: ")
+    summary, _, offer = reason.partition(" Instead: ")
     record = AlternativeRecord(
         verdict_kind="deny",
         guard_name="block-home-root-bash-write",
         summary=summary,
-        em_text=DENY_REASON,
+        em_text=reason,
         members=(
             AdaptableOffer(
                 template=offer or "write under <repo>/scratch/ or the session scratchpad.",

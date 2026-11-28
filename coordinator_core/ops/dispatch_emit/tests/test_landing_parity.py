@@ -474,7 +474,7 @@ def plan_repo(tmp_path, monkeypatch):
     _git(["commit", "-q", "-m", "plan seed"], root)
     monkeypatch.setattr(cr, "_actual_loe", lambda r, s: "S")
     monkeypatch.setattr("coordinator_core.session.claims.list_claims_by_session_checked",
-                        lambda sid, cwd=None: ([], []))
+                        lambda sid, cwd=None, classes=None: ([], []))
     return root
 
 
@@ -643,7 +643,7 @@ def ask_repo(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.setattr(cr, "_actual_loe", lambda r, s: "S")
     monkeypatch.setattr("coordinator_core.session.claims.list_claims_by_session_checked",
-                        lambda sid, cwd=None: ([], []))
+                        lambda sid, cwd=None, classes=None: ([], []))
     session_core.init(SELF, cwd=str(root))
     (root / "docs" / "plans").mkdir(parents=True)
     (root / PLAN).write_text(_PLAN_TEXT.replace(f"sizing_object: {SIZING}\n", ""), encoding="utf-8")

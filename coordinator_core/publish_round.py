@@ -1,8 +1,9 @@
-"""Per-round publish directories under machine-local ``paths.scratch_root``.
+"""Per-round publish directories: a `run_scratch` claim under machine-local ``paths.scratch_root``.
 
 A publish round creates every directory it needs (mirror clone, materialize and commit
-clones) inside one ``publish-round-<pid>-<hex>`` dir and removes it on every exit,
-SIGTERM/SIGHUP and failure included. A SIGKILLed round is reaped by `reap_dead_rounds`.
+clones) inside one ``<scratch_root>/<repo>/publish-round/round.<stamp>.<pid>`` claim and
+finishes it on every exit, SIGTERM/SIGHUP and failure included. A SIGKILLed round is removed
+by the next claim's sweep or by `reap_dead_rounds`.
 
 Invariants: the round root is never registered under ``repos.*`` (an ephemeral clone must not
 resolve as an engine clone); an unset ``paths.scratch_root`` is a typed refusal, never a
@@ -14,21 +15,19 @@ from __future__ import annotations
 import contextlib
 import os
 import re
-import shutil
 import signal
-import stat
-import sys
 from pathlib import Path
 from collections.abc import Generator
 from typing import Iterator, List, Optional
 
-from coordinator_core import machine_resolver
+from coordinator_core import machine_resolver, run_scratch
 
 SCRATCH_ROOT_KEY = "paths.scratch_root"
 ROUND_ENV = "COORDINATOR_PUBLISH_ROUND_DIR"
-ROUND_PREFIX = "publish-round-"
+ROUND_KIND = "publish-round"
+ROUND_SLUG = "round"
 MIRROR_PREFIX = "mirror-"
-_ROUND_RE = re.compile(r"^publish-round-(\d+)-[0-9a-f]+$")
+_ROUND_RE = re.compile(r"^round\.\d{8}T\d{6}Z\.\d+$")
 _REPO_DIR_NAME = Path(__file__).resolve().parent.parent.name
 
 
@@ -36,50 +35,16 @@ class RoundNotOpenError(RuntimeError):
     """`mirror_dest` was called outside an open publish round."""
 
 
-def _clear_readonly_and_retry(func, path, _exc) -> None:
-    """rmtree error hook: a Windows read-only git object is made writable and the op retried once."""
-    os.chmod(path, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
-    func(path)
-
-
-def _rmtree(path: Path) -> None:
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, ignore_errors=False, onexc=_clear_readonly_and_retry)
-    else:
-        shutil.rmtree(path, ignore_errors=False, onerror=_clear_readonly_and_retry)
-
-
-def _remove_round(path: Path) -> None:
-    """Remove a round dir; a held handle leaves a partial dir for the next reap, never raises."""
-    try:
-        _rmtree(path)
-    except OSError:
-        shutil.rmtree(path, ignore_errors=True)
-
-
 def round_root() -> Path:
-    """``<paths.scratch_root>/<repo dir name>``; raises `SettingsKeyMissing` naming the key when unset."""
-    return Path(machine_resolver.require_key(SCRATCH_ROOT_KEY)) / _REPO_DIR_NAME
-
-
-def _pid_alive(pid: int) -> bool:
-    from coordinator_core.group_em import session_registry
-
-    return bool(session_registry.pid_alive(pid))
+    """``<paths.scratch_root>/<repo dir name>/publish-round``; raises `SettingsKeyMissing` naming the key when unset."""
+    return Path(machine_resolver.require_key(SCRATCH_ROOT_KEY)) / _REPO_DIR_NAME / ROUND_KIND
 
 
 @contextlib.contextmanager
 def round_dir() -> Generator[Path]:
-    """Yield a fresh pid-stamped round dir, removed on every exit; SIGTERM/SIGHUP unwind via SystemExit.
-
-    Sets `ROUND_ENV` for child processes for the duration. A SIGKILL leaves the dir for `reap_dead_rounds`.
-    """
-    import secrets
-
-    root = round_root()
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / f"{ROUND_PREFIX}{os.getpid()}-{secrets.token_hex(4)}"
-    path.mkdir()
+    """Yield a fresh `run_scratch` claim as `ROUND_ENV`, finished on every exit including SIGTERM/SIGHUP."""
+    machine_resolver.require_key(SCRATCH_ROOT_KEY)
+    path = run_scratch.claim(_REPO_DIR_NAME, ROUND_KIND, ROUND_SLUG)
 
     def _unwind(signum: int, _frame: object) -> None:
         raise SystemExit(128 + signum)
@@ -107,7 +72,7 @@ def round_dir() -> Generator[Path]:
                 signal.signal(signum, prior)
             except (ValueError, OSError):
                 pass
-        _remove_round(path)
+        run_scratch.finish(path)
 
 
 def current_round() -> Optional[Path]:
@@ -143,16 +108,17 @@ def is_round_path(path: os.PathLike | str) -> bool:
     return bool(rel.parts) and _ROUND_RE.match(rel.parts[0]) is not None
 
 
-def _scan_rounds(root: Path) -> Iterator[tuple[Path, int]]:
+def _scan_rounds(root: Path) -> Iterator[tuple[Path, bool]]:
+    """Yield ``(round dir, owner alive)``; a round without a readable claim mark reads as alive."""
     try:
         with os.scandir(root) as it:
             entries = list(it)
     except OSError:
         return
     for entry in entries:
-        m = _ROUND_RE.match(entry.name)
-        if m and entry.is_dir(follow_symlinks=False):
-            yield Path(entry.path), int(m.group(1))
+        if _ROUND_RE.match(entry.name) and entry.is_dir(follow_symlinks=False):
+            mark = run_scratch.read_mark(entry.path)
+            yield Path(entry.path), mark is None or run_scratch.owner_alive(mark)
 
 
 def live_round_mirrors() -> List[Path]:
@@ -162,8 +128,8 @@ def live_round_mirrors() -> List[Path]:
     except machine_resolver.SettingsKeyMissing:
         return []
     out: List[Path] = []
-    for rnd, pid in _scan_rounds(root):
-        if not _pid_alive(pid):
+    for rnd, alive in _scan_rounds(root):
+        if not alive:
             continue
         try:
             with os.scandir(rnd) as it:
@@ -178,19 +144,12 @@ def live_round_mirrors() -> List[Path]:
 
 
 def reap_dead_rounds() -> List[Path]:
-    """Remove round dirs whose owner pid is dead; best effort, returns the removed paths, never raises."""
+    """Sweep the publish-round kind dir (dead owners, stale markless claims); returns removed paths, never raises."""
     try:
         root = round_root()
     except machine_resolver.SettingsKeyMissing:
         return []
-    removed: List[Path] = []
-    for rnd, pid in _scan_rounds(root):
-        try:
-            if _pid_alive(pid):
-                continue
-            _remove_round(rnd)
-            if not rnd.exists():
-                removed.append(rnd)
-        except OSError:
-            continue
-    return removed
+    try:
+        return [Path(p) for p in run_scratch.sweep_kind(root, run_scratch.KEEP_DEFAULT, None)]
+    except OSError:
+        return []

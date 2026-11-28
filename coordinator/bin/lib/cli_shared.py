@@ -69,6 +69,8 @@ def managed_temp_root(repo_root=None) -> str:
 def _load_by_path(name: str, path: str):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
+    # trap: a by-path module must be in sys.modules before exec, or its dataclasses fail to resolve string annotations.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 

@@ -68,6 +68,44 @@ def test_roster_precedence_given_then_targets_then_question_defaults() -> None:
     assert re_.notebooks_roster([], [], ["q1", "q2"]) == ("A", "B")
 
 
+_UUID_A = "3f2b8c1e-5a47-4d9e-9b0a-1c2d3e4f5a6b"
+_UUID_B = "7a9d0e12-8b34-4c56-a789-0123456789ab"
+_UUIDS = (
+    "--research-class", "corpus", "--research-appetite", "medium", "--research-source", "notebooklm",
+    "--research-notebooklm-need", "youtube",
+    "--research-target", f"notebooklm={_UUID_A}", "--research-target", f"notebooklm={_UUID_B}",
+)
+
+
+def test_uuid_targets_roster_on_letters_and_the_brief_binds_each_uuid(repo, capsys: pytest.CaptureFixture[str]) -> None:
+    _, script, _ = _emit(repo, capsys, *_UUIDS)
+    brief = _brief_text(repo, script)
+    assert "2 entries: `A`, `B`" in brief
+    assert f"- `A`: notebook `{_UUID_A}`" in brief and f"- `B`: notebook `{_UUID_B}`" in brief
+    assert f"entries: `{_UUID_A}`" not in brief
+
+
+def test_notebook_keys_keep_letter_refs_and_give_uuids_the_free_letters() -> None:
+    targets = [
+        {"source": "notebooklm", "ref": _UUID_A}, {"source": "notebooklm", "ref": "A"}, {"source": "web", "ref": "x"},
+    ]
+    assert re_.notebook_keys(targets) == {"B": _UUID_A, "A": "A"}
+    assert re_.notebooks_roster(targets, [], ["q"]) == ("B", "A")
+
+
+def test_notebook_keys_refuse_more_uuids_than_letters() -> None:
+    twenty_seven = [{"source": "notebooklm", "ref": f"{i:08x}-0000-4000-8000-000000000000"} for i in range(27)]
+    assert len(re_.notebook_keys(twenty_seven[:26])) == 26
+    with pytest.raises(re_.PipelineEmitRefused):
+        re_.notebook_keys(twenty_seven)
+
+
+def test_list_key_refusals_refuse_a_non_letter_notebooks_value_and_pass_letters() -> None:
+    assert re_.list_key_refusals("notebooklm", {"notebooks": ("A", "B")}) == []
+    bad = re_.list_key_refusals("notebooklm", {"notebooks": (_UUID_A, "a")})
+    assert len(bad) == 1 and _UUID_A in bad[0] and "uppercase" in bad[0]
+
+
 def test_a_sizing_brief_is_wrapped_never_edited(tmp_path: Path) -> None:
     sizing = tmp_path / "state/sizings/s.yaml"
     sizing.parent.mkdir(parents=True)

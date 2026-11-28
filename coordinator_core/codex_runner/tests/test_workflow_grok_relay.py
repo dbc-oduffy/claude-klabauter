@@ -198,6 +198,35 @@ def test_windows_preamble_emits_the_bare_form_the_rule_matches(tmp_path: Path, s
     assert "run no cd or Set-Location" in prompt
 
 
+_REAL_OS = workflow.os
+
+
+class _PosixOs:
+    name = "posix"
+
+    def __getattr__(self, attr):
+        return getattr(_REAL_OS, attr)
+
+
+def test_posix_general_grok_stage_keeps_shell_allows_not_the_invoke_rule(
+        tmp_path: Path, stub, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen, box = stub
+    box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
+    monkeypatch.setattr(workflow, "os", _PosixOs())
+    _run(tmp_path, "coordinator:executor")
+    argv = seen[0]
+    rules = [argv[i + 1] for i, flag in enumerate(argv) if flag == "--allow"]
+    assert rules == ["Bash", "PowerShell", "Execute", "MCPTool(example_retrieval_repo__*)"]
+
+
+def test_grok_preamble_says_never_run_cd_or_pushd(tmp_path: Path, stub) -> None:
+    _, box = stub
+    box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
+    _run(tmp_path, "coordinator:op-relay")
+    prompt = (tmp_path / "art" / "prompt.txt").read_text(encoding="utf-8")
+    assert "The working directory is already the repo. Never run cd or pushd, even where the task text says to." in prompt
+
+
 def test_grok_child_path_leads_with_the_settings_home_bin(tmp_path: Path, stub, monkeypatch: pytest.MonkeyPatch) -> None:
     _, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))

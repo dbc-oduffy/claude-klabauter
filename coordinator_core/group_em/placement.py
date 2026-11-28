@@ -72,6 +72,69 @@ def sample_capability(sample: dict, held: Optional[list] = None, now: Optional[f
     }
 
 
+def _hardware_groups(boxes: list, home: Optional[Path]) -> dict:
+    """``{box_id: group key}`` for boxes the membership's ``same_hardware_as`` ties to one machine.
+
+    One unverified snapshot read, no spawn: placement is advisory, never an authority, so a
+    signature check is not worth a process. The relation is symmetric (a one-sided declaration
+    pairs both boxes). An absent field or unreadable membership yields no groups. Never raises.
+    """
+    try:
+        from coordinator_core.group_em import member_box
+
+        base = Path(home) if home is not None else box_registry.settings_home()
+        snap, _sig = member_box._membership().load_snapshot(base)
+        members = [m for m in (snap or {}).get("members", []) if isinstance(m, dict)]
+        fold = box_registry.fold_box_id
+        parent: dict = {}
+
+        def find(x: str) -> str:
+            while parent.setdefault(x, x) != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for m in members:
+            twins = m.get("same_hardware_as")
+            for twin in twins if isinstance(twins, list) else []:
+                if isinstance(twin, str):
+                    parent[find(fold(twin))] = find(fold(m["box"]))
+        if not parent:
+            return {}
+        registry = []
+        for b in boxes:
+            cap = b.get("capability")
+            raw = [b.get("box_id"), cap.get("name") if isinstance(cap, dict) else None]
+            raw += b["names"] if isinstance(b.get("names"), list) else []
+            registry.append({fold(n) for n in raw if isinstance(n, str) and n})
+        out: dict = {}
+        for b in boxes:
+            member = next((m for m in members if member_box._matches(m, None, b["box_id"], tuple(registry))), None)
+            if member is not None and fold(member["box"]) in parent:
+                out[b["box_id"]] = find(fold(member["box"]))
+        counts: dict = {}
+        for g in out.values():
+            counts[g] = counts.get(g, 0) + 1
+        return {k: g for k, g in out.items() if counts[g] > 1}
+    except Exception:  # contract: no twins, never raise
+        return {}
+
+
+def _booted_twins(fresh: list, groups: dict) -> dict:
+    """``{group key: box_id}`` of the box with the newest fresh sample in each hardware group.
+
+    ``fresh`` is ``[(box, sample)]`` rows with a fresh sample; a tie on age goes to the lower box id."""
+    best: dict = {}
+    for box, sample in fresh:
+        g = groups.get(box["box_id"])
+        if g is None:
+            continue
+        rank = (sample.get("age_s") or 0.0, box["box_id"])
+        if g not in best or rank < best[g][0]:
+            best[g] = (rank, box["box_id"])
+    return {g: v[1] for g, v in best.items()}
+
+
 def candidates(
     job_type: str,
     os: object = None,
@@ -100,9 +163,16 @@ def candidates(
         if os is not None:
             want["os"] = os
         out: list[dict] = []
+        fresh = []
         for box in boxes:
             sample = capacity_record.read(box, now)
-            if sample.get("stale") is not False:
+            if sample.get("stale") is False:
+                fresh.append((box, sample))
+        groups = _hardware_groups(boxes, home)
+        booted = _booted_twins(fresh, groups)
+        for box, sample in fresh:
+            g = groups.get(box["box_id"])
+            if g is not None and booted.get(g) != box["box_id"]:
                 continue
             held = capacity_admit.read_held(sample, Path(box["root"]), now)
             if not satisfies(sample_capability(sample, held, now), want):
@@ -146,8 +216,14 @@ def place_run(
     box_id: Optional[str] = None,
     brief: str = "",
     directory: Optional[Path] = None,
+    home: Optional[Path] = None,
+    now: Optional[float] = None,
 ) -> dict:
     """Place ``run`` on a box; returns ``{ok: True, placement}`` or ``{ok: False, reason}``.
+
+    Boxes the membership marks ``same_hardware_as`` are one machine booted exclusively: a box whose
+    twin holds the newest fresh capacity sample is refused (``same_hardware_booted``); an implicit
+    choice skips such boxes. ``home`` locates the membership (default: the settings home).
 
     An explicit ``box_id`` wins (reason ``no_box`` if unregistered, ``unsatisfied`` if its capability
     misses ``requirement``); otherwise the first registered box in id order that satisfies it
@@ -157,18 +233,36 @@ def place_run(
     try:
         requirement = dict(requirement or {})
         boxes = box_registry.read_boxes(directory)
+        now = time.time() if now is None else now
+        if home is None and directory is not None and Path(directory).name == "group-em":
+            home = Path(directory).parent.parent
+        groups = _hardware_groups(boxes, home)
+        booted = _booted_twins(
+            [(b, s) for b in boxes if b["box_id"] in groups for s in [capacity_record.read(b, now)] if s.get("stale") is False],
+            groups,
+        )
+
+        def _twin_booted(b: dict) -> bool:
+            g = groups.get(b["box_id"])
+            return g is not None and g in booted and booted[g] != b["box_id"]
+
         if box_id is not None:
             chosen = next((b for b in boxes if b["box_id"] == box_id), None)
             if chosen is None:
                 return {"ok": False, "reason": "no_box", "box_id": box_id}
             if not satisfies(chosen["capability"], requirement):
                 return {"ok": False, "reason": "unsatisfied", "box_id": box_id}
+            if _twin_booted(chosen):
+                return {"ok": False, "reason": "same_hardware_booted", "box_id": box_id}
         else:
             if not boxes:
                 return {"ok": False, "reason": "no_box"}
-            chosen = next((b for b in boxes if satisfies(b["capability"], requirement)), None)
-            if chosen is None:
+            fits = [b for b in boxes if satisfies(b["capability"], requirement)]
+            if not fits:
                 return {"ok": False, "reason": "unsatisfied"}
+            chosen = next((b for b in fits if not _twin_booted(b)), None)
+            if chosen is None:
+                return {"ok": False, "reason": "same_hardware_booted", "box_id": fits[0]["box_id"]}
         placement = {
             "schema_version": SCHEMA_VERSION,
             "run": str(run),

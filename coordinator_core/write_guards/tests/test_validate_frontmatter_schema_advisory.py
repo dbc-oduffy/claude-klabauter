@@ -41,12 +41,20 @@ import yaml
 from coordinator_core.bash_guards._override_doc import OVERRIDE_KEYS_DOC_DISPLAY
 from coordinator_core.frontmatter.schema_validate import compute_grouping_digest
 from coordinator_core.testing.content_root import content_root_and_present
+from coordinator_core.write_guards import _schema_cache as schema_cache
 from coordinator_core.write_guards import validate_frontmatter_schema_advisory as guard
 from coordinator_core.write_guards import validate_frontmatter_schema_deny as deny_guard
 
 pytestmark = pytest.mark.complete
 
 _content_root, _doe_present = content_root_and_present()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_schema_cache():
+    schema_cache.clear()
+    yield
+    schema_cache.clear()
 
 
 @pytest.fixture(autouse=True)

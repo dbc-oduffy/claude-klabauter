@@ -150,3 +150,21 @@ def recreate_directives(tasks: list[dict]) -> list[dict]:
             args["addBlockedBy"] = blocked
         steps.append({"tool": "TaskUpdate", "old_id": t["id"], "args": args, "advisory": True})
     return steps
+
+
+def checklist_lines(tasks: list[dict]) -> list[str]:
+    """Render carried tasks as plain checklist lines for a harness without a Task API.
+
+    One line per task: `[x]`/`[~]`/`[ ]` for completed/in_progress/other, the old id,
+    the subject, and `(blocked by ...)` when blockedBy is set. Pure text, no tool call.
+    """
+    lines: list[str] = []
+    for t in tasks:
+        status = t.get("status") or "pending"
+        mark = {"completed": "x", "in_progress": "~"}.get(status, " ")
+        line = f"- [{mark}] #{t['id']} {t.get('subject', '')}"
+        blocked = list(t.get("blockedBy") or [])
+        if blocked:
+            line += " (blocked by " + ", ".join(f"#{b}" for b in blocked) + ")"
+        lines.append(line)
+    return lines

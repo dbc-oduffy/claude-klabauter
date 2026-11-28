@@ -148,3 +148,51 @@ def test_hash_languages():
 
 def test_python_hash_inside_string_is_not_a_comment():
     assert added_comments("pkg/mod.py", "", 's = "# not a comment"\n') == []
+
+
+_DOCSTRING_SHAPES = '''"""module doc
+more"""
+import os
+
+
+class A:
+    """class doc
+    more"""
+
+    def f(self):
+        """fn doc
+        more"""
+        if os.name:
+            def g():
+                """nested doc
+                more"""
+        try:
+            pass
+        except OSError:
+            async def h():
+                """handler doc
+                more"""
+        match 1:
+            case 1:
+                class B:
+                    """case doc
+                    more"""
+
+
+async def top():
+    "single"
+    x = """not a docstring
+    multi"""
+    return x
+'''
+
+
+def test_docstring_span_walker_agrees_with_the_comment_strip_walker():
+    import ast
+
+    from coordinator_core.comment_strip import lang_python
+    from coordinator_core.commenting import added
+
+    tree = ast.parse(_DOCSTRING_SHAPES)
+    assert added._docstring_spans(tree) == sorted(lang_python._docstring_expr_lines(tree))
+    assert len(added._docstring_spans(tree)) == 7

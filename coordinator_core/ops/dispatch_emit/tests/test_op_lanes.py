@@ -223,18 +223,19 @@ def test_a_part_the_estimate_cannot_shrink_is_refused_after_three_headroom_reduc
             [(f"H{i}", "shared/hot.py", "-" if i == 1 else f"H{i - 1}", "pending") for i in range(1, n + 1)]
         )
 
-    # The fixed shell alone exceeds the tightened part budget of a cap sized
-    # to a few rows, so the cap is the size of the chain one row short of
-    # the real one: exactly the last row overflows.
+    # A single row's written script is over the cap, so halving the part to one row cannot
+    # help: the cap is one byte short of the one-row script.
     probe_root = tmp_path / "probe"
-    probe_inv = _write_master(probe_root, chain(4))
+    probe_inv = _write_master(probe_root, chain(1))
     probe_parts = _lanes(probe_inv, probe_root, hot_files=0)["parts"]
-    four_row_bytes = max(Path(p["path"]).stat().st_size for p in probe_parts)
+    one_row_bytes = max(Path(p["path"]).stat().st_size for p in probe_parts)
 
     root = tmp_path / "real"
     inv = _write_master(root, chain(5))
-    monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", four_row_bytes + 1)
-    monkeypatch.setattr(emit, "row_block_bytes", lambda rows, **kw: {r.id: 1 for r in rows})
+    monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", one_row_bytes - 1)
+    monkeypatch.setattr(
+        op, "_cost_model", lambda chunk_rows, **kw: ({op._strip_backtick(r["id"]): 1 for r in chunk_rows}, 0, {})
+    )
 
     with pytest.raises(lanes.RowOverBudgetError, match="3 headroom reductions"):
         _lanes(inv, root, hot_files=0)
@@ -243,12 +244,87 @@ def test_a_part_the_estimate_cannot_shrink_is_refused_after_three_headroom_reduc
     assert not any(name.endswith(".workflow.mjs") for name in leftovers), leftovers
 
 
+def _plan_chain(n: int) -> str:
+    """A hub chain of ``n`` rows, each from its own plan, all writing one file."""
+    body = "".join(
+        f"| H{i} | `docs/plans/p{i}.md` | does H{i} | `shared/hot.py` | {'-' if i == 1 else f'H{i - 1}'} "
+        f"| scoped pytest | S | pending |\n"
+        for i in range(1, n + 1)
+    )
+    return (
+        f"---\nrun_id: {RUN}\nstart_sha: {'a' * 40}\n---\n\n# Mise inventory\n\n"
+        f"## Chunk table\n\n{_HEADER}{body}"
+    )
+
+
+def _hub_part_rows(root: Path, reply: dict) -> list:
+    lane_map = json.loads((root / reply["lane_map"]).read_text(encoding="utf-8"))
+    (lane,) = lane_map["lanes"]
+    return [p["rows"] for p in lane["parts"]]
+
+
+def test_a_hub_of_plans_is_cut_to_one_plan_per_part_by_the_per_plan_cost(tmp_path, monkeypatch):
+    # Each plan's material measures 400 KB over the shell, so two plans overrun the part
+    # budget while one fits; a row-only estimate packs all three plans into one part.
+    monkeypatch.setattr(op, "_plan_probe_bytes", lambda *args, **kwargs: 400_000)
+    inv = _write_master(tmp_path, _plan_chain(3))
+
+    reply = _lanes(inv, tmp_path, hot_files=0)
+
+    assert _hub_part_rows(tmp_path, reply) == [["H1"], ["H2"], ["H3"]]
+    assert [p["part"] for p in reply["parts"]] == ["a-p1"]
+    assert reply["part_resplits"] == 0
+
+
+def test_a_hub_that_composes_over_the_cap_is_resplit_at_plan_boundaries_without_headroom_retries(
+    tmp_path, monkeypatch
+):
+    from coordinator_core.ops.dispatch_emit import emit
+
+    monkeypatch.setattr(op, "_plan_probe_bytes", lambda *args, **kwargs: None)
+
+    def written_size(n: int) -> int:
+        probe_root = tmp_path / f"probe{n}"
+        probe_inv = _write_master(probe_root, _plan_chain(n))
+        return Path(_lanes(probe_inv, probe_root, hot_files=0)["parts"][0]["path"]).stat().st_size
+
+    one_plan, two_plans = written_size(1), written_size(2)
+    assert one_plan < two_plans
+    # Strictly between the written one-plan and two-plan scripts: a one-plan part fits, a part of
+    # two or three plans cannot.
+    cap = one_plan + (two_plans - one_plan) // 2
+
+    root = tmp_path / "real"
+    inv = _write_master(root, _plan_chain(3))
+    # The row estimate fits all three plans in one part, but the composed three-plan script is
+    # over this cap: the resplit cuts at a plan boundary instead of retrying at lower headroom.
+    monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", cap)
+    monkeypatch.setattr(
+        op, "_cost_model", lambda chunk_rows, **kw: ({op._strip_backtick(r["id"]): 1 for r in chunk_rows}, 0, {})
+    )
+
+    reply = _lanes(inv, root, hot_files=0)
+
+    parts = _hub_part_rows(root, reply)
+    assert reply["part_resplits"] >= 1
+    assert [r for rows in parts for r in rows] == ["H1", "H2", "H3"]
+    assert parts[0] == ["H1"] and len(parts) >= 2
+    assert Path(reply["parts"][0]["path"]).stat().st_size <= emit._WORKFLOW_SCRIPT_BYTE_CAP
+
+
 def test_a_part_that_composes_over_the_cap_is_resplit_in_place_with_later_parts_renumbered(tmp_path, monkeypatch):
     from coordinator_core.ops.dispatch_emit import emit
 
-    probe_root = tmp_path / "probe"
-    probe_inv = _write_master(probe_root, _inventory([("H1", "shared/hot.py", "-", "pending")]))
-    one_row = Path(_lanes(probe_inv, probe_root, hot_files=0)["parts"][0]["path"]).stat().st_size
+    def written_size(n: int) -> int:
+        probe_root = tmp_path / f"probe{n}"
+        rows = [(f"H{i}", "shared/hot.py", "-" if i == 1 else f"H{i - 1}", "pending") for i in range(1, n + 1)]
+        probe_inv = _write_master(probe_root, _inventory(rows))
+        return Path(_lanes(probe_inv, probe_root, hot_files=0)["parts"][0]["path"]).stat().st_size
+
+    two_rows, three_rows = written_size(2), written_size(3)
+    assert two_rows < three_rows
+    # Strictly between the written 2-row and 3-row scripts, nearer the 3-row: a 2-row part fits, a 3-row part cannot.
+    cap = two_rows + (three_rows - two_rows) * 2 // 3
 
     root = tmp_path / "real"
     inv = _write_master(
@@ -263,11 +339,14 @@ def test_a_part_that_composes_over_the_cap_is_resplit_in_place_with_later_parts_
             ]
         ),
     )
-    # The 3000-byte row stub understates the real ~9.7 KB per row, so the first estimate packs
-    # [H1..H4] | [H5]; a composed 3-row script (~85 KB) is over this cap and a 2-row one (~75 KB)
-    # fits, so exactly one split happens, and it must renumber the pre-existing later part H5.
-    monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", one_row + 11000)
-    monkeypatch.setattr(emit, "row_block_bytes", lambda rows, **kw: {r.id: 3000 for r in rows})
+    # The row stub is sized so the first estimate packs [H1..H4] | [H5] and the tightened one still
+    # fits all four, so the over-cap part is halved: the written 2-row part fits, so exactly one
+    # split happens, and it must renumber the pre-existing later part H5.
+    per_row = int(cap * 0.95 / 4.5)
+    monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", cap)
+    monkeypatch.setattr(
+        op, "_cost_model", lambda chunk_rows, **kw: ({op._strip_backtick(r["id"]): per_row for r in chunk_rows}, 0, {})
+    )
 
     reply = _lanes(inv, root, hot_files=0)
 

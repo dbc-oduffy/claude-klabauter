@@ -470,6 +470,28 @@ def kick_remote_refresh(directory: Any = None) -> Optional[threading.Thread]:
     return _refresh_thread
 
 
+_admission_drain_thread: Optional[threading.Thread] = None
+
+
+def kick_admission_drain(directory: Any = None) -> Optional[threading.Thread]:
+    """Start `admission_drain.drain_managed` on a daemon thread, one at a time; never on the tick, never raises."""
+    global _admission_drain_thread
+    if _admission_drain_thread is not None and _admission_drain_thread.is_alive():
+        return _admission_drain_thread
+
+    def _run() -> None:
+        try:
+            from coordinator_core.group_em import admission_drain
+
+            admission_drain.drain_managed(directory)
+        except Exception:
+            pass
+
+    _admission_drain_thread = threading.Thread(target=_run, name="admission-drain", daemon=True)
+    _admission_drain_thread.start()
+    return _admission_drain_thread
+
+
 def _measure_snapshot_ms(repo_root: str, box_wide: bool = False) -> tuple[float, list]:
     started = time.monotonic()
     agents = read_pass.fetch_live_agents(repo_root, **_roster_kwargs(box_wide))
@@ -1440,8 +1462,11 @@ def save_prev_parked(
     memory: Optional[dict[str, Any]] = None,
     links: Optional[dict[str, str]] = None,
     orphans: Optional[dict[str, bool]] = None,
+    balance: Optional[dict[str, float]] = None,
 ) -> bool:
     payload: dict[str, Any] = {"parked": dict(parked)}
+    if balance is not None:
+        payload["balance"] = dict(balance)
     if orphans is not None:
         payload["orphans"] = dict(orphans)
     if links is not None:
@@ -1787,6 +1812,8 @@ def _capacity_jobs(vram_by_pid: dict) -> list:
     records = _open_run_records(str(admission_post.admission_path())) or []
     jobs = []
     for rec in records:
+        if rec.get("drained_from"):
+            continue
         pids = rec.get("pids") if isinstance(rec.get("pids"), list) else []
         vram = [vram_by_pid[p] for p in pids if p in vram_by_pid]
         cores = rec.get("cores")
@@ -1842,6 +1869,132 @@ def capacity_tick() -> bool:
         return capacity_record.stamp(_capacity_sample())
     except Exception:
         return False
+
+
+_FLEET_REFRESH_AFTER_S = 60.0
+_fleet_thread: Optional[threading.Thread] = None
+
+
+def _fleet_snapshot_due(now: Optional[float] = None) -> bool:
+    """True when no snapshot row exists or the freshest row is older than `_FLEET_REFRESH_AFTER_S`."""
+    from coordinator_core.group_em import fleet_live
+
+    rows = fleet_live.read_live_snapshot(_FLEET_REFRESH_AFTER_S, now)
+    ages = [r["age_s"] for r in rows if isinstance(r.get("age_s"), (int, float))]
+    return not ages or min(ages) > _FLEET_REFRESH_AFTER_S
+
+
+def kick_fleet_refresh() -> Optional[threading.Thread]:
+    """Start `fleet_live.gather` on a daemon thread when the live snapshot is over 60s old; never on the tick.
+
+    One at a time in this process, and one per box across processes: a non-blocking lock beside the
+    snapshot is skipped when held, so concurrent watchers never fan out ssh twice. Never raises.
+    """
+    global _fleet_thread
+    try:
+        from coordinator_core.group_em import fleet_live
+        from coordinator_core.group_em.atomic_record import holder_lock
+
+        if _fleet_thread is not None and _fleet_thread.is_alive():
+            return _fleet_thread
+        if not _fleet_snapshot_due():
+            return None
+        lock_base = fleet_live.live_snapshot_path().with_name("fleet-refresh")
+
+        def _run() -> None:
+            try:
+                with holder_lock(lock_base, timeout=0.0):
+                    if _fleet_snapshot_due():
+                        fleet_live.gather()
+            except Exception:  # noqa: BLE001 - LockTimeout (peer refreshing) and any gather failure alike
+                pass
+
+        _fleet_thread = threading.Thread(target=_run, name="fleet-live-refresh", daemon=True)
+        _fleet_thread.start()
+        return _fleet_thread
+    except Exception:
+        return None
+
+
+def _balance_rows(now: float) -> tuple[list, dict[str, list], dict[str, list], dict[str, str]]:
+    """``(rows, waits_by_box, grants_by_box, alias_by_box)`` for `fleet_balance.scan`.
+
+    Rows are the persisted fleet snapshot with this box's row overlaid by the capacity record the
+    tick just stamped. A heterogeneous local row older than `FRESH_S` is left as read (stale), since
+    a fresh load beside stale per-class free cores would misread the P-cores.
+    """
+    from coordinator_core._settings_home import settings_home
+    from coordinator_core.group_em import capacity_admit, capacity_record, fleet_balance, fleet_live
+
+    home = settings_home()
+    local = box_registry.local_box_id(home)
+    rows = [dict(r) for r in fleet_live.read_live_snapshot(fleet_balance.FRESH_S, now)]
+    rec = capacity_record.read({"box_id": local, "root": home}, now)
+    ts = rec.get("ts")
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool) and not rec.get("stale"):
+        base = next((r for r in rows if r.get("box") == local), None)
+        base_age = base.get("age_s") if base else None
+        hetero_stale = (
+            base is not None
+            and isinstance(base.get("free_cores_by_class"), dict)
+            and not (isinstance(base_age, (int, float)) and base_age <= fleet_balance.FRESH_S)
+        )
+        newer = base is None or not isinstance(base.get("sampled_at"), (int, float)) or base["sampled_at"] < ts
+        if newer and not hetero_stale:
+            fresh = {
+                "state": "ok",
+                "sampled_at": ts,
+                "cpu_pct": rec.get("load_pct"),
+                "ram_free_mb": rec.get("ram_avail_mb"),
+            }
+            if isinstance(rec.get("gpus"), list):
+                fresh["gpus"] = rec["gpus"]
+            merged = {**(base or {"box": local, "alias": local}), **{k: v for k, v in fresh.items() if v is not None}}
+            if merged.get("cores") is None:
+                merged["cores"] = rec.get("cores_logical")
+            merged.pop("age_s", None)
+            merged.pop("stale", None)
+            rows = [merged if r is base else r for r in rows] if base is not None else rows + [merged]
+    waits = capacity_admit.read_waits(home, now)
+    grants: dict[str, list] = {}
+    for held in capacity_admit.read_held(rec, home, now):
+        grants.setdefault(str(held.get("box_id") or local), []).append(held)
+    aliases = {str(r["box"]): str(r.get("alias") or r["box"]) for r in rows if isinstance(r.get("box"), str)}
+    return rows, ({local: waits} if waits else {}), grants, aliases
+
+
+def _balance_tick(
+    repo_root: str,
+    emit: Callable[[str], None],
+    prior_dwell: Any,
+    now: Optional[float] = None,
+) -> dict[str, float]:
+    """Emit `IDLE-BOX` for a box idle 15+ minutes while another box has work; return the dwell to persist.
+
+    Advisory, never a refusal path. Reads the persisted fleet snapshot and this box's ledgers, spawns
+    nothing. Any failure returns `prior_dwell` unchanged; never raises into the tick.
+    """
+    prior = (
+        {str(k): float(v) for k, v in prior_dwell.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        if isinstance(prior_dwell, dict)
+        else {}
+    )
+    try:
+        from coordinator_core.group_em import fleet_balance
+
+        clock = time.time() if now is None else now
+        rows, waits, grants, aliases = _balance_rows(clock)
+        alerts, dwell = fleet_balance.scan(rows, waits, grants, prior, clock)
+        for alert in alerts:
+            work = ",".join(aliases.get(b, b) for b in alert["busy_boxes"])
+            name = aliases.get(alert["idle_box"], alert["idle_box"])
+            emit(
+                f"IDLE-BOX {name} idle {int(alert['idle_s'] // 60)}m while work on {work}"
+                " -- route via groupem.fleet_book"
+            )
+        return dwell
+    except Exception:
+        return prior
 
 
 def tick_once(
@@ -1942,6 +2095,12 @@ def tick_once(
     orphan_state = _stdin_python_tick(repo_root, emit, census)
     _held_runs_tick(repo_root, emit)
     capacity_tick()
+    balance_state = _balance_tick(
+        repo_root,
+        emit,
+        _load_prev_record(repo_root).get("balance"),
+        now=tick_now.timestamp(),
+    )
     prior_links = _load_prev_record(repo_root).get("links")
     link_state = link_tick(prior_links if isinstance(prior_links, dict) else None, emit)
     save_prev_parked(
@@ -1952,6 +2111,7 @@ def tick_once(
         memory=memory_state,
         links=link_state,
         orphans=orphan_state,
+        balance=balance_state,
     )
     watch_heartbeat.stamp(
         repo_root,
@@ -2000,8 +2160,10 @@ def until_event(
         buffer = io.StringIO()
         try:
             kick_remote_refresh()
+            kick_admission_drain()
         except Exception:
             pass
+        kick_fleet_refresh()
         tick_once(
             repo_root,
             caller_session_id=caller_session_id,
@@ -2156,6 +2318,8 @@ def main(
         tick_now = datetime.now(timezone.utc)
         try:
             kick_remote_refresh()
+            kick_admission_drain()
+            kick_fleet_refresh()
             cur_parked, declinations, peer_notes, cur_inbox_open = poll_once(
                 repo_root,
                 caller_session_id,

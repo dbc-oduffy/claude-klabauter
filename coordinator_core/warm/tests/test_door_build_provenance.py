@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
 import pytest
 
@@ -110,6 +111,42 @@ def test_verifier_accepts_crlf_copy_of_recorded_source(tmp_path: Path) -> None:
     src.write_bytes(door_build._SOURCE.read_bytes().replace(b"\r", b"").replace(b"\n", b"\r\n"))
     recorded = door_build.source_sha256(door_build._SOURCE)
     assert door_install._source_matches_recorded(src, recorded)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the owner-SID record is a Windows pipe-name input")
+def test_write_sidecar_records_the_owner_sid_beside_the_exe(tmp_path: Path) -> None:
+    from coordinator_core.warm import election
+
+    door_build.write_sidecar(tmp_path / "door.exe", tmp_path)
+
+    record = tmp_path / election.OWNER_SID_RECORD_NAME
+    assert door_build.OWNER_SID_SIDECAR_FILENAME == election.OWNER_SID_RECORD_NAME
+    assert record.read_text(encoding="utf-8").strip() == election.current_user_sid()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the owner-SID record is a Windows pipe-name input")
+def test_write_sidecar_replaces_a_stale_owner_sid_record_and_leaves_no_temp(tmp_path: Path) -> None:
+    from coordinator_core.warm import election
+
+    record = tmp_path / election.OWNER_SID_RECORD_NAME
+    record.write_text("S-1-5-21-9-9-9-1001\n", encoding="utf-8")
+
+    door_build.write_sidecar(tmp_path / "door.exe", tmp_path)
+
+    assert record.read_text(encoding="utf-8").strip() == election.current_user_sid()
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX names its socket without a SID")
+def test_write_sidecar_writes_no_owner_sid_record_on_posix(tmp_path: Path) -> None:
+    door_build.write_sidecar(tmp_path / "door.exe", tmp_path)
+
+    assert not (tmp_path / door_build.OWNER_SID_SIDECAR_FILENAME).exists()
+
+
+def test_owner_sid_record_is_gitignored() -> None:
+    gitignore = (door_build._SOURCE.parents[3] / ".gitignore").read_text(encoding="utf-8")
+    assert f"coordinator_core/warm/door/{door_build.OWNER_SID_SIDECAR_FILENAME}" in gitignore.splitlines()
 
 
 def test_no_door_c_or_h_source_names_the_authoring_engine() -> None:

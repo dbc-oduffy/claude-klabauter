@@ -105,6 +105,79 @@ def test_a_run_hunk_colliding_with_head_names_the_path_unlandable_and_records_no
     assert SHARED not in doc["paths"]
 
 
+def test_a_refire_that_finds_nothing_to_commit_still_leaves_the_own_delta_record(repo) -> None:
+    _halted_run(repo, pre=_text({2: "PEER"}), tree=_text({2: "PEER", 8: "OWN"}).replace(b"\n", b"\r\n"))
+    _land_only(repo)
+    rel = f"{RECORD}/{halt_refire.WITHHELD_OWN_DELTA_FILE}"
+    # The record landed without its own delta (an earlier engine); the refire has no new bytes to land.
+    (repo / rel).unlink()
+    assert not (repo / rel).exists()
+
+    out = _land_only(repo)
+
+    assert not out.get("error")
+    assert (repo / rel).is_file()
+    assert SHARED in _recorded(repo)["paths"]
+    assert out["nothing_to_commit"] is True
+    assert out["withheld_own_delta"] == rel
+
+
+def test_a_no_op_refire_with_the_own_delta_already_recorded_still_names_it(repo) -> None:
+    _halted_run(repo, pre=_text({2: "PEER"}), tree=_text({2: "PEER", 8: "OWN"}).replace(b"\n", b"\r\n"))
+    _land_only(repo)
+    rel = f"{RECORD}/{halt_refire.WITHHELD_OWN_DELTA_FILE}"
+    assert (repo / rel).is_file()
+
+    out = _land_only(repo)
+
+    assert not out.get("error")
+    assert out["nothing_to_commit"] is True
+    assert out["withheld_own_delta"] == rel
+    assert SHARED in out["withheld"]
+
+
+def _record_withheld(root, withheld: dict) -> dict:
+    paths: list = []
+    halted_record_commit._record_withheld_own_delta(root, RECORD, withheld, paths, RUN)
+    return _recorded(root)
+
+
+def test_a_withheld_new_file_off_the_run_baseline_records_its_whole_post_image(repo) -> None:
+    _halted_run(repo, pre=_text({}), tree=_text({}))
+    fresh = "src/fresh_product.py"
+    _put(repo, fresh, b"print('own')\r\n")
+
+    doc = _record_withheld(repo, {SHARED: "halt-record-only", fresh: "run-dirt-uncommitted"})
+
+    assert _blob(repo, doc["paths"][fresh]["blob"]) == b"print('own')\n"
+    assert fresh not in doc.get("unlandable", [])
+
+
+def test_a_withheld_head_file_off_the_run_baseline_is_named_unlandable(repo) -> None:
+    _halted_run(repo, pre=_text({}), tree=_text({8: "OWN"}))
+    other = "src/tracked_other.py"
+    _put(repo, other, b"a\n")
+    _git(["add", other], repo)
+    _git(["commit", "-q", "-m", "other"], repo)
+    _put(repo, other, b"a\nb\n")
+
+    doc = _record_withheld(repo, {SHARED: "halt-record-only", other: "run-dirt-uncommitted"})
+
+    assert other in doc["unlandable"]
+    assert other not in doc["paths"]
+    assert SHARED in doc["paths"]
+
+
+def test_run_state_paths_are_not_recorded_as_withheld_product(repo) -> None:
+    _halted_run(repo, pre=_text({}), tree=_text({8: "OWN"}))
+    state = "state/warp/ask-x/run.json"
+    _put(repo, state, b"{}\n")
+
+    doc = _record_withheld(repo, {SHARED: "halt-record-only", state: "halt-record-only"})
+
+    assert state not in doc["paths"] and state not in doc.get("unlandable", [])
+
+
 def test_the_halt_em_rule_names_the_own_delta_record_not_the_raw_blob() -> None:
     rule = halt_refire.EM_ACTION_AFTER_HALT_RULE
 

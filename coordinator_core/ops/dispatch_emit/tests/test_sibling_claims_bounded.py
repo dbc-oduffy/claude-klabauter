@@ -78,7 +78,7 @@ def test_old_record_dirs_are_never_opened_and_a_fresh_halted_run_still_claims(re
     assert stale == []
 
 
-def test_evict_computes_claims_once_for_all_paths(repo, monkeypatch):
+def test_evict_looks_up_no_sibling_claims_and_leaves_the_tree_untouched(repo, monkeypatch):
     paths = [f"p{i}.py" for i in range(6)]
     for p in paths:
         (repo / p).write_bytes(b"bad\n")
@@ -86,8 +86,7 @@ def test_evict_computes_claims_once_for_all_paths(repo, monkeypatch):
     monkeypatch.setattr(
         sibling_claims, "sibling_run_claims", lambda root, run_id, cands, **kw: calls.append(list(cands)) or {}
     )
-    monkeypatch.setattr(hte, "_reset_plan", lambda root, run_id, rel, data, head: (head, None))
-    heads = {p: b"ok\n" for p in paths}
-    hte.evict(repo, repo / "rec", paths, heads, run_id="me")
-    assert len(calls) == 1
-    assert sorted(calls[0]) == sorted(paths)
+    index = hte.evict(repo, repo / "rec", paths)
+    assert calls == []
+    assert sorted(index) == sorted(paths)
+    assert all((repo / p).read_bytes() == b"bad\n" for p in paths)

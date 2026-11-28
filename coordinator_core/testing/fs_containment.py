@@ -83,7 +83,7 @@ _LEFT_REPORT_CAP = 20
 
 # Mirrors coordinator_core.temp_layout.PYTEST_KEPT_MARKER (pinned by a test).
 _KEPT_MARKER = ".coordinator-kept-failing"
-_KEEP_FAILING = 3
+_KEEP_FAILING = 2
 
 
 def _resolve(p) -> Path:
@@ -381,14 +381,9 @@ def _rmtree(path: Path) -> None:
 
 
 def _prune_kept(parent: Path) -> None:
-    marked = []
-    for child in parent.iterdir():
-        marker = child / _KEPT_MARKER
-        if child.is_dir() and not child.is_symlink() and marker.is_file():
-            marked.append((marker.stat().st_mtime, child.name, child))
-    marked.sort(key=lambda m: (m[0], m[1]), reverse=True)
-    for _, _, stale in marked[_KEEP_FAILING:]:
-        _rmtree(stale)
+    from coordinator_core.temp_layout import retain_latest
+
+    retain_latest(parent, keep=_KEEP_FAILING, marker=_KEPT_MARKER)
 
 
 # trylast: after xdist stops its workers and orphan_reaper scans the tree.

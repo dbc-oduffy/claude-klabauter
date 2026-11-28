@@ -1,12 +1,15 @@
-"""baseline-cache: one read-only cloned tree per commit, shared by every baseline run.
+"""baseline-cache: one persistent read-only cloned tree, moved to each new commit, shared by every baseline run.
 
-Entry: <toplevel>/scratch/baseline-cache/<sha40>/, built in <sha40>.partial-<pid> and published by
-`os.replace` (a lost race discards the partial). Names avoid `test-base-`, so the export reapers
-never touch the cache; it is NOT counted by `export_lifecycle.check_export_cap` and is bounded
-only by CACHE_ENTRY_CAP entries (least recently used, by the `<sha40>.used` touch file, go first).
-A run holds `<sha40>.lease-<pid>` for its whole life; an entry with a live lease is never evicted.
-The extractor is injected: this module spawns no git. A hit costs no git spawn; a miss costs the
-extractor's two (`clone`, `checkout`). The entry's top-level `.git` is neither sealed nor drift-checked.
+Entry: <toplevel>/scratch/baseline-cache/<sha40>/, published by `os.replace` from
+<sha40>.partial-<pid> (a lost race discards the partial). Names avoid `test-base-`, so the export
+reapers never touch the cache; it is NOT counted by `export_lifecycle.check_export_cap`.
+A miss takes the most recent unleased entry aside as the partial and moves it to the new sha with
+two git spawns (`diff --name-only`, `checkout --detach`): only files in the diff are unsealed,
+rewritten and resealed. A tree that cannot be moved (no donor, a leased donor, git failure) falls
+back to the injected extractor's two spawns (`clone`, `checkout`). A hit costs no git spawn. After
+a publish every unleased entry but the new one is retired, so one tree remains unless a live
+lease pins an older one. A run holds `<sha40>.lease-<pid>` for its whole life; an entry with a
+live lease is never moved or evicted. The entry's top-level `.git` is neither sealed nor drift-checked.
 
 Traps:
 - DATA_DIRS links point at the LIVE tree. Every walk here stops at a link (`_is_link`); following
@@ -27,9 +30,19 @@ import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-from coordinator_core.testing.baseline_export import _is_link, _make_writable, remove
+from coordinator_core.testing.baseline_export import (
+    DATA_DIRS,
+    ExportError,
+    _git_checked,
+    _git_popen,
+    _head_is,
+    _is_link,
+    _make_writable,
+    _unlink_link,
+    link,
+    remove,
+)
 
-CACHE_ENTRY_CAP = 3
 CACHE_DIRNAME = "baseline-cache"
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _STALE_RE = re.compile(r"([0-9a-f]{40})\.(?:partial|evicting|dirs\.tmp)-(\d+)")
@@ -189,10 +202,13 @@ def _sweep_dead(root: Path) -> None:
                     (root / name).unlink()
 
 
-def _evict_one(root: Path, sha: str, ignore_pid: int | None = None) -> bool:
-    """Rename the entry aside, then re-check leases: a run that leased after the first check wins."""
+def _evict_one(root: Path, sha: str, ignore_pid: int | None = None, *, into: Path | None = None) -> bool:
+    """Rename the entry aside, then re-check leases: a run that leased after the first check wins.
+
+    With `into`, the unleased tree is left there intact (its side files dropped) for the caller to reuse.
+    """
     entry = root / sha
-    aside = root / f"{sha}.evicting-{os.getpid()}"
+    aside = into if into is not None else root / f"{sha}.evicting-{os.getpid()}"
     try:
         os.replace(entry, aside)
     except OSError:
@@ -203,7 +219,8 @@ def _evict_one(root: Path, sha: str, ignore_pid: int | None = None) -> bool:
         except OSError:
             _unseal_and_remove(aside)
         return False
-    _unseal_and_remove(aside)
+    if into is None:
+        _unseal_and_remove(aside)
     for suffix in (".used", ".dirs"):
         with contextlib.suppress(OSError):
             (root / f"{sha}{suffix}").unlink()
@@ -211,18 +228,89 @@ def _evict_one(root: Path, sha: str, ignore_pid: int | None = None) -> bool:
 
 
 def evict(toplevel: os.PathLike[str] | str, keep: str) -> list[str]:
-    """Evict least-recently-used unleased entries, never `keep`, until at or under CACHE_ENTRY_CAP; returns shas removed."""
+    """Retire every unleased entry but `keep` (one tree is the bound); returns shas removed."""
     root = cache_root(toplevel)
-    shas = [n for n in _listdir(root) if _SHA_RE.fullmatch(n) and (root / n).is_dir()]
-    over = len(shas) - CACHE_ENTRY_CAP
     removed: list[str] = []
-    for sha in sorted((s for s in shas if s != keep), key=lambda s: (_used_ns(root, s), s)):
-        if over <= 0:
-            break
+    for sha in sorted(n for n in _listdir(root) if _SHA_RE.fullmatch(n) and n != keep and (root / n).is_dir()):
         if not _live_leases(root, sha) and _evict_one(root, sha):
             removed.append(sha)
-            over -= 1
     return removed
+
+
+def _changed_paths(tree: Path, old: str, new: str) -> list[str]:
+    """Repo-relative files that differ between `old` and `new`, one git spawn; DATA_DIRS paths excluded.
+
+    Renames are not detected so both sides of a rename appear.
+    """
+    with _git_popen(["diff", "--name-only", "-z", "--no-renames", old, new], tree) as proc:
+        out = proc.stdout.read()
+        rc = proc.wait()
+    if rc != 0:
+        raise ExportError(f"diff {old[:8]}..{new[:8]} failed: git exited {rc}")
+    names = [n for n in out.decode("utf-8", "surrogateescape").split("\0") if n]
+    return [n for n in names if n.split("/", 1)[0] not in DATA_DIRS]
+
+
+def _detach_data_links(tree: Path) -> list[str]:
+    """Unlink the tree's DATA_DIRS links and return their targets: while linked, git reads the live files as local edits.
+
+    Trap: with the links gone git still writes a changed DATA_DIRS file into a real directory; the
+    caller removes that directory before relinking.
+    """
+    targets: list[str] = []
+    for name in DATA_DIRS:
+        path = os.path.join(tree, name)
+        if _is_link(path):
+            target = os.readlink(path)
+            targets.append(target[4:] if target.startswith("\\\\?\\") else target)
+            _unlink_link(path)
+    return targets
+
+
+def _move_tree(tree: Path, old: str, new: str) -> None:
+    """Rewrite `tree` from `old` to `new`: unseal, check out and reseal only the diff's files; two git spawns."""
+    if not _head_is(tree, old):
+        raise ExportError(f"tree is not at {old[:8]}")
+    names = _changed_paths(tree, old, new)
+    for rel in names:
+        path = os.path.join(tree, *rel.split("/"))
+        if not _is_link(path):
+            _make_writable(path)
+    links = _detach_data_links(tree)
+    try:
+        _git_checked(["checkout", "-q", "--detach", new], tree, f"checkout of {new}")
+    finally:
+        for target in links:
+            stray = tree / os.path.basename(target)
+            if os.path.lexists(stray):
+                _unseal_and_remove(stray)
+            link(os.path.dirname(target), tree, (os.path.basename(target),))
+    for rel in names:
+        path = os.path.join(tree, *rel.split("/"))
+        if os.path.isfile(path) and not _is_link(path):
+            with contextlib.suppress(OSError):
+                os.chmod(path, os.stat(path).st_mode & _NO_WRITE)
+
+
+def _take_donor(root: Path, sha40: str, partial: Path) -> bool:
+    """Move the most recent unleased published entry into `partial` at `sha40`; False leaves no donor tree behind."""
+    donors = sorted(
+        (n for n in _listdir(root) if _SHA_RE.fullmatch(n) and n != sha40 and (root / n).is_dir()),
+        key=lambda s: (_used_ns(root, s), s),
+        reverse=True,
+    )
+    for donor in donors:
+        if not _manifest(root / donor).exists() or _live_leases(root, donor):
+            continue
+        if not _evict_one(root, donor, into=partial):
+            continue
+        try:
+            _move_tree(partial, donor, sha40)
+        except (ExportError, OSError):
+            _unseal_and_remove(partial)
+            return False
+        return True
+    return False
 
 
 def _published(entry: Path) -> bool:
@@ -242,24 +330,31 @@ def _published(entry: Path) -> bool:
 def ensure_entry(
     toplevel: os.PathLike[str] | str, sha40: str, extract: Callable[[Path], None]
 ) -> tuple[Path, bool]:
-    """(entry, built_now): the read-only tree for `sha40`, calling `extract(partial_dir)` only on a miss."""
+    """(entry, built_now): the read-only tree for `sha40`.
+
+    A miss first tries to move an unleased donor tree to `sha40`; only when that is impossible does it
+    call `extract(partial_dir)`. `built_now` is True only when `extract` ran.
+    """
     root = cache_root(toplevel)
     root.mkdir(parents=True, exist_ok=True)
     _sweep_dead(root)
     entry = root / sha40
     if _published(entry):
         _touch_used(entry)
+        evict(toplevel, keep=sha40)
         return entry, False
     partial = root / f"{sha40}.partial-{os.getpid()}"
     if os.path.lexists(partial):
         _unseal_and_remove(partial)
-    partial.mkdir()
-    try:
-        extract(partial)
-        _seal(partial)
-    except BaseException:
-        _unseal_and_remove(partial)
-        raise
+    moved = _take_donor(root, sha40, partial)
+    if not moved:
+        partial.mkdir()
+        try:
+            extract(partial)
+            _seal(partial)
+        except BaseException:
+            _unseal_and_remove(partial)
+            raise
     try:
         os.replace(partial, entry)
     except OSError:
@@ -271,4 +366,4 @@ def ensure_entry(
     _write_manifest(entry)
     _touch_used(entry)
     evict(toplevel, keep=sha40)
-    return entry, True
+    return entry, not moved

@@ -1620,7 +1620,7 @@ def push_with_retry(
         _emit_push_policy_line("declined-unresolvable")
         return PushOutcome(exit_code=0, skipped=["push:branch-unresolvable"])
 
-    should_push, gate_message = branch_gate(branch)
+    should_push, gate_message = branch_gate(branch, str(root))
     if should_push and gate_message is not None:
         _emit_push_policy_line("accepted-remote-prefixed", message=gate_message)
     if not should_push:

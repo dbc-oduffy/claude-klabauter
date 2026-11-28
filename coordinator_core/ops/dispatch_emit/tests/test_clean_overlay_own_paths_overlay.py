@@ -107,6 +107,20 @@ def test_a_tracked_shared_path_whose_split_fails_reaches_the_export_at_worktree_
     assert _export(incident, probe) == 0
 
 
+def test_a_path_only_a_halted_run_names_is_split_to_own_hunks_and_an_unnamed_path_is_not(incident, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import co_tenant_owner
+
+    seen = []
+    monkeypatch.setattr(review_edits, "live_sibling_declared", lambda *_a, **_k: {})
+    monkeypatch.setattr(co_tenant_owner, "peer_hunk_runs", lambda _r, p, *, exclude_run_id: ("haltedRun",) if p == EDITED else ())
+    monkeypatch.setattr(cov, "own_hunk_overrides", lambda _r, _run, paths: seen.append(list(paths)) or {p: b"own" for p in paths})
+
+    paths, overrides = cov.own_delta(incident, RUN, [SEED])
+
+    assert seen == [[EDITED]]
+    assert overrides == {EDITED: b"own"} and NEW in paths and NEW not in overrides
+
+
 def test_a_path_only_a_peer_declares_stays_at_head_in_the_default_export(incident):
     probe = f"raise SystemExit(0 if {_read_expr(PEER_ONLY)} == {PEER_HEAD!r} else 3)"
 

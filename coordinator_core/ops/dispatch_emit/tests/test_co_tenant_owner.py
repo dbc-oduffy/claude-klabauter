@@ -12,7 +12,7 @@ import pytest
 
 pytestmark = pytest.mark.complete
 
-from coordinator_core.ops.dispatch_emit import co_tenant_owner, halted_run, live_run_index, run_token, stage_wait, stranded_wait
+from coordinator_core.ops.dispatch_emit import co_tenant_owner, halted_run, live_run_index, run_token, stage_wait
 
 PEER = "coordinator_core/ops/dispatch_emit/run_order.py"
 WAITER = "ask-20261121T100000-aaaaaa"
@@ -77,9 +77,10 @@ def test_live_run_parked_behind_the_waiter_is_not_its_owner(repo) -> None:
     assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
 
 
-def test_halted_owner_found_from_withheld_paths(repo) -> None:
+def test_halted_run_is_attributed_but_never_the_owner(repo) -> None:
     _halt(repo, OWNER)
-    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": OWNER, "state": "halted"}
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
+    assert co_tenant_owner.peer_hunk_runs(repo, PEER, exclude_run_id=WAITER) == (OWNER,)
 
 
 def test_resumed_marker_is_not_a_halted_owner(repo) -> None:
@@ -109,18 +110,12 @@ def test_resolve_live_owner_parks_with_session_and_sizing(repo) -> None:
     assert [w["run_id"] for w in stage_wait.wake_on_end(repo, OWNER)] == [WAITER]
 
 
-def test_resolve_halted_owner_returns_typed_cause_and_no_park(repo) -> None:
+def test_resolve_halted_holder_returns_typed_cause_naming_the_peer_run_and_no_park(repo) -> None:
     _halt(repo, OWNER, call="coordinator-invoke engine-ask X")
     out = co_tenant_owner.resolve(repo, WAITER, _exc())
-    assert out["cause"] == "co_tenant_dependency_on_halted_run"
-    assert out["owner"] == OWNER and out["owner_refire"] == "coordinator-invoke engine-ask X"
-    assert "parked" not in out
+    assert out["cause"] == "co_tenant_dependency" and out["owner"] is None and out["peer_runs"] == [OWNER]
+    assert "parked" not in out and "owner_refire" not in out
     assert stage_wait.read(repo, WAITER) is None
-
-
-def test_resolve_halted_owner_without_refire_names_none(repo) -> None:
-    _halt(repo, OWNER, call="")
-    assert co_tenant_owner.resolve(repo, WAITER, _exc())["owner_refire"] is None
 
 
 def test_resolve_without_owner_refuses_typed_and_parks_nothing(repo) -> None:
@@ -138,14 +133,12 @@ def _halt_co_tenant(repo: Path, run_id: str, withheld) -> None:
     marker.write_text(json.dumps(data), encoding="utf-8")
 
 
-def test_resolve_two_halted_runs_needing_each_others_path_names_the_cycle(repo) -> None:
+def test_resolve_two_halted_runs_sharing_a_path_hold_nothing_so_no_cycle(repo) -> None:
     _halt_co_tenant(repo, WAITER, ("a_only.py", "shared.py"))
     _halt_co_tenant(repo, OWNER, (PEER, "shared.py"))
     out = co_tenant_owner.resolve(repo, WAITER, _exc())
-    assert out["cause"] == "co_tenant_cycle" and out["owner"] == OWNER
-    assert out["cycle"] == [WAITER, OWNER]
-    assert out["remedy"] == f'coordinator-invoke dispatch.land_run \'{{"joint": ["{WAITER}", "{OWNER}"]}}\''
-    assert "parked" not in out
+    assert out["cause"] == "co_tenant_dependency" and out["owner"] is None and out["peer_runs"] == [OWNER]
+    assert "parked" not in out and "cycle" not in out
     assert out["module"] == "coordinator_core.run_order"
     assert stage_wait.read(repo, WAITER) is None
 
@@ -165,9 +158,9 @@ def test_resolve_live_owner_without_a_back_edge_still_parks(repo) -> None:
     assert out["parked"] == "co-tenant-wait" and "cause" not in out
 
 
-def test_resolve_halted_owner_with_no_back_edge_keeps_the_halted_cause(repo) -> None:
+def test_resolve_halted_co_tenant_holder_is_typed_not_a_halted_owner_cause(repo) -> None:
     _halt_co_tenant(repo, OWNER, (PEER,))
-    assert co_tenant_owner.resolve(repo, WAITER, _exc())["cause"] == "co_tenant_dependency_on_halted_run"
+    assert co_tenant_owner.resolve(repo, WAITER, _exc())["cause"] == "co_tenant_dependency"
 
 
 OWNER_SIZING = "state/sizings/2026-11/x-bbbbbb.yaml"
@@ -202,28 +195,19 @@ def test_landed_ask_record_of_the_same_sizing_hex_releases_the_halted_owner(repo
     assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
 
 
-def test_halted_record_with_unlanded_or_older_successor_stays_the_owner(repo) -> None:
+def test_halted_record_with_unlanded_or_older_successor_is_still_no_owner_but_stays_attributed(repo) -> None:
     _halt_bound(repo, OWNER)
     _stage(repo, SUCCESSOR, "halted")
     _stage(repo, "warp-x-bbbbbb-20261121T090000-123456", "landed")
-    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": OWNER, "state": "halted"}
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
+    assert co_tenant_owner.peer_hunk_runs(repo, PEER, exclude_run_id=WAITER) == (OWNER,)
 
 
-def test_landed_run_of_another_sizing_does_not_release_the_halted_owner(repo) -> None:
+def test_halted_reply_carries_no_halted_owner_chain_or_age(repo) -> None:
     _halt_bound(repo, OWNER)
-    _stage(repo, "warp-y-cccccc-20261121T110000-abcdef", "landed")
-    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER)["state"] == "halted"
-
-
-def test_halted_owner_reply_names_the_chain_and_staleness_age(repo) -> None:
-    _halt_bound(repo, OWNER)
-    marker = repo / "state" / "warp" / OWNER / "halted.json"
-    old = time.time() - 3600
-    os.utime(marker, (old, old))
     out = co_tenant_owner.resolve(repo, WAITER, _exc())
-    assert out["cause"] == "co_tenant_dependency_on_halted_run"
-    assert out["chain"] == [WAITER, OWNER]
-    assert 3500 <= out["owner_halted_age_s"] < 4000
+    assert out["cause"] == "co_tenant_dependency"
+    assert not {"chain", "owner_halted_age_s", "owner_refire"} & set(out)
 
 
 def test_owner_of_keeps_the_waiting_run_only_on_request(repo) -> None:
@@ -255,27 +239,23 @@ def _halt_as(repo: Path, run_id: str, status: str, sizing: str = SIZING) -> None
     (rd / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
 
 
-def test_superseded_marker_without_landed_successor_is_the_halted_owner(repo) -> None:
+def test_superseded_marker_without_landed_successor_is_attributed_never_the_owner(repo) -> None:
     _halt_as(repo, OWNER, "superseded")
-    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": OWNER, "state": "halted"}
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
+    assert co_tenant_owner.peer_hunk_runs(repo, PEER, exclude_run_id=WAITER) == (OWNER,)
     out = co_tenant_owner.resolve(repo, WAITER, _exc())
-    assert out["cause"] == "co_tenant_dependency_on_halted_run" and out["owner"] == OWNER
+    assert out["cause"] == "co_tenant_dependency" and out["owner"] is None
     assert stage_wait.read(repo, WAITER) is None
 
 
-def test_refire_supersede_keeps_the_owner_and_the_sweep_refires_it(repo) -> None:
+def test_refire_supersede_keeps_the_attribution_and_the_owner_stays_none(repo) -> None:
     _halt_as(repo, OWNER, "halted")
-    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER)["state"] == "halted"
+    assert co_tenant_owner.peer_hunk_runs(repo, PEER, exclude_run_id=WAITER) == (OWNER,)
     assert halted_run.mark_superseded_by_refire(
         repo / "state" / "warp" / OWNER, prior_engine=None, engine=None, at="2026-11-24T00:00:00Z",
     )
-    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": OWNER, "state": "halted"}
-    stage_wait.park(repo, WAITER, [OWNER], [PEER], session_id="s1", sizing_rel=SIZING, reason="co-tenant-wait")
-
-    acts = stranded_wait.sweep(repo, now=1000.0)
-
-    assert [(a["action"], a["owner"]) for a in acts] == [("owner-refire", OWNER)]
-    assert stage_wait.read(repo, WAITER)["started"] is False
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
+    assert co_tenant_owner.peer_hunk_runs(repo, PEER, exclude_run_id=WAITER) == (OWNER,)
 
 
 def test_superseded_marker_with_landed_successor_is_still_no_owner(repo) -> None:
@@ -285,11 +265,11 @@ def test_superseded_marker_with_landed_successor_is_still_no_owner(repo) -> None
     assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER)["state"] is None
 
 
-def test_live_launcherless_halt_marked_owner_gets_the_halted_cause_not_a_park(repo) -> None:
+def test_live_launcherless_halt_marked_owner_gets_the_typed_cause_not_a_park(repo) -> None:
     _live(repo, OWNER)
     _halt_as(repo, OWNER, "halted")
     out = co_tenant_owner.resolve(repo, WAITER, _exc())
-    assert out["cause"] == "co_tenant_dependency_on_halted_run" and out["owner"] == OWNER
+    assert out["cause"] == "co_tenant_dependency" and out["owner"] is None and out["peer_runs"] == [OWNER]
     assert "parked" not in out and stage_wait.read(repo, WAITER) is None
 
 
@@ -318,13 +298,12 @@ def _declare(repo: Path, run_id: str, declared, sizing: str = OWNER_SIZING, at_n
     halted_withheld_index.add_run(repo, run_id, paths, sizing_rel=sizing, declared=declared, at_ns=at_ns)
 
 
-def test_stranded_staged_run_without_marker_or_launcher_is_the_halted_owner_with_a_refire(repo) -> None:
+def test_stranded_staged_run_without_marker_or_launcher_is_attributed_never_the_owner(repo) -> None:
     _declare(repo, STRANDED, ("coordinator_core/ops/dispatch_emit",), paths=(PEER,))
     _stage(repo, STRANDED, "staged")
-    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": STRANDED, "state": "halted"}
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
     out = co_tenant_owner.resolve(repo, WAITER, _exc())
-    assert out["cause"] == "co_tenant_dependency_on_halted_run" and out["owner"] == STRANDED
-    assert STRANDED in out["owner_refire"] and OWNER_SIZING in out["owner_refire"]
+    assert out["cause"] == "co_tenant_dependency" and out["owner"] is None and out["peer_runs"] == [STRANDED]
     assert stage_wait.read(repo, WAITER) is None
 
 
@@ -370,32 +349,33 @@ def test_stranded_run_with_the_path_only_in_its_footprint_is_never_the_owner(rep
     assert out["cause"] == "co_tenant_dependency" and out["owner"] is None
 
 
-def test_footprint_only_run_is_passed_over_for_the_run_that_recorded_the_write(repo) -> None:
+def test_footprint_only_run_is_not_attributed_but_the_run_that_recorded_the_write_is(repo) -> None:
     _declare(repo, STRANDED, ("coordinator_core/ops/dispatch_emit",), at_ns=time.time_ns())
     _stage(repo, STRANDED, "staged")
     _halt(repo, OWNER)
-    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": OWNER, "state": "halted"}
+    assert co_tenant_owner.peer_hunk_runs(repo, PEER, exclude_run_id=WAITER) == (OWNER,)
 
 
-def test_marked_run_that_kept_the_path_without_withholding_it_is_still_the_owner(repo, monkeypatch) -> None:
+def test_marked_run_that_kept_the_path_without_withholding_it_is_attributed_never_the_owner(repo, monkeypatch) -> None:
     from coordinator_core.ops.dispatch_emit import co_tenant_kept
 
     _halt_declared_only(repo, OWNER)
     _declare(repo, OWNER, ("coordinator_core/ops/dispatch_emit",))
-    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER)["run_id"] is None
+    assert co_tenant_owner.peer_hunk_runs(repo, PEER, exclude_run_id=WAITER) == ()
     monkeypatch.setattr(co_tenant_kept, "kept_paths", lambda root, rid: frozenset({PEER}))
-    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": OWNER, "state": "halted"}
+    assert co_tenant_owner.peer_hunk_runs(repo, PEER, exclude_run_id=WAITER) == (OWNER,)
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
 
 
-def test_withholding_halt_older_than_the_path_dirt_is_still_the_owner(repo) -> None:
+def test_withholding_halt_older_than_the_path_dirt_is_never_the_owner(repo) -> None:
     peer_file = repo / PEER
     peer_file.parent.mkdir(parents=True)
     peer_file.write_text("x", encoding="utf-8")
     _halt_bound(repo, OWNER)
-    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER)["state"] == "halted"
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER)["state"] is None
     old = time.time_ns() + 10**10
     os.utime(peer_file, ns=(old, old))
-    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": OWNER, "state": "halted"}
+    assert co_tenant_owner.owner_of(repo, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
 
 
 def test_absent_proceeded_without_changes_nothing(repo) -> None:
@@ -447,15 +427,17 @@ def test_stranded_run_with_a_hand_landed_halted_successor_is_no_owner(tmp_path: 
     assert co_tenant_owner.resolve(root, WAITER, _exc())["cause"] == "co_tenant_dependency"
 
 
-def test_stranded_run_with_a_halted_successor_whose_work_is_uncommitted_stays_the_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stranded_run_with_a_halted_successor_whose_work_is_uncommitted_is_never_the_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _hand_landed_successor(tmp_path, monkeypatch, commit_work=False)
-    assert co_tenant_owner.owner_of(root, PEER, exclude_run_id=WAITER) == {"run_id": STRANDED, "state": "halted"}
+    assert co_tenant_owner.owner_of(root, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
+    assert co_tenant_owner.work_landed_at_head(root, LATER_SUCCESSOR) is False
 
 
-def test_stranded_run_with_a_halted_successor_that_changed_nothing_stays_the_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stranded_run_with_a_halted_successor_that_changed_nothing_is_never_the_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _hand_landed_successor(tmp_path, monkeypatch)
     manifest = root / "state" / "warp" / LATER_SUCCESSOR / "manifest.json"
     data = json.loads(manifest.read_text(encoding="utf-8"))
     data["head_sha"] = _git(root, "rev-parse", "HEAD")
     manifest.write_text(json.dumps(data), encoding="utf-8")
-    assert co_tenant_owner.owner_of(root, PEER, exclude_run_id=WAITER) == {"run_id": STRANDED, "state": "halted"}
+    assert co_tenant_owner.owner_of(root, PEER, exclude_run_id=WAITER) == {"run_id": None, "state": None}
+    assert co_tenant_owner.work_landed_at_head(root, LATER_SUCCESSOR) is False

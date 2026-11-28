@@ -71,9 +71,9 @@ def test_the_chain_emit_relay_prompt_carries_the_full_command():
     out = _drive({"ask_brief": "x"}, _refused())
     assert len(out["prompts"]) == 1
     prompt = out["prompts"][0]
-    assert f"{_INVOKE} {_EMIT_OP} --params-file - <<'CHAIN_PARAMS_JSON'\n" in prompt
+    assert f"{_INVOKE} {_EMIT_OP} '{{" in prompt
     assert _EMIT_OP == "dispatch.emit" and "coordinator-invoke" in _INVOKE
-    assert "\nCHAIN_PARAMS_JSON\n" in prompt
+    assert "<<" not in prompt
 
 
 def test_a_relay_that_returned_no_path_ends_halted():

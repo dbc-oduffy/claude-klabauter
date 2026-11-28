@@ -76,7 +76,7 @@ this engine module should bake in as a literal Python constant (that would
 be exactly the "one operator's machine as if it were universal" defect the
 guard itself exists to catch, just moved into the remedy). `discover_families`
 builds the family list at call time from the machine-local registry
-(`repos.*`, `publish.mirrors.*.path`), read in-process straight off the
+(`repos.*`, the `publish.mirrors.*` path keys), read in-process straight off the
 registry TOML via `machine_resolver` rather than through the `machine-local`
 CLI (see `_default_registry_keys` for why the CLI shell-out is not an option
 on Windows) — so this tool is useful in any repo whose sibling set differs,
@@ -366,7 +366,7 @@ def discover_families(
         )
 
     for key in mirror_path_keys:
-        mid = key[len("publish.mirrors."):-len(".path")]
+        mid = key.removeprefix("publish.mirrors.").removesuffix(".path")
         short = mid.replace("_", "-")
         families.append(
             Family(
@@ -875,7 +875,7 @@ def _warn_if_family_discovery_degraded(families: List[Family]) -> None:
     if not any(f.category in ("repo", "publish_mirror") for f in families):
         print(
             "warning: fix-concrete-path-citations discovered zero repo/publish_mirror "
-            "families -- no repos.* / publish.mirrors.*.path keys were readable "
+            "families -- no repos.* / publish.mirrors.* path keys were readable "
             "from the machine-local registry (check MACHINE_LOCAL_REGISTRY_DIR / "
             "COORDINATOR_SETTINGS_HOME). Every citation will report "
             "as 'no mapped family' rather than reflecting a genuinely clean corpus.",

@@ -663,13 +663,14 @@ def _carries_other_hunks(root: Path, run_id: str, path: str, owner: str) -> bool
 def _co_tenant_holds(root: Path, run_id: str, paths: Sequence[str]) -> dict:
     """`{path: (owner run id, owner state)}` for each of `paths` whose withheld print is typed `co_tenant`
     or which `co_tenant_owner.owner_of` gives to another run, while the bytes carry hunks beyond the run's
-    own-hunk blob. The state is `owner_of`'s ("live", "halted") or None when only the print names the owner.
-    A halted landing run holds nothing here (two halted runs land a path whole). Never raises."""
+    own-hunk blob. The state is `owner_of`'s ("live") or None when only the print names the owner. A halted
+    run is never an owner (`owner_of` is live-only; a typed print naming a non-live owner is skipped), and a
+    halted landing run holds nothing here (two halted runs land a path whole). Never raises."""
     if not paths:
         return {}
     try:
         from coordinator_core.ops import warp_run_deliverable
-        from coordinator_core.ops.dispatch_emit import co_tenant_owner
+        from coordinator_core.ops.dispatch_emit import co_tenant_owner, run_token
 
         if warp_run_deliverable._halted(root, run_id):
             return {}
@@ -681,9 +682,10 @@ def _co_tenant_holds(root: Path, run_id: str, paths: Sequence[str]) -> dict:
             except Exception:  # noqa: BLE001 -- no nameable owner
                 found = {"run_id": None, "state": None}
             named = found.get("run_id")
-            if not (named or p in typed):
+            typed_owner = typed.get(p)
+            if not named and (typed_owner is None or (typed_owner and not run_token.is_live(root, typed_owner))):
                 continue
-            owner = named or typed.get(p, "")
+            owner = named or typed_owner or ""
             if _carries_other_hunks(root, run_id, p, owner):
                 out[p] = (owner, found.get("state") if named else None)
         return out

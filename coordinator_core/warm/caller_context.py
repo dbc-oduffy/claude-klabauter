@@ -184,9 +184,9 @@ def resolve_caller_context(payload: Optional[Mapping[str, Any]] = None) -> Calle
             pid = candidate
 
     if plugin_root is None:
-        # Deferred: provision_report's module closure (session.scope, claim_index, ...)
-        # is paid only by a caller whose payload carries no plugin_root.
-        from coordinator_core.subagent_sandbox.provision_report import (
+        # The leaf, not provision_report: that module's closure (session.scope, claim_index, ...)
+        # is not a cost a plugin_root lookup may pay.
+        from coordinator_core.subagent_sandbox.plugin_root import (
             resolve_plugin_root as _resolve_plugin_root_ambient,
         )
 

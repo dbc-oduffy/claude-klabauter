@@ -198,6 +198,7 @@ from coordinator_core.session.guard_unlock_sentinel import (
     consume as _consume_unlock,
 )
 from coordinator_core.bash_guards import dispatch_checks as _dc
+from coordinator_core.bash_guards import guard_table as _guard_table
 from coordinator_core.bash_guards.leg_attribution import leg as _leg
 
 
@@ -210,13 +211,59 @@ def _check_deadline(phase: str) -> None:
         mod.check_deadline(phase)
 
 
+import contextvars as _contextvars
+import os
+
 from coordinator_core.guard_advisory_counter import (
-    record_advisory_fire as _record_advisory_fire,
-    record_deny_fire as _record_deny_fire,
+    record_advisory_fire as _record_advisory_fire_impl,
+    record_deny_fire as _record_deny_fire_impl,
 )
 from coordinator_core.bash_guards.chain_arrival_ledger import (
-    record_chain_arrival as _record_chain_arrival,
+    record_chain_arrival as _record_chain_arrival_impl,
 )
+
+_VERDICT_ONLY: "_contextvars.ContextVar[bool]" = _contextvars.ContextVar(
+    "bash_guard_verdict_only", default=False
+)
+"""True while a dispatch runs in verdict-only mode: the chain computes its envelope and
+writes no claim, chain-arrival, advisory/deny-fire or advisory-dedupe record."""
+
+_VERDICT_ONLY_ENV = "COORDINATOR_GUARD_VERDICT_ONLY"
+
+
+def _resolve_verdict_only(verdict_only: Optional[bool]) -> bool:
+    """An explicit flag wins; ``None`` reads ``COORDINATOR_GUARD_VERDICT_ONLY == "1"``."""
+    if verdict_only is not None:
+        return bool(verdict_only)
+    return os.environ.get(_VERDICT_ONLY_ENV) == "1"
+
+
+def _record_advisory_fire(guard_name: str, session_id: str, cwd: Optional[str] = None) -> None:
+    if _VERDICT_ONLY.get():
+        return
+    _record_advisory_fire_impl(guard_name, session_id, cwd)
+
+
+def _record_deny_fire(
+    guard_name: str,
+    session_id: str,
+    cleared: bool,
+    cwd: Optional[str] = None,
+    command: object = None,
+) -> None:
+    if _VERDICT_ONLY.get():
+        return
+    _record_deny_fire_impl(guard_name, session_id, cleared, cwd, command)
+
+
+def _record_chain_arrival(
+    session_id: str, has_agent_id: bool, cwd: Optional[str] = None
+) -> None:
+    if _VERDICT_ONLY.get():
+        return
+    _record_chain_arrival_impl(session_id, has_agent_id, cwd)
+
+
 from coordinator_core.warm.caller_context import (
     resolve_caller_context as _resolve_caller_context,
 )
@@ -378,32 +425,7 @@ class GuardEntry:
     matchers: Tuple[str, ...] = ("Bash",)
 
 
-_CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
-    "no-verify": ("git",),
-    "destructive-git-orphan": ("git",),
-    "destructive-git-clean": ("git",),
-    "destructive-git-revert": ("git",),
-    "blanket-git-add": ("git",),
-    "stale-temp-index-base": ("git",),
-    "destructive-rm": ("rm",),
-    "runaway-find": ("find",),
-    "stale-write": (">", "tee"),
-    "block-worktree-creation": ("worktree",),
-    "p4-verb-fence": ("p4", "git", "attrib", "chmod", "encodedcommand"),
-    "block-approval-sentinel-creation": ("doctrine-edit-approved", "doctrine_edit_gate", "guard_level", "machine_local_coordinator_", "xargs", "sh", "python"),
-    "block-worktree-sentinel-creation": ("override-worktree-guard", "xargs", "sh", "python"),
-    "block-stash-destruction": ("stash",),
-    "block-perforce-submit": ("p4", "submit", "shelve"),
-    "block-external-workspace-vcs-write": ("git",),
-    "block-push-pr-non-owned-remote": ("push", "pr"),
-    "block-empty-source-push": ("push",),
-    "block-held-push": ("push",),
-    "block-whole-filesystem-scan": ("find", "rg", "grep", "egrep", "fgrep", "fd", "fdfind"),
-    "guard-uncapped-pytest-plugin": ("pytest", "py.test"),
-    "block-editor-kill-by-name": ("taskkill", "stop-process", "spps", "pkill", "killall", "kill"),
-    "deny-kill-by-port-or-tree": ("kill", "stop-process", "spps", "fuser", ".sh", ".bash", ".ps1", ".py"),
-    "guard-repo-setup-claude-home-refusal": ("repo-setup-args-and-register", "scaffold_structure"),
-}
+_CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = _guard_table.CRASH_TRIGGERS
 """Per-guard necessary preconditions, used ONLY on the crash path to scope a
 fail-closed deny to the class of command the crashed guard actually polices.
 
@@ -676,6 +698,16 @@ def _crash_probe_variants(cmd: str) -> Tuple[str, ...]:
 
 
 _CRASH_QUOTE_CHARS_RE = re.compile(r"""['"`\\]""")
+
+
+def _guard_wanted(cmd: str) -> "Callable[[str], bool]":
+    """`name -> bool`: whether `guard_table` says `cmd` can trigger guard `name`. Every guard is wanted when the
+    probe variants cannot be computed (an uncertain path never prunes)."""
+    try:
+        variants = _crash_probe_variants(cmd or "")
+    except Exception:  # noqa: BLE001 -- normalization must never narrow the chain
+        return lambda _name: True
+    return lambda name: _guard_table.trigger_wanted(name, variants)
 
 
 def _crash_deny(guard_name: str, exc: BaseException, resolution_class: Optional[str] = None) -> Dict[str, Any]:
@@ -1285,117 +1317,7 @@ def _any_declared_matchers() -> "frozenset[str]":
     """
     global _ANY_DECLARED_MATCHERS_CACHE
     if _ANY_DECLARED_MATCHERS_CACHE is None:
-        from coordinator_core.bash_guards.block_subagent_plan_body_bash_write import (
-            MATCHERS as _matchers_plan_body_bash_write,
-        )
-        from coordinator_core.bash_guards.block_reviewer_bash_outside_allowlist import (
-            MATCHERS as _matchers_reviewer_bash_outside_allowlist,
-        )
-        from coordinator_core.bash_guards.block_subagent_destructive_action import (
-            MATCHERS as _matchers_subagent_destructive_action,
-        )
-        from coordinator_core.bash_guards.block_illegal_filename import (
-            MATCHERS as _matchers_illegal_filename,
-        )
-        from coordinator_core.bash_guards.check_test_suite_invocation import (
-            MATCHERS as _matchers_test_suite_invocation,
-        )
-        from coordinator_core.bash_guards.block_subagent_commit import (
-            MATCHERS as _matchers_subagent_commit,
-        )
-        from coordinator_core.bash_guards.check_raw_pid_liveness import (
-            MATCHERS as _matchers_raw_pid_liveness,
-        )
-        from coordinator_core.bash_guards.block_worktree_creation import (
-            MATCHERS as _matchers_worktree_creation,
-        )
-        from coordinator_core.bash_guards.block_approval_sentinel_creation import (
-            MATCHERS as _matchers_approval_sentinel_creation,
-        )
-        from coordinator_core.bash_guards.block_worktree_sentinel_creation import (
-            MATCHERS as _matchers_worktree_sentinel_creation,
-        )
-        from coordinator_core.bash_guards.block_stash_destruction import (
-            MATCHERS as _matchers_stash_destruction,
-        )
-        from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
-            MATCHERS as _matchers_noncanonical_branch_creation,
-        )
-        from coordinator_core.bash_guards.block_topic_branch import (
-            MATCHERS as _matchers_topic_branch,
-        )
-        from coordinator_core.bash_guards.block_perforce_submit import (
-            MATCHERS as _matchers_perforce_submit,
-        )
-        from coordinator_core.bash_guards.block_external_workspace_vcs_write import (
-            MATCHERS as _matchers_external_workspace_vcs_write,
-        )
-        from coordinator_core.bash_guards.block_push_pr_non_owned_remote import (
-            MATCHERS as _matchers_push_pr_non_owned_remote,
-        )
-        from coordinator_core.bash_guards.block_empty_source_push import (
-            MATCHERS as _matchers_empty_source_push,
-        )
-        from coordinator_core.bash_guards.block_held_push import (
-            MATCHERS as _matchers_held_push,
-        )
-        from coordinator_core.bash_guards.guard_deploy_dirty_tree import (
-            MATCHERS as _matchers_deploy_dirty_tree,
-        )
-        from coordinator_core.bash_guards.block_editor_kill_by_name import (
-            MATCHERS as _matchers_editor_kill_by_name,
-        )
-        from coordinator_core.bash_guards.block_kill_by_port_or_tree import (
-            MATCHERS as _matchers_kill_by_port_or_tree,
-        )
-        from coordinator_core.bash_guards.block_whole_filesystem_scan import (
-            MATCHERS as _matchers_whole_filesystem_scan,
-        )
-        from coordinator_core.bash_guards.guard_inprocess_search import (
-            MATCHERS as _matchers_inprocess_search,
-        )
-        from coordinator_core.bash_guards.guard_grep_via_bash import (
-            MATCHERS as _matchers_grep_via_bash,
-        )
-        from coordinator_core.bash_guards.guard_multiprobe_banner import (
-            MATCHERS as _matchers_multiprobe_banner,
-        )
-        from coordinator_core.bash_guards.guard_plumbing_and_loops import (
-            MATCHERS as _matchers_plumbing_and_loops,
-        )
-        from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
-            MATCHERS as _matchers_repo_setup_claude_home_refusal,
-        )
-
-        _ANY_DECLARED_MATCHERS_CACHE = frozenset(("Bash",)).union(
-            _matchers_plan_body_bash_write,
-            _matchers_reviewer_bash_outside_allowlist,
-            _matchers_subagent_destructive_action,
-            _matchers_illegal_filename,
-            _matchers_test_suite_invocation,
-            _matchers_subagent_commit,
-            _matchers_raw_pid_liveness,
-            _matchers_worktree_creation,
-            _matchers_approval_sentinel_creation,
-            _matchers_worktree_sentinel_creation,
-            _matchers_stash_destruction,
-            _matchers_noncanonical_branch_creation,
-            _matchers_topic_branch,
-            _matchers_perforce_submit,
-            _matchers_external_workspace_vcs_write,
-            _matchers_push_pr_non_owned_remote,
-            _matchers_empty_source_push,
-            _matchers_held_push,
-            _matchers_deploy_dirty_tree,
-            _matchers_editor_kill_by_name,
-            _matchers_kill_by_port_or_tree,
-            _matchers_whole_filesystem_scan,
-            _matchers_inprocess_search,
-            _matchers_grep_via_bash,
-            _matchers_multiprobe_banner,
-            _matchers_plumbing_and_loops,
-            _matchers_repo_setup_claude_home_refusal,
-        )
+        _ANY_DECLARED_MATCHERS_CACHE = _guard_table.DECLARED_MATCHERS
     return _ANY_DECLARED_MATCHERS_CACHE
 
 
@@ -1438,7 +1360,8 @@ def _session_advisory_already_fired(
             gitdir = fleet_temp_root() / "coordinator-gitless-advisory-dedupe"
         if _already_advised(gitdir, session_id, shape_key):
             return True
-        _mark_advised(gitdir, session_id, shape_key)
+        if not _VERDICT_ONLY.get():
+            _mark_advised(gitdir, session_id, shape_key)
         return False
     except Exception:  # noqa: BLE001 -- fail open: never suppress on a bug here
         return False
@@ -1553,6 +1476,11 @@ def _record_bash_read_claims(cmd: str, session_id: str, root: str, denied: bool)
         from coordinator_core.bash_guards.write_claim_record import (
             resolve_read_targets,
         )
+        # Trap: touch_record (+liveness, hashlib, logging) costs ~7ms of cold
+        # import; a Bash call with no read target (`echo hi`) must not pay it.
+        read_targets = resolve_read_targets(cmd)
+        if not read_targets:
+            return
         from coordinator_core.session.touch_record import (
             KIND_READ,
             append_touch_claims,
@@ -1561,7 +1489,7 @@ def _record_bash_read_claims(cmd: str, session_id: str, root: str, denied: bool)
 
         rels: List[str] = []
         hashes: Dict[str, str] = {}
-        for raw_target in resolve_read_targets(cmd):
+        for raw_target in read_targets:
             resolved_target = (
                 raw_target
                 if os.path.isabs(raw_target)
@@ -1600,6 +1528,7 @@ def evaluate_payload_json(
     resolution_class: Optional[str] = None,
     *,
     collect_advisories: bool = False,
+    verdict_only: Optional[bool] = None,
 ) -> Union[Dict[str, Any], List[Dict[str, Any]], None]:
     """Arm this dispatch's git-probe budget, then run the chain (see
     ``_evaluate_payload_json_budgeted`` for the whole contract -- this
@@ -1625,7 +1554,16 @@ def evaluate_payload_json(
     (every test in this package, ``_alternative_liveness``'s liveness
     harness) is not, keeps no window, and must stay unbudgeted -- see
     ``_dc._git_probe_deadline``'s inert-by-default note.
+
+    ``verdict_only`` (``None`` reads ``COORDINATOR_GUARD_VERDICT_ONLY == "1"``):
+    returns the envelope a recording run returns but writes nothing -- no
+    touch/read claims, chain-arrival line, fire counters, advisory-dedupe
+    marker, nudge log or event claim, and no operator-unlock consumption (a
+    deny stays a deny). The door's cold re-verdict after a delivered call
+    runs this way so it appends no second record of the same call.
     """
+    recording = not _resolve_verdict_only(verdict_only)
+    _token = _VERDICT_ONLY.set(not recording)
     _dc._arm_git_probe_deadline()
     try:
         result = _evaluate_payload_json_budgeted(
@@ -1637,9 +1575,13 @@ def evaluate_payload_json(
             collect_advisories=collect_advisories,
         )
     finally:
-        _dc._disarm_git_probe_deadline()
-    with _leg("claims"):
-        _record_bash_write_claims(raw, result)
+        try:
+            _dc._disarm_git_probe_deadline()
+        finally:
+            _VERDICT_ONLY.reset(_token)
+    if recording:
+        with _leg("claims"):
+            _record_bash_write_claims(raw, result)
     return result
 
 
@@ -1656,6 +1598,8 @@ def _apply_guard_level(
     event's one nudge line (``event_id`` claims it across processes)."""
     from coordinator_core.machine_profile import apply_guard_level
 
+    if _VERDICT_ONLY.get():
+        session_id, event_id = "", ""
     return apply_guard_level(
         name, envelope, subagent=subagent, session_id=session_id, cwd=cwd, event_id=event_id
     )
@@ -1936,7 +1880,9 @@ def _evaluate_payload_json_budgeted(
 
 
     with _leg("chain_build"):
-        guard_chain = _build_guard_chain(cmd, session_id, cwd, payload, policy_file, host_is_windows, resolved)
+        guard_chain = _build_guard_chain(
+            cmd, session_id, cwd, payload, policy_file, host_is_windows, resolved, prune=True
+        )
 
     # Blanket-disarm marker (M-disarm-wiring, 2026-07-30): evaluated ONCE per
     # dispatch, never per guard -- `disarm_status` is itself per-process
@@ -2212,6 +2158,7 @@ def _evaluate_payload_json_budgeted(
                 and _sentinel_eligible
                 and not _suppressed
                 and session_id
+                and not _VERDICT_ONLY.get()
                 and _consume_unlock(session_id, name)
             ):
                 print(
@@ -2366,6 +2313,7 @@ def _build_guard_chain(
     policy_file: Optional[str],
     host_is_windows: Optional[bool],
     resolved: Optional[List[_ResolvedCommand]] = None,
+    prune: bool = False,
 ) -> List[GuardEntry]:
     """Build the registered guard chain for one call -- pulled out of
     ``evaluate_payload_json`` so the registration ITSELF (name, fail_closed,
@@ -2386,7 +2334,16 @@ def _build_guard_chain(
     ``no-verify``'s closure -- the sole cohort-A guard migrated onto it so
     far; see ``check_no_verify``'s own docstring for why the other six stay
     on their own hand-rolled segmentation.
+
+    ``prune`` (C5): True imports only the guards ``guard_table`` says ``cmd`` can trigger, plus every
+    ALWAYS guard. A guard left out keeps its chain slot with ``matchers=()``, so the loop skips it
+    without calling its ``fn``. False (the default every introspecting test uses) builds the full chain.
     """
+    def _pruned_check(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    _wants = _guard_wanted(cmd) if prune else (lambda _name: True)
+
     from coordinator_core.bash_guards.block_subagent_plan_body_bash_write import (
         check as _check_plan_body_bash_write,
         MATCHERS as _matchers_plan_body_bash_write,
@@ -2435,22 +2392,31 @@ def _build_guard_chain(
         check as _check_raw_pid_liveness,
         MATCHERS as _matchers_raw_pid_liveness,
     )
-    from coordinator_core.bash_guards.block_worktree_creation import (
-        check as _check_worktree_creation,
-        MATCHERS as _matchers_worktree_creation,
-    )
+    if _wants("block-worktree-creation"):
+        from coordinator_core.bash_guards.block_worktree_creation import (
+            check as _check_worktree_creation,
+            MATCHERS as _matchers_worktree_creation,
+        )
+    else:
+        _check_worktree_creation, _matchers_worktree_creation = _pruned_check, ()
     from coordinator_core.bash_guards.p4_verb_fence import (
         check as _check_p4_verb_fence,
         MATCHERS as _matchers_p4_verb_fence,
     )
-    from coordinator_core.bash_guards.block_approval_sentinel_creation import (
-        check as _check_approval_sentinel_creation,
-        MATCHERS as _matchers_approval_sentinel_creation,
-    )
-    from coordinator_core.bash_guards.block_worktree_sentinel_creation import (
-        check as _check_worktree_sentinel_creation,
-        MATCHERS as _matchers_worktree_sentinel_creation,
-    )
+    if _wants("block-approval-sentinel-creation"):
+        from coordinator_core.bash_guards.block_approval_sentinel_creation import (
+            check as _check_approval_sentinel_creation,
+            MATCHERS as _matchers_approval_sentinel_creation,
+        )
+    else:
+        _check_approval_sentinel_creation, _matchers_approval_sentinel_creation = _pruned_check, ()
+    if _wants("block-worktree-sentinel-creation"):
+        from coordinator_core.bash_guards.block_worktree_sentinel_creation import (
+            check as _check_worktree_sentinel_creation,
+            MATCHERS as _matchers_worktree_sentinel_creation,
+        )
+    else:
+        _check_worktree_sentinel_creation, _matchers_worktree_sentinel_creation = _pruned_check, ()
     from coordinator_core.bash_guards.block_home_root_bash_write import (
         check as _check_home_root_bash_write,
         MATCHERS as _matchers_home_root_bash_write,
@@ -2474,51 +2440,90 @@ def _build_guard_chain(
         check as _check_topic_branch,
         MATCHERS as _matchers_topic_branch,
     )
-    from coordinator_core.bash_guards.block_perforce_submit import (
-        check as _check_perforce_submit,
-        MATCHERS as _matchers_perforce_submit,
-    )
-    from coordinator_core.bash_guards.block_external_workspace_vcs_write import (
-        check as _check_external_workspace_vcs_write,
-        MATCHERS as _matchers_external_workspace_vcs_write,
-    )
-    from coordinator_core.bash_guards.block_push_pr_non_owned_remote import (
-        check as _check_push_pr_non_owned_remote,
-        MATCHERS as _matchers_push_pr_non_owned_remote,
-    )
-    from coordinator_core.bash_guards.block_empty_source_push import (
-        check as _check_empty_source_push,
-        MATCHERS as _matchers_empty_source_push,
-    )
-    from coordinator_core.bash_guards.block_held_push import (
-        check as _check_held_push,
-        MATCHERS as _matchers_held_push,
+    if _wants("block-perforce-submit"):
+        from coordinator_core.bash_guards.block_perforce_submit import (
+            check as _check_perforce_submit,
+            MATCHERS as _matchers_perforce_submit,
+        )
+    else:
+        _check_perforce_submit, _matchers_perforce_submit = _pruned_check, ()
+    if _wants("block-external-workspace-vcs-write"):
+        from coordinator_core.bash_guards.block_external_workspace_vcs_write import (
+            check as _check_external_workspace_vcs_write,
+            MATCHERS as _matchers_external_workspace_vcs_write,
+        )
+    else:
+        _check_external_workspace_vcs_write, _matchers_external_workspace_vcs_write = _pruned_check, ()
+    if _wants("block-push-pr-non-owned-remote"):
+        from coordinator_core.bash_guards.block_push_pr_non_owned_remote import (
+            check as _check_push_pr_non_owned_remote,
+            MATCHERS as _matchers_push_pr_non_owned_remote,
+        )
+    else:
+        _check_push_pr_non_owned_remote, _matchers_push_pr_non_owned_remote = _pruned_check, ()
+    if _wants("block-empty-source-push"):
+        from coordinator_core.bash_guards.block_empty_source_push import (
+            check as _check_empty_source_push,
+            MATCHERS as _matchers_empty_source_push,
+        )
+    else:
+        _check_empty_source_push, _matchers_empty_source_push = _pruned_check, ()
+    if _wants("block-held-push"):
+        from coordinator_core.bash_guards.block_held_push import (
+            check as _check_held_push,
+            MATCHERS as _matchers_held_push,
+        )
+    else:
+        _check_held_push, _matchers_held_push = _pruned_check, ()
+    from coordinator_core.bash_guards.block_clone_shaped_cruft import (
+        check as _check_clone_shaped_cruft,
+        MATCHERS as _matchers_clone_shaped_cruft,
     )
     from coordinator_core.bash_guards.guard_deploy_dirty_tree import (
         check as _check_deploy_dirty_tree,
         MATCHERS as _matchers_deploy_dirty_tree,
     )
-    from coordinator_core.bash_guards.block_editor_kill_by_name import (
-        check as _check_editor_kill_by_name,
-        MATCHERS as _matchers_editor_kill_by_name,
+    if _wants("block-editor-kill-by-name"):
+        from coordinator_core.bash_guards.block_editor_kill_by_name import (
+            check as _check_editor_kill_by_name,
+            MATCHERS as _matchers_editor_kill_by_name,
+        )
+    else:
+        _check_editor_kill_by_name, _matchers_editor_kill_by_name = _pruned_check, ()
+    if _wants("deny-kill-by-port-or-tree"):
+        from coordinator_core.bash_guards.block_kill_by_port_or_tree import (
+            check as _check_kill_by_port_or_tree,
+            MATCHERS as _matchers_kill_by_port_or_tree,
+        )
+    else:
+        _check_kill_by_port_or_tree, _matchers_kill_by_port_or_tree = _pruned_check, ()
+    from coordinator_core.bash_guards.refuse_unrecordable_detached_spawn import (
+        check as _check_unrecordable_detached_spawn,
+        MATCHERS as _matchers_unrecordable_detached_spawn,
     )
-    from coordinator_core.bash_guards.block_kill_by_port_or_tree import (
-        check as _check_kill_by_port_or_tree,
-        MATCHERS as _matchers_kill_by_port_or_tree,
-    )
-    from coordinator_core.bash_guards.block_whole_filesystem_scan import (
-        check as _check_whole_filesystem_scan,
-        MATCHERS as _matchers_whole_filesystem_scan,
-    )
-    from coordinator_core.bash_guards.guard_uncapped_pytest_plugin import (
-        check as _check_uncapped_pytest_plugin,
-        MATCHERS as _matchers_uncapped_pytest_plugin,
-    )
-    from coordinator_core.bash_guards.block_stash_destruction import (
-        check as _check_stash_destruction,
-        check_apply_advisory as _check_stash_apply_advisory,
-        MATCHERS as _matchers_stash_destruction,
-    )
+    if _wants("block-whole-filesystem-scan"):
+        from coordinator_core.bash_guards.block_whole_filesystem_scan import (
+            check as _check_whole_filesystem_scan,
+            MATCHERS as _matchers_whole_filesystem_scan,
+        )
+    else:
+        _check_whole_filesystem_scan, _matchers_whole_filesystem_scan = _pruned_check, ()
+    if _wants("guard-uncapped-pytest-plugin"):
+        from coordinator_core.bash_guards.guard_uncapped_pytest_plugin import (
+            check as _check_uncapped_pytest_plugin,
+            MATCHERS as _matchers_uncapped_pytest_plugin,
+        )
+    else:
+        _check_uncapped_pytest_plugin, _matchers_uncapped_pytest_plugin = _pruned_check, ()
+    if _wants("block-stash-destruction"):
+        from coordinator_core.bash_guards.block_stash_destruction import (
+            check as _check_stash_destruction,
+            check_apply_advisory as _check_stash_apply_advisory,
+            MATCHERS as _matchers_stash_destruction,
+        )
+    else:
+        _check_stash_destruction = _check_stash_apply_advisory = _pruned_check
+        _matchers_stash_destruction = ()
     from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
         check as _check_block_noncanonical_branch_creation,
         MATCHERS as _matchers_noncanonical_branch_creation,
@@ -2527,10 +2532,13 @@ def _build_guard_chain(
         check as _check_post_executor_verification,
         MATCHERS as _matchers_post_executor_verification,
     )
-    from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
-        check as _check_repo_setup_claude_home_refusal,
-        MATCHERS as _matchers_repo_setup_claude_home_refusal,
-    )
+    if _wants("guard-repo-setup-claude-home-refusal"):
+        from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
+            check as _check_repo_setup_claude_home_refusal,
+            MATCHERS as _matchers_repo_setup_claude_home_refusal,
+        )
+    else:
+        _check_repo_setup_claude_home_refusal, _matchers_repo_setup_claude_home_refusal = _pruned_check, ()
     from coordinator_core.bash_guards.guard_doctrine_surface_bash_write import (
         check as _check_doctrine_surface_bash_write,
         MATCHERS as _matchers_doctrine_surface_bash_write,
@@ -2853,6 +2861,15 @@ def _build_guard_chain(
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_held_push),
         ),
+        # A hand-made repo tree copy is unowned disk fill: a regular subagent is denied, the EM and a named reviewer warned. Fail-open.
+        GuardEntry(
+            "block-clone-shaped-cruft",
+            lambda: _check_clone_shaped_cruft(payload),
+            False,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_clone_shaped_cruft),
+        ),
         # A deploy builds the working tree: uncommitted peer edits ship. Fail-open.
         GuardEntry(
             "deploy-dirty-tree",
@@ -2879,6 +2896,15 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_kill_by_port_or_tree),
+        ),
+        # No detached launch whose command the spawn ledger cannot record.
+        GuardEntry(
+            "refuse-unrecordable-detached-spawn",
+            lambda: _check_unrecordable_detached_spawn(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_unrecordable_detached_spawn),
         ),
         # No search rooted at a whole filesystem or drive.
         GuardEntry(

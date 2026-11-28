@@ -208,13 +208,13 @@ def record_engine_provenance(
     own_sink = _OWN_REPO_ROOT / "state" / _COUNTS_FILENAME
     if os.environ.get("PYTEST_CURRENT_TEST") and path.resolve() == own_sink.resolve():
         return
-    if not _may_write(git_root):
-        return
     try:
         size = path.stat().st_size
     except OSError:
         size = 0
     if size >= _HARD_CAP_BYTES or (verdict == "match" and size >= _MATCH_CAP_BYTES):
+        return
+    if not _may_write(git_root):
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {

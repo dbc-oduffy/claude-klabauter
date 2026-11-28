@@ -544,6 +544,82 @@ def test_executor_evidence_only_refused_when_a_write_is_absent_or_undeclared(tmp
     assert not evidence_sidecar_path(plan).exists()
 
 
+_BOTH_COMBINATIONS = ("'evidence' plus 'commit'", "every declared write on disk and changed against HEAD")
+
+
+@pytest.mark.parametrize(
+    "writes, extra",
+    [
+        ("[missing.py]", {"evidence": "ok"}),
+        ("[one.py]", {"evidence": "ok"}),
+        ("[one.py]", {"commit": "{head}"}),
+        ("[one.py]", {}),
+    ],
+)
+def test_every_executor_refusal_names_both_accepted_combinations(tmp_path, writes, extra):
+    import subprocess
+
+    repo, plan = _writes_plan(tmp_path, writes)
+    (repo / "one.py").write_text("x", encoding="utf-8")
+    for args in (["add", "one.py"], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "w"]):
+        subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True)
+    extra = {k: _rev(repo, "HEAD") if v == "{head}" else v for k, v in extra.items()}
+    result = _call(repo, plan, id="X1", **extra)
+    assert result["exit_code"] == 1 and result["applied"] is False, result
+    assert all(part in result["error"] for part in _BOTH_COMBINATIONS), result["error"]
+    assert not evidence_sidecar_path(plan).exists()
+
+
+def test_refusal_keeps_the_failing_specifics(tmp_path):
+    repo, plan = _writes_plan(tmp_path, "[missing.py]")
+    assert "absent: ['missing.py']" in _call(repo, plan, id="X1", evidence="ok")["error"]
+
+
+def _outside_plan(tmp_path: Path, writes: str = "[]"):
+    repo, plan = _writes_plan(tmp_path, writes)
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            "  body: |\n    Code.\n", "  deliverable_outside_repo: true\n  body: |\n    Code.\n", 1
+        ),
+        encoding="utf-8",
+        newline="",
+    )
+    return repo, plan
+
+
+def test_outside_repo_row_discharges_with_evidence_alone_and_never_claims_writes_verified(tmp_path):
+    from coordinator_core.ops.plan_tasks_mutate import em_discharge_closes
+
+    repo, plan = _outside_plan(tmp_path, "[not-in-tree.md]")
+    result = _call(repo, plan, id="X1", evidence="cross-repo-memo send receipt abc")
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    entry = read_em_discharges(plan)["X1"]
+    assert entry["deliverable_outside_repo"] is True
+    assert "commit" not in entry and "writes_verified" not in entry
+    row = {"id": "X1", "deliverable_outside_repo": True}
+    assert em_discharge_closes(row, entry) is True
+    assert em_discharge_closes({"id": "X1"}, entry) is False
+
+
+def test_outside_repo_row_still_needs_evidence(tmp_path):
+    repo, plan = _outside_plan(tmp_path)
+    result = _call(repo, plan, id="X1")
+    assert result["exit_code"] == 1 and "deliverable_outside_repo" in result["error"]
+    assert not evidence_sidecar_path(plan).exists()
+
+
+def test_outside_repo_row_with_a_bad_commit_is_still_refused(tmp_path):
+    repo, plan = _outside_plan(tmp_path)
+    result = _call(repo, plan, id="X1", commit="ab" * 20, evidence="ok")
+    assert result["exit_code"] == 1 and "did not resolve" in result["error"]
+
+
+def test_undeclared_row_keeps_evidence_alone_refusal(tmp_path):
+    repo, plan = _writes_plan(tmp_path, "[]")
+    result = _call(repo, plan, id="X1", evidence="ok")
+    assert result["exit_code"] == 1 and not evidence_sidecar_path(plan).exists()
+
+
 def test_writes_verified_entry_without_evidence_does_not_close():
     from coordinator_core.ops.plan_tasks_mutate import em_discharge_closes
 

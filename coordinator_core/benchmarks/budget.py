@@ -26,8 +26,7 @@ than listing keys, since the list moves.
 for readers of the manifest, not an input to budget resolution. Its live readers are
 `tests/test_budget.py` (`test_provisional_flags_match_phase0_measurement_state` asserts MUTATING
 carries it and COMPUTE_ONLY does not; `test_measured_overrides_carry_no_provisional_marker` asserts
-no override carries it) and `ipc.py`'s `_MAX_DECLARED_TOUCH_PATHS` headroom analysis, which cites it
-as the reason to treat the 300ms MUTATING target as not yet settled (DR-276).
+no override carries it).
 
 **Negative spec:** do not delete `_provisional` as dead metadata. It was assessed as unread under
 op-proportionality cluster C-17 and the assessment was refuted — see

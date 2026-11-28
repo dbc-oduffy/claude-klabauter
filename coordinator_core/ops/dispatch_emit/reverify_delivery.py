@@ -142,6 +142,22 @@ _TIER_MARKER_CLAUSE = (
     "never run or reported failing. "
 )
 
+def _basetemp_clause(repo_root: Optional[Path]) -> str:
+    """Directs each pytest batch to its own `--basetemp` under the per-run root, so no batch reads
+    or writes the shared `pytest-of-<user>` dir. The root is `scoped_pytest.per_run_root`."""
+    from coordinator_core.testing import scoped_pytest  # lazy: pulls psutil
+
+    root = scoped_pytest.per_run_root(repo_root if repo_root is not None else Path.cwd()).as_posix()
+    return (
+        f"Add `--basetemp {root}/reverify-<N>` to every pytest invocation, N a distinct number per batch "
+        f"(never the default basetemp, never one shared by two batches); create `{root}` first, as pytest "
+        "does not create its parents; remove the batch directory once the "
+        "batch ends. Quote each batch's exact argv, `--basetemp` included, in `summary`. "
+        "If every test errors at setup with zero tests run, return status `error` typed "
+        "`test_infra_failure` and quote the first setup error text; never leave it empty. "
+    )
+
+
 _ADMIT_PEAK_SEED_GIB = 4
 _ADMIT_RETRIES = 60
 _ADMIT_PAUSE_S = 30
@@ -182,7 +198,12 @@ def _batched_paths(tests: List[str]) -> str:
 
 
 def _scope_clause(
-    tests: Optional[List[str]], error: str, base: str, unmapped: Optional[List[str]] = None, notice: str = ""
+    tests: Optional[List[str]],
+    error: str,
+    base: str,
+    unmapped: Optional[List[str]] = None,
+    notice: str = "",
+    repo_root: Optional[Path] = None,
 ) -> str:
     """The set-naming sentence: explicit files, run nothing (empty), or an error leg (no set).
     Any `unmapped` file forbids a `pass`: no test is evidence for it. A non-empty `notice` is
@@ -208,6 +229,7 @@ def _scope_clause(
         + ". "
         + _NO_STDIN_ASSEMBLY
         + _TIER_MARKER_CLAUSE
+        + _basetemp_clause(repo_root)
         + (_ADMIT_GATE if len(tests) > 1 else "")
         + unmapped_clause
         + (f"Scope notice: {notice} Quote it in `summary`. " if notice else "")
@@ -231,7 +253,7 @@ def _tests_prompt(
     which an agent without Write cannot honour."""
     return (
         f"Run the plan's scoped tests at HEAD {head_sha}: {plan_path}, run_base_sha {base}. "
-        f"{_scope_clause(scope[0], scope[1], base, scope[2], scope[3])}"
+        f"{_scope_clause(scope[0], scope[1], base, scope[2], scope[3], repo_root)}"
         f"{interpreter_clause(repo_root)} "
         "Run them through the engine entry `emit-dispatch-workflow --retest-targeted "
         "--from-task-output <file> --isolated-export`, then `emit-dispatch-workflow --retest-targeted "

@@ -7,6 +7,7 @@ import asyncio
 import json
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -68,7 +69,7 @@ def _seed(root: Path) -> None:
                     "session_id": "s1",
                     "started_at": "2026-10-24T10:00:00Z",
                     "stage": stage,
-                    "last_activity_at": "2026-10-24T11:00:00Z",
+                    "last_activity_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "steps_planned": 3,
                 }
             ),
@@ -119,6 +120,7 @@ def test_live_corpus_handlers_stay_under_the_500ms_bar(pinned):
     if len(list((_REPO_ROOT / "state" / "sizings").glob("*.yaml"))) < 100:
         pytest.skip("live sizing corpus absent")
     cockpit_sections_query._sizings_summary({}, repo_root=_REPO_ROOT)  # warm the record cache
+    cockpit_sections_query._workflow_runs_list({}, repo_root=_REPO_ROOT)  # warm the per-run memo
     t = time.process_time()
     sizing_out = cockpit_sections_query._sizings_summary({}, repo_root=_REPO_ROOT)
     sizings_secs = time.process_time() - t

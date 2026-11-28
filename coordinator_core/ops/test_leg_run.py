@@ -167,11 +167,58 @@ def _live_only(root: Path, dest: Path, targets: Sequence[str], declared: Sequenc
     return list(out)
 
 
+_CLOSURE_DEPTH = 3
+
+
+def _dirty_closure(root: Path, overlay: Sequence[str], depth: int = _CLOSURE_DEPTH) -> list[str]:
+    """Dirty modules (and their dirty package inits) the overlay's Python files import within `depth` hops, outside `overlay`."""
+    seeds = [p.replace("\\", "/") for p in overlay if p.endswith(".py")]
+    if not seeds:
+        return []
+    from coordinator_core.ops.dispatch_emit import test_reach
+    from coordinator_core.ops.dispatch_emit.worktree_snapshot import changed_python_paths
+
+    try:
+        changed = changed_python_paths(root)
+    except Exception:  # noqa: BLE001
+        return []
+    carried = {p.replace("\\", "/") for p in overlay}
+    outside = {p for p in (changed or ()) if p not in carried and (root / p).is_file()}
+    if not outside:
+        return []
+    modules = test_reach._module_map(outside)
+    found: dict[str, None] = {}
+    frontier = seeds
+    for _ in range(max(depth, 0)):
+        nxt: list[str] = []
+        for rel in frontier:
+            for base, names in test_reach._resolved_imports(rel, test_reach._records_for(root, rel)):
+                for name in (base, *(f"{base}.{n}" for n in names)):
+                    hit = modules.get(name)
+                    if hit is not None and hit not in found:
+                        found[hit] = None
+                        nxt.append(hit)
+        frontier = nxt
+        if not frontier:
+            break
+    for rel in list(found):
+        parent = rel
+        while "/" in parent:
+            parent = parent.rpartition("/")[0]
+            init = f"{parent}/__init__.py"
+            if init in outside:
+                found.setdefault(init)
+    return list(found)
+
+
 def _prepare_live(root: Path, mroot: Path, sha: str, overlay: Sequence[str],
-                  overrides: Optional[dict[str, bytes]]) -> Path:
-    """The mirror with `overlay` laid over `sha`, unguarded: the overlay is the run's own delta, and a peer's
-    dirty module it imports stays at HEAD, so `_check_overlay_imports` would refuse the very test whose import
-    is absent there. That absence surfaces as the leg's zero-run import-error verdict instead."""
+                  overrides: Optional[dict[str, bytes]], carried: Optional[list[str]] = None) -> Path:
+    """The mirror with `overlay` and its `_dirty_closure` laid over `sha`; `carried` receives the closure paths added."""
+    extra = _dirty_closure(root, overlay)
+    if extra:
+        overlay = [*overlay, *extra]
+        if carried is not None:
+            carried.extend(p for p in extra if p not in carried)
     try:
         return cov._prepare(root, mroot, sha, cov._no_leg, overlay, None, overrides or None)
     except subprocess.TimeoutExpired as exc:
@@ -861,11 +908,14 @@ def _own_tree(stack: contextlib.ExitStack, root: Path, head_sha: Optional[str], 
             recorded, recorded_overrides = _recorded_sources(root, declared_run)
             overrides = {**recorded_overrides, **overrides}
             overlay = list(dict.fromkeys([*_run_blob_paths(root, "", run_id), *owned, *recorded, *overrides]))
-            dest = _prepare_live(root, mroot, sha, overlay, overrides)
+            carried: list[str] = []
+            dest = _prepare_live(root, mroot, sha, overlay, overrides, carried)
             live = _live_only(root, dest, targets, _reviewed_scope(root, declared_run))
             if live:
                 overlay = [*overlay, *live]
-                dest = _prepare_live(root, mroot, sha, overlay, overrides)
+                carried.clear()
+                dest = _prepare_live(root, mroot, sha, overlay, overrides, carried)
+            overlay = [*overlay, *carried]
     except (cov.ExportError, OSError, ValueError, subprocess.SubprocessError) as exc:
         stack.close()
         if measured:

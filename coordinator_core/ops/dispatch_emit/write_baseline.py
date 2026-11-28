@@ -130,8 +130,25 @@ def without_carried(
     for rel, blobs in kept_fingerprints(run_dir).items():
         if fingerprint(root, rel) in blobs:
             carried.add(rel)
+    carried.update(_takeover_written(root, run_dir))
     credited = _clean_paths(carried)
     return {p: v for p, v in baseline.items() if p not in credited}
+
+
+def _takeover_written(root: Path, run_dir: Path) -> list[str]:
+    """A taken-over run's prior-manifest `write_baseline` paths whose live bytes moved off the recorded value."""
+    from coordinator_core.ops.dispatch_emit import resume_gate
+
+    if not resume_gate.takeover_recorded(run_dir):
+        return []
+    try:
+        data = json.loads((Path(run_dir) / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    recorded = data.get("write_baseline") if isinstance(data, dict) else None
+    if not isinstance(recorded, dict):
+        return []
+    return [p for p, v in recorded.items() if isinstance(p, str) and fingerprint(root, p) != v]
 
 
 def _outcome_slice(home: Path) -> list:

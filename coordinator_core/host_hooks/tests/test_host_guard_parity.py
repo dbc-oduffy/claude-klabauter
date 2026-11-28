@@ -40,11 +40,24 @@ _CASES = [
      "block-push-pr-non-owned-remote", "block-push-pr-non-owned-remote"),
     ("force-push-main", "owned", "git push --force origin main", "force-push-main", "force-push-main"),
     ("destructive-rm", "owned", "rm -rf f.txt", "destructive-rm", "destructive-rm"),
+    ("untracked-rm", "owned", "rm -rf untracked.txt", "destructive-rm", "destructive-rm"),
+    ("dirty-tracked-tree-rm", "clean", "rm -rf dirty", "destructive-rm", "destructive-rm"),
     ("git-clean", "owned", "git clean -fdx", None, "block-subagent-destructive-action"),
+    ("clean-untracked-state", "state", "git clean -fd", "destructive-git-clean", "block-subagent-destructive-action"),
+    ("clean-untracked-state-x", "state", "git clean -fdx", "destructive-git-clean", "block-subagent-destructive-action"),
     ("stash-drop", "owned", "git stash drop", "block-stash-destruction", "block-stash-destruction"),
     ("blanket-add", "owned", "git add -A", None, None),
     ("benign-status", "owned", "git status", None, None),
 ]
+
+# EM leg only: the warm subagent guard denies any recursive rm in a work tree, a limit the cold chain does not mirror.
+_EM_ONLY_CASES = [("clean-tracked-tree-rm", "clean", "rm -rf tree", None, None)]
+
+
+# Cold may be stricter than warm, never looser: with the engine down, `git clean -f` in a work tree is answered by the
+# spawn-free classifier, which may deny where the warm EM guard (its `git clean -n` oracle) allows. These commands
+# assert cold >= warm; every other case asserts equality.
+_COLD_STRICTER_EM = frozenset({"git clean -fdx"})
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -65,6 +78,31 @@ def _real_repo(path: Path, url: str) -> Path:
     return path
 
 
+def _tree_repo(path: Path) -> Path:
+    """A repo whose `tree/` is committed and clean (nested dir included) and whose `dirty/` holds an edited tracked file."""
+    path.mkdir(parents=True)
+    _git(path, "init", "-q", "-b", "main")
+    for rel in ("tree/a.py", "tree/sub/b.py", "dirty/c.py"):
+        (path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (path / rel).write_text("x\n", encoding="utf-8")
+    _git(path, "add", ".")
+    _git(path, "commit", "-qm", "init")
+    (path / "dirty" / "c.py").write_text("edited, different length\n", encoding="utf-8")
+    return path
+
+
+def _state_repo(path: Path) -> Path:
+    """A repo holding an untracked load-bearing `state/` path, the shape a forced `git clean` must deny on every route."""
+    path.mkdir(parents=True)
+    _git(path, "init", "-q", "-b", "main")
+    (path / "f.txt").write_text("x\n", encoding="utf-8")
+    _git(path, "add", "f.txt")
+    _git(path, "commit", "-qm", "init")
+    (path / "state").mkdir()
+    (path / "state" / "x.md").write_text("load-bearing\n", encoding="utf-8")
+    return path
+
+
 @pytest.fixture(scope="module")
 def world(tmp_path_factory):
     base = tmp_path_factory.mktemp("parity")
@@ -77,7 +115,9 @@ def world(tmp_path_factory):
     installed = base / "home" / "unimatrix"
     _ui.install_scripts(_ui._BIN_DIR, installed)
     repos = {"owned": _real_repo(base / "owned", "https://github.com/me/thing.git"),
-             "foreign": _real_repo(base / "foreign", "https://github.com/some-stranger/thing.git")}
+             "foreign": _real_repo(base / "foreign", "https://github.com/some-stranger/thing.git"),
+             "clean": _tree_repo(base / "clean"),
+             "state": _state_repo(base / "state-repo")}
     return installed, env, repos
 
 
@@ -131,7 +171,7 @@ def _registered(guard: str, registry: dict) -> bool:
 
 
 @pytest.mark.parametrize("host", ["codex", "agy"])
-@pytest.mark.parametrize("case", _CASES, ids=[c[0] for c in _CASES])
+@pytest.mark.parametrize("case", _CASES + _EM_ONLY_CASES, ids=[c[0] for c in _CASES + _EM_ONLY_CASES])
 def test_em_verdict_matches_the_claude_em_path(world, monkeypatch, host, case):
     _, env, repos = world
     _, kind, command, em_guard, _ = case
@@ -140,6 +180,9 @@ def test_em_verdict_matches_the_claude_em_path(world, monkeypatch, host, case):
     assert claude == (em_guard is not None), (command, "the Claude EM path drifted from the pinned expectation")
     if em_guard and em_guard != "force-push-main":
         assert _registered(em_guard, deny_registry.GUARD_DENY_CLASS), em_guard
+    if command in _COLD_STRICTER_EM and kind != "state":
+        assert _host_denies(world, host, cwd, command, subagent=False) or not claude, (host, command, "cold allows what warm denies")
+        return
     assert _host_denies(world, host, cwd, command, subagent=False) == claude, (host, command)
 
 
@@ -156,7 +199,11 @@ def test_codex_subagent_verdict_matches_the_claude_subagent_path(world, monkeypa
 
 
 def test_a_subagent_only_deny_stays_an_allow_for_the_codex_em(world):
-    """git clean: the subagent limit is not a wall on the EM -- the guard answers by caller, not by command."""
+    """The subagent limit is not a wall on the EM: a git verb only the subagent guard denies is allowed for the EM.
+
+    `git reset --hard` is no example: the EM revert guard denies the whole-tree form from the command alone. A clean of
+    an untracked file that is not load-bearing is the EM-allowed, subagent-denied shape."""
     _, _, repos = world
-    assert _host_denies(world, "codex", repos["owned"], "git clean -fdx", subagent=False) is False
+    assert _host_denies(world, "codex", repos["owned"], "git clean -fd", subagent=False) is False
+    assert _host_denies(world, "codex", repos["owned"], "git clean -fd", subagent=True) is True
     assert _host_denies(world, "codex", repos["owned"], "git clean -fdx", subagent=True) is True

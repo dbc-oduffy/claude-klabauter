@@ -1,4 +1,4 @@
-"""The default halt path scans imports of a changed run-owned ``.py`` and parks its blob."""
+"""The default halt path parks a changed run-owned ``.py`` in the record and leaves it in the tree."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import halt_tree_evict, halted_record_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
-from coordinator_core.ops.dispatch_emit.halted_record_eviction import EVICTED_PARKED, IMPORT_RISK_UNSCANNED
+from coordinator_core.ops.dispatch_emit.halted_record_eviction import EVICTED_PARKED
 from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_product import repo as product_repo  # noqa: F401
@@ -53,24 +53,23 @@ def _blob_names(root) -> list:
     return sorted(p.name for p in blobs.iterdir()) if blobs.is_dir() else []
 
 
-def test_a_changed_py_is_parked_and_scanned_not_left_unscanned(halted_py):
+def test_a_changed_py_is_parked_and_stays_in_the_tree(halted_py):
     out = _call(halted_py, LEDGER, **PASSING)
 
     assert out["withheld"][OWN] == EVICTED_PARKED
-    assert IMPORT_RISK_UNSCANNED not in out["withheld"].values()
     assert out["evicted"] == [OWN]
-    assert (halted_py / OWN).read_text(encoding="utf-8") == "V = 0\n"
+    assert (halted_py / OWN).read_text(encoding="utf-8") == "V = 1\nNEW = 2\n"
     assert len(_blob_names(halted_py)) == 1
 
 
-def test_a_dirty_importer_outside_the_parked_set_keeps_the_py_in_the_tree(halted_py):
+def test_a_dirty_importer_outside_the_parked_set_does_not_keep_the_py_out_of_the_record(halted_py):
     _write(halted_py, PEER, "from pkg.own import NEW\n")
 
     out = _call(halted_py, LEDGER, **PASSING)
 
-    assert IMPORT_RISK_UNSCANNED not in (out.get("withheld") or {}).values()
+    assert out["withheld"][OWN] == EVICTED_PARKED
     assert (halted_py / OWN).read_text(encoding="utf-8") == "V = 1\nNEW = 2\n"
-    assert _blob_names(halted_py) == []
+    assert len(_blob_names(halted_py)) == 1
 
 
 def test_product_landing_carries_an_importer_with_a_name_in_a_landing_chunk(product_repo):

@@ -198,11 +198,67 @@ def test_dependent_listed_before_its_predecessor_is_cut_into_a_later_part(tmp_pa
 def test_cycle_between_plan_items_is_the_only_part_refusal(tmp_path):
     inventory = _repo_with_inventory(tmp_path)
     _item_one_depends_on(inventory, "I8")
+    clamped, _ = im.mint_spine(str(inventory), part=(1, _ITEMS + 5))
+    assert f"part_count: {_ITEMS}\n" in clamped
     text = inventory.read_text(encoding="utf-8").replace("| item 8 | `src/mod_8.py` | —", "| item 8 | `src/mod_8.py` | I1")
     inventory.write_text(text, encoding="utf-8")
 
     with pytest.raises(im.InventoryPartError, match="cycle"):
         im.mint_spine(str(inventory), part=(1, 2))
+
+
+def _rows_of_sizes(sizes):
+    rows = []
+    for item, n in zip("abcdefgh", sizes):
+        for r in range(n):
+            rows.append(
+                {"id": f"{item}.C{r}", "title": "t", "surface": f"{item}{r}.py", "writes": [f"{item}{r}.py"],
+                 "change_kind": "code-edit", "body": "b"}
+            )
+    return rows
+
+
+def test_part_count_above_the_item_count_clamps_to_one_item_per_part():
+    rows = _rows_of_sizes([1, 1, 1])
+    ids = list("abc")
+
+    parts = [[r["id"] for r in im.select_part(rows, ids, i, 99)] for i in (1, 2, 3)]
+
+    assert parts == [["a.C0"], ["b.C0"], ["c.C0"]]
+    with pytest.raises(im.InventoryPartError, match="holds no rows"):
+        im.select_part(rows, ids, 4, 99)
+
+
+def test_uneven_items_never_leave_a_part_empty_at_one_item_per_part():
+    rows = _rows_of_sizes([10, 1, 1, 1])
+    ids = list("abcd")
+
+    parts = [[r["id"] for r in im.select_part(rows, ids, i, 4)] for i in (1, 2, 3, 4)]
+
+    assert [len(p) for p in parts] == [10, 1, 1, 1]
+
+
+def test_a_lone_item_over_the_cap_is_named_not_cut_into_more_parts(tmp_path, monkeypatch, capsys):
+    inventory = _repo_with_inventory(tmp_path)
+    monkeypatch.setattr(emit_module, "_WORKFLOW_SCRIPT_BYTE_CAP", 10**9)
+    op_mod._dispatch_emit(
+        {
+            "inventory_path": str(inventory),
+            "output_path": str(tmp_path / "one.workflow.mjs"),
+            "inventory_part": [1, _ITEMS],
+            "target_root": str(tmp_path),
+        },
+        repo_root=tmp_path,
+    )
+    monkeypatch.setattr(emit_module, "_WORKFLOW_SCRIPT_BYTE_CAP", _script_size(tmp_path / "one.workflow.mjs") - 1)
+    capsys.readouterr()
+
+    rc = cli_module.main([*_argv(tmp_path, inventory), "--row-budget", "6"])
+
+    assert rc == cli_module.EXIT_DATA_ERROR
+    err = capsys.readouterr().err
+    assert "alone composes to" in err and "cannot cut" not in err
+    assert "plan item I" in err
 
 
 def test_item_waiting_on_an_unemitted_chunk_is_in_no_part_and_accounted(tmp_path):

@@ -36,8 +36,8 @@ def _marker(root: Path, run_id: str, **fields: object) -> None:
     (run_dir / "halted.json").write_text(json.dumps(fields), encoding="utf-8")
 
 
-def _park(root: Path, run_id: str = WAITER, owner: str = OWNER) -> None:
-    stage_wait.park(root, run_id, [owner], [], session_id="s1", sizing_rel=WAITER_SIZING, reason="co-tenant-wait")
+def _park(root: Path, run_id: str = WAITER, owner: str = OWNER, **kw: object) -> None:
+    stage_wait.park(root, run_id, [owner], [], session_id="s1", sizing_rel=WAITER_SIZING, reason="co-tenant-wait", **kw)
 
 
 def _spooled(root: Path) -> list[dict]:
@@ -52,17 +52,17 @@ def _owner_refires(root: Path) -> list[dict]:
 
 
 @pytest.mark.parametrize(
-    "marker",
+    "marker,policy",
     [
-        {"status": "halted", "sizing_rel": OWNER_SIZING},
-        {"status": "superseded", "sizing_rel": OWNER_SIZING},
-        {"status": "halted", "sizing_rel": OWNER_SIZING, "halted": "minted, not started: script unverified"},
+        ({"status": "halted", "sizing_rel": OWNER_SIZING}, "surface"),
+        ({"status": "superseded", "sizing_rel": OWNER_SIZING}, "proceed"),
+        ({"status": "halted", "sizing_rel": OWNER_SIZING, "halted": "minted, not started: script unverified"}, "surface"),
     ],
-    ids=["halted", "superseded", "launcherless"],
+    ids=["halted", "superseded-proceed", "launcherless"],
 )
-def test_dead_owner_gets_its_refire_spooled_and_the_waiter_keeps_waiting(repo, marker) -> None:
+def test_dead_owner_gets_its_refire_spooled_and_the_waiter_keeps_waiting(repo, marker, policy) -> None:
     _marker(repo, OWNER, **marker)
-    _park(repo)
+    _park(repo, on_blocker_dead=policy)
 
     acts = stranded_wait.sweep(repo, now=1000.0)
 
@@ -142,9 +142,9 @@ def test_resumed_owner_is_left_alone(repo) -> None:
     assert _spooled(repo) == []
 
 
-def test_past_the_cap_the_waiter_proceeds_without_the_owner(repo) -> None:
+def test_past_the_cap_the_waiter_proceeds_without_the_owner_under_proceed_policy(repo) -> None:
     _marker(repo, OWNER, status="halted", sizing_rel=OWNER_SIZING)
-    _park(repo)
+    _park(repo, on_blocker_dead="proceed")
     moment = time.time()
     for n in range(stranded_wait.MAX_STRANDED_REFIRES):
         acts = stranded_wait.sweep(repo, now=moment + n * (stranded_wait.REFIRE_COOLDOWN_S + 1))
@@ -217,3 +217,189 @@ def test_fifty_record_tick_is_cheap_and_spawns_nothing(repo, monkeypatch) -> Non
 
     assert acts == []
     assert elapsed_ms < 50
+
+
+SHA = "a" * 40
+DEAD_MARKER = {"status": "halted", "sizing_rel": OWNER_SIZING, "halted": "dependents_unstarted"}
+
+
+def _flags(root: Path) -> list[Path]:
+    return sorted((root / "state" / "pm-flags").glob("*.json")) if (root / "state" / "pm-flags").is_dir() else []
+
+
+def _waiter_refires(root: Path) -> list[dict]:
+    return [a for a in _spooled(root) if a[RESUME_RUN_ID_ARG] == WAITER]
+
+
+def test_cleared_run_end_resumes_by_refire_stamped_engine_with_no_session(repo) -> None:
+    _park(repo)
+
+    stranded_wait.sweep(repo, now=1000.0)
+
+    record = stage_wait.read(repo, WAITER)
+    assert (record["started"], record["resumed_by"], record["session"], record["action"], record["sha"]) == (
+        True, "engine", None, "refire", None,
+    )
+    assert isinstance(record["resumed_at"], float)
+    assert len(_waiter_refires(repo)) == 1
+
+
+def test_run_landed_blocker_close_landed_ships_at_the_marker_sha_after_retiring_the_token(repo, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import run_close_hand_landed
+
+    run_token.mint(repo, WAITER, "w.mjs", marker=True, session_id="s1", sizing_rel=WAITER_SIZING)
+    stage_wait.park(
+        repo, WAITER, [{"kind": "run_landed", "ref": OWNER}], [], session_id="s1", sizing_rel=WAITER_SIZING,
+        resume_action="close_landed",
+    )
+    seen: list = []
+
+    def _handler(params, repo_root=None):
+        seen.append((dict(params), run_token.is_live(repo, WAITER)))
+        return {"ok": True}
+
+    monkeypatch.setattr(run_close_hand_landed, "_handler", _handler)
+    assert stranded_wait.sweep(repo, now=1000.0) == [] and seen == []
+    _marker(repo, OWNER, status="landed", sha=SHA)
+
+    acts = stranded_wait.sweep(repo, now=1001.0)
+
+    assert [(a["action"], a["waiter"]) for a in acts] == [("wake", WAITER)]
+    assert seen == [({"run_id": WAITER, "sha": SHA}, False)]
+    record = stage_wait.read(repo, WAITER)
+    assert (record["resumed_by"], record["action"], record["sha"], record["session"]) == ("engine", "close_landed", SHA, None)
+    assert _spooled(repo) == []
+    assert stranded_wait.sweep(repo, now=1002.0) == [] and len(seen) == 1
+
+
+def test_refused_close_landed_is_attention_never_resumed_and_the_pm_answer_refires(repo, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import run_close_hand_landed
+
+    stage_wait.park(
+        repo, WAITER, [{"kind": "run_landed", "ref": OWNER}], [], session_id="s1", sizing_rel=WAITER_SIZING,
+        resume_action="close_landed",
+    )
+    monkeypatch.setattr(run_close_hand_landed, "_handler", lambda *_a, **_k: {"ok": False, "error": "sha not an ancestor"})
+    _marker(repo, OWNER, status="landed", sha=SHA)
+
+    stranded_wait.sweep(repo, now=1000.0)
+
+    record = stage_wait.read(repo, WAITER)
+    assert record["started"] is False and record["status"] == "attention" and "resumed_by" not in record
+    (flag,) = _flags(repo)
+    assert "sha not an ancestor" in flag.read_text(encoding="utf-8")
+    assert stranded_wait.sweep(repo, now=1001.0) == [] and _waiter_refires(repo) == []
+
+    flag.unlink()
+    acts = stranded_wait.sweep(repo, now=1002.0)
+
+    assert [a["action"] for a in acts] == ["pm-resolved"]
+    record = stage_wait.read(repo, WAITER)
+    assert (record["started"], record["resumed_by"], record["action"]) == (True, "pm", "refire")
+    assert "proceeded_without" not in record
+    assert len(_waiter_refires(repo)) == 1
+
+
+def test_notify_action_tells_the_group_em_and_spools_no_refire(repo, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import halt_split_tree
+
+    sent: list = []
+    monkeypatch.setattr(halt_split_tree, "send_live_gem", lambda root, text: sent.append(text) or True)
+    _park(repo, resume_action="notify")
+
+    stranded_wait.sweep(repo, now=1000.0)
+
+    assert len(sent) == 1 and WAITER in sent[0]
+    assert _waiter_refires(repo) == []
+    assert stage_wait.read(repo, WAITER)["action"] == "notify"
+
+
+def test_dead_blocker_under_surface_holds_the_park_for_the_pm_and_never_proceeds(repo) -> None:
+    _marker(repo, OWNER, **DEAD_MARKER)
+    _park(repo)
+
+    acts = stranded_wait.sweep(repo, now=1000.0)
+
+    assert [(a["action"], a["owner"]) for a in acts] == [("attention", OWNER)]
+    record = stage_wait.read(repo, WAITER)
+    assert record["status"] == "attention" and record["started"] is False
+    assert "proceeded_without" not in record
+    (flag,) = _flags(repo)
+    text = flag.read_text(encoding="utf-8")
+    assert OWNER in text and "dead run_end" in text
+    assert stranded_wait.sweep(repo, now=1001.0) == [] and _flags(repo) == [flag]
+    assert _spooled(repo) == []
+    assert stage_wait.expired(repo, WAITER, now=1000.0 + 10 * stage_wait.STAGE_WAIT_DEADLINE_S) is False
+
+
+def test_answered_attention_flag_resumes_without_the_blocker_recorded_as_pm(repo) -> None:
+    _marker(repo, OWNER, **DEAD_MARKER)
+    _park(repo)
+    stranded_wait.sweep(repo, now=1000.0)
+    _flags(repo)[0].unlink()
+
+    acts = stranded_wait.sweep(repo, now=1001.0)
+
+    assert [a["action"] for a in acts] == ["pm-resolved"]
+    record = stage_wait.read(repo, WAITER)
+    assert (record["started"], record["resumed_by"], record["proceeded_without"], record["blockers"]) == (
+        True, "pm", [OWNER], [],
+    )
+    assert len(_waiter_refires(repo)) == 1
+    assert stranded_wait.sweep(repo, now=1002.0) == []
+
+
+def test_surface_policy_at_the_refire_cap_holds_for_the_pm_instead_of_proceeding(repo) -> None:
+    _marker(repo, OWNER, status="halted", sizing_rel=OWNER_SIZING)
+    _park(repo)
+    moment = time.time()
+    for n in range(stranded_wait.MAX_STRANDED_REFIRES):
+        stranded_wait.sweep(repo, now=moment + n * (stranded_wait.REFIRE_COOLDOWN_S + 1))
+
+    final = stranded_wait.sweep(repo, now=moment + 10 * (stranded_wait.REFIRE_COOLDOWN_S + 1))
+
+    assert [a["action"] for a in final] == ["attention"]
+    assert "proceeded_without" not in stage_wait.read(repo, WAITER)
+
+
+def test_dead_remote_blocker_under_proceed_is_dropped_and_recorded(repo) -> None:
+    from coordinator_core.ops.dispatch_emit import blocker_check
+
+    blocker = {"kind": "remote_run", "ref": "box-run-1"}
+    stage_wait.park(repo, WAITER, [blocker], [], session_id="s1", sizing_rel=WAITER_SIZING, on_blocker_dead="proceed")
+    result = blocker_check.remote_result_path(repo, "box-run-1")
+    result.parent.mkdir(parents=True, exist_ok=True)
+    result.write_text(json.dumps({"status": "dead"}), encoding="utf-8")
+
+    acts = stranded_wait.sweep(repo, now=1000.0)
+
+    assert [a["action"] for a in acts] == ["proceed-without-owner"]
+    assert stage_wait.read(repo, WAITER)["proceeded_without"] == ["box-run-1"]
+
+
+def test_dead_remote_blocker_under_surface_holds_the_park(repo) -> None:
+    from coordinator_core.ops.dispatch_emit import blocker_check
+
+    stage_wait.park(
+        repo, WAITER, [{"kind": "remote_run", "ref": "box-run-1"}], [], session_id="s1", sizing_rel=WAITER_SIZING
+    )
+    result = blocker_check.remote_result_path(repo, "box-run-1")
+    result.parent.mkdir(parents=True, exist_ok=True)
+    result.write_text(json.dumps({"status": "dead"}), encoding="utf-8")
+
+    assert [a["action"] for a in stranded_wait.sweep(repo, now=1000.0)] == ["attention"]
+
+
+def test_file_state_blocker_clears_when_the_file_appears(repo) -> None:
+    stage_wait.park(
+        repo, WAITER, [{"kind": "file_state", "ref": "out/ready.txt"}], [], session_id="s1", sizing_rel=WAITER_SIZING,
+    )
+
+    assert stranded_wait.sweep(repo, now=1000.0) == []
+    (repo / "out").mkdir()
+    (repo / "out" / "ready.txt").write_text("x", encoding="utf-8")
+
+    acts = stranded_wait.sweep(repo, now=1001.0)
+
+    assert [(a["action"], a["owner"]) for a in acts] == [("wake", "out/ready.txt")]
+    assert len(_waiter_refires(repo)) == 1

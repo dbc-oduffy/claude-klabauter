@@ -33,8 +33,8 @@ def ledger_and_root(tmp_path: Path):
 
 
 def _judge(root, ledger, cited, **item):
-    items = [{"id": i.id, "status": "met", "met_by": "a.py"} for i in ledger.items if i is not cited]
-    items.append({"id": cited.id, "status": "met", "met_by": "a.py", **item})
+    items = [{"id": i.id, "status": "met", "evidence": "verified"} for i in ledger.items if i is not cited]
+    items.append({"id": cited.id, "status": "met", "evidence": "verified", **item})
     return rl.judge(ledger, {"items": items}, repo_root=root)
 
 
@@ -74,7 +74,7 @@ def test_capture_age_stamped_when_both_stamps_present(ledger_and_root) -> None:
 
 def test_not_met_row_is_not_double_blocked(ledger_and_root) -> None:
     root, ledger, cited = ledger_and_root
-    items = [{"id": i.id, "status": "met", "met_by": "a.py"} for i in ledger.items if i is not cited]
+    items = [{"id": i.id, "status": "met", "evidence": "verified"} for i in ledger.items if i is not cited]
     items.append({"id": cited.id, "status": "not_met", "remaining": ["x"]})
     out = rl.judge(ledger, {"items": items}, repo_root=root)
     assert not _blocked(out)

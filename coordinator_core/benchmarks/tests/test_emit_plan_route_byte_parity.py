@@ -1,8 +1,8 @@
 """Byte-parity contract for `emit-dispatch-workflow.py --plan`: the emitted script and receipt.
 
-Drives the DOOR (`coordinator/bin/emit-dispatch-workflow.py`) as a subprocess on the frozen
-fixture plan, so the test is implementation-blind: it must pass on whichever module the door
-routes a plain `--plan` argv to, before and after the plan-route cutover.
+Drives the DOOR's `main` (`coordinator/bin/emit-dispatch-workflow.py`) in a subprocess marked as
+a warm worker on the frozen fixture plan, so the test is implementation-blind: it must pass on
+whichever module the door routes a plain `--plan` argv to.
 
 The goldens (`emit_full_path_plan.expected.script.mjs` and `.receipt.json`) were captured once
 from the pre-rebuild path. A golden moves only for a named deliberate behaviour change, recorded
@@ -48,6 +48,21 @@ SESSION_PREFIX_TOKEN = "<SESSION_PREFIX8>"
 RUN_BASE_TOKEN = "<RUN_BASE>"
 RUN_BASE_PREFIX_TOKEN = "<RUN_BASE_PREFIX12>"
 EMITTED_AT_TOKEN = "<EMITTED_AT>"
+
+
+# The door refuses `--plan` outside a warm worker, so the probe marks the interpreter resident
+# first and then runs the door's own `main`, exactly as a warm pool worker does.
+_RESIDENT_DOOR_PROBE = (
+    "import importlib.util, os, sys\n"
+    "repo_root, door_path, *args = sys.argv[1:]\n"
+    "sys.path.insert(0, repo_root)\n"
+    "from coordinator_core.warm import residency\n"
+    "residency.mark_resident()\n"
+    "sys.path.insert(0, os.path.dirname(door_path))\n"
+    "spec = importlib.util.spec_from_file_location('door', door_path)\n"
+    "door = importlib.util.module_from_spec(spec); spec.loader.exec_module(door)\n"
+    "sys.exit(door.main(args))\n"
+)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -135,7 +150,7 @@ def emission(tmp_path_factory: pytest.TempPathFactory):
     }
     done = subprocess.run(
         [
-            sys.executable, str(_DOOR),
+            sys.executable, "-c", _RESIDENT_DOOR_PROBE, str(_REPO_ROOT), str(_DOOR),
             "--plan", str(repo / _PLAN_REL),
             "--out", str(out),
             "--force",

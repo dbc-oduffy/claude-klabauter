@@ -50,7 +50,7 @@ def _ledger(repo):
 
 
 def _met(ids):
-    return {"items": [{"id": i, "status": "met", "met_by": "a.py", "wired": True} for i in ids]}
+    return {"items": [{"id": i, "status": "met", "wired": True, "evidence": "verified"} for i in ids]}
 
 
 def test_out_of_scope_without_verbatim_refuses(repo) -> None:
@@ -108,14 +108,14 @@ def test_met_row_cannot_be_withheld(repo) -> None:
 
 def test_regression_unmet_essential_row_still_fails(repo) -> None:
     ledger = _ledger(repo)
-    got = rl.judge(ledger, {"items": [{"id": "R1", "status": "not_met"}, {"id": "R2", "status": "met", "met_by": "a.py"}]})
+    got = rl.judge(ledger, {"items": [{"id": "R1", "status": "not_met"}, {"id": "R2", "status": "met", "evidence": "verified"}]})
     assert got["pass"] is False and got["failures"][0]["id"] == "R1"
     assert got["open"] == []
 
 
 def test_regression_gated_withheld_row_behaves_as_before(repo) -> None:
     ledger = _ledger(repo)
-    verdict = {"items": [{"id": "R1", "status": "not_met", "withheld_by": "C9"}, {"id": "R2", "status": "met", "met_by": "a.py"}]}
+    verdict = {"items": [{"id": "R1", "status": "not_met", "withheld_by": "C9"}, {"id": "R2", "status": "met", "evidence": "verified"}]}
     assert rl.judge(ledger, verdict, gated=["C9"]) == {
         "pass": True, "failures": [], "open": [{"id": "R1", "reason": "withheld_by C9"}],
     }

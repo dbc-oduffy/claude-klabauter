@@ -7,6 +7,7 @@ the index and object store in process and spawn nothing."""
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import struct
 from pathlib import Path, PurePosixPath
@@ -165,18 +166,18 @@ def _scan_imports(text: str) -> List[ImportRecord]:
 
 def _records_for(root: Path, rel: str) -> List[ImportRecord]:
     """Import records of `rel`, reused while the file's size and mtime are unchanged."""
-    path = root / rel
+    key = os.path.join(os.fspath(root), rel)
     try:
-        st = path.stat()
+        st = os.stat(key)
     except OSError:
         return []
     stamp = (st.st_size, st.st_mtime_ns)
-    key = str(path)
     hit = _RECORD_CACHE.get(key)
     if hit is not None and hit[0] == stamp:
         return hit[1]
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        with open(key, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
     except OSError:
         return []
     records = _scan_imports(text) if "import" in text else []

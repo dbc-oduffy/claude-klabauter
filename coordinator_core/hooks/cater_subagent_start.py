@@ -1167,6 +1167,31 @@ def _compose_docs_checker_rag_leg(
     return "\n\n" + DOCS_CHECKER_RAG_CLAUSE
 
 
+def _compose_example_retrieval_repo_leg(payload: Dict[str, Any], cwd: Optional[str], already: str) -> str:
+    """The example-retrieval-repo-first line for any worker on a example-retrieval-repo-served repo, else "".
+
+    Dedupes on `_EXAMPLE_RETRIEVAL_REPO_LINE_MARK` against `already` (the legs composed so far) and the
+    worker's own spawn prompt, so an emit-composed worker never sees the line twice. No
+    subprocess; a lookup miss or error yields "".
+    """
+    from coordinator_core.ops.dispatch_emit import emit
+
+    if emit._EXAMPLE_RETRIEVAL_REPO_LINE_MARK in already:
+        return ""
+    root = cwd or payload.get("cwd")
+    if not isinstance(root, str) or not root:
+        return ""
+    line = emit._example_retrieval_repo_brief_line(_show_toplevel_no_spawn(root) or root)
+    if not line:
+        return ""
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    prompt = chan.read_spawn_prompt(chan.spawn_transcript_path(payload))
+    if prompt and emit._EXAMPLE_RETRIEVAL_REPO_LINE_MARK in prompt:
+        return ""
+    return "\n\n" + line
+
+
 _RUN_ID_IN_PROMPT_RE = re.compile(
     r"(?:workflow-sidecars/[A-Za-z0-9_-]+|(?:state|scratch)/warp)/([A-Za-z0-9][A-Za-z0-9._-]{0,200})/"
 )
@@ -1316,6 +1341,14 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
     except Exception:
         params_text = ""
 
+    rag_text = ""
+    try:
+        rag_text = _compose_example_retrieval_repo_leg(
+            payload, cwd, sidecar_text + blocks_leg_text + docs_checker_text
+        )
+    except Exception:
+        rag_text = ""
+
     _advance_run_phase(payload, cwd)
 
     parts: list[str] = []
@@ -1329,6 +1362,8 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
         parts.append(docs_checker_text)
     if params_text:
         parts.append(params_text)
+    if rag_text:
+        parts.append(rag_text)
     if role_append:
         parts.append("\n\n" + role_append)
 

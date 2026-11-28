@@ -1159,4 +1159,6 @@ class AckStore:
                 self._results_bytes -= dropped[1]
             mint_ns = mint_ns_of(evicted_key)
             if mint_ns is not None and mint_ns > self.low_water_ns:
-                self.low_water_ns = mint_ns
+                # TRAP: a client-supplied key stamped past this engine's clock would lift the mark
+                # beyond every key the engine mints and refuse all later admissions; clamp to now.
+                self.low_water_ns = min(mint_ns, time.monotonic_ns())

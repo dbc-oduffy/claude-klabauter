@@ -45,9 +45,9 @@ def nudge_push(
             return _result("not_pushed", "detached or unresolvable HEAD")
         from coordinator_core.hooks.auto_push import branch_gate
 
-        ok, _ = branch_gate(branch)
+        ok, _ = branch_gate(branch, str(worktree_root))
         if not ok:
-            return _result("not_pushed", f"branch {branch} is outside the work/* push policy")
+            return _result("not_pushed", f"branch {branch} is outside the work/* and <user.name>/* push policy")
         remote, why = _owned_remote(Path(repo_root), branch)
         if remote is None:
             return _result("not_pushed", why)

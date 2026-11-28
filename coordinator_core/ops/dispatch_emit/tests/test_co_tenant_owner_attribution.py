@@ -1,4 +1,4 @@
-"""co_tenant_owner.owner_of ranks a halted run withholding or keeping a path before one that only declares it."""
+"""co_tenant_owner.peer_hunk_runs names a halted run withholding or keeping a path, never one that only declares it; owner_of names none."""
 
 from __future__ import annotations
 
@@ -43,25 +43,27 @@ def _halt(repo: Path, run_id: str, *, withheld=(), declared=(), kept=(), indexed
 
 
 @pytest.mark.parametrize("holder_first", [True, False])
-def test_withholding_run_outranks_a_later_declared_only_run(repo, holder_first) -> None:
+def test_withholding_run_is_attributed_and_a_declared_only_run_is_not(repo, holder_first) -> None:
     holder_ns, stale_ns = (1_000, 2_000) if holder_first else (2_000, 1_000)
     _halt(repo, HOLDER, withheld=(PATH,), at_ns=holder_ns)
     _halt(repo, STALE, declared=(PATH,), at_ns=stale_ns)
-    assert co_tenant_owner.owner_of(repo, PATH, exclude_run_id=NEEDER) == {"run_id": HOLDER, "state": "halted"}
+    assert co_tenant_owner.peer_hunk_runs(repo, PATH, exclude_run_id=NEEDER) == (HOLDER,)
+    assert co_tenant_owner.owner_of(repo, PATH, exclude_run_id=NEEDER) == {"run_id": None, "state": None}
 
 
 @pytest.mark.parametrize("holder_first", [True, False])
-def test_kept_return_outranks_a_later_declared_only_run(repo, holder_first) -> None:
+def test_kept_return_is_attributed_and_a_declared_only_run_is_not(repo, holder_first) -> None:
     holder_ns, stale_ns = (1_000, 2_000) if holder_first else (2_000, 1_000)
     _halt(repo, HOLDER, withheld=(PATH,), kept=(PATH,), declared=(PATH,), indexed=(), at_ns=holder_ns)
     _halt(repo, STALE, declared=(PATH,), at_ns=stale_ns)
     assert co_tenant_kept.kept_paths(repo, HOLDER) == frozenset({PATH})
-    assert co_tenant_owner.owner_of(repo, PATH, exclude_run_id=NEEDER)["run_id"] == HOLDER
+    assert co_tenant_owner.peer_hunk_runs(repo, PATH, exclude_run_id=NEEDER) == (HOLDER,)
 
 
-def test_declared_only_run_is_still_the_owner_when_nothing_withholds(repo) -> None:
+def test_declared_only_run_is_neither_attributed_nor_the_owner_when_nothing_withholds(repo) -> None:
     _halt(repo, STALE, declared=(PATH,), at_ns=1_000)
-    assert co_tenant_owner.owner_of(repo, PATH, exclude_run_id=NEEDER) == {"run_id": STALE, "state": "halted"}
+    assert co_tenant_owner.peer_hunk_runs(repo, PATH, exclude_run_id=NEEDER) == ()
+    assert co_tenant_owner.owner_of(repo, PATH, exclude_run_id=NEEDER) == {"run_id": None, "state": None}
 
 
 def test_kept_paths_of_an_unreadable_or_unsafe_run_is_empty(repo) -> None:
@@ -76,4 +78,4 @@ def test_attribution_spawns_nothing(repo, monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "Popen", boom)
     _halt(repo, HOLDER, withheld=(PATH,), at_ns=1_000)
     _halt(repo, STALE, declared=(PATH,), at_ns=2_000)
-    assert co_tenant_owner.owner_of(repo, PATH, exclude_run_id=NEEDER)["run_id"] == HOLDER
+    assert co_tenant_owner.peer_hunk_runs(repo, PATH, exclude_run_id=NEEDER) == (HOLDER,)

@@ -59,13 +59,12 @@ def _measure(monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[dict, int, fl
     return out, len(spawns), cpu_ms
 
 
-@pytest.mark.pending_fix  # base is red; the reap rewrite turns it green
+@pytest.mark.pending_fix  # red: per-run outcome.json creation and commit_v2 pathspec frontmatter reads exceed the 500ms bar at 2000 dirs
 def test_reap_spawns_are_constant_and_under_budget_at_2000_dirs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     small_out, small_spawns, small_ms = _measure(monkeypatch, _repo_with_abandoned_runs(tmp_path, SMALL))
     large_out, large_spawns, large_ms = _measure(monkeypatch, _repo_with_abandoned_runs(tmp_path, LARGE))
-    print(f"reap base: {SMALL} dirs spawns={small_spawns} ms={small_ms:.0f}; {LARGE} dirs spawns={large_spawns} ms={large_ms:.0f}")
     assert len(small_out["reaped"]) == SMALL and small_out["committed_sha"], small_out
     assert len(large_out["reaped"]) == LARGE and large_out["committed_sha"], large_out
     assert large_spawns == small_spawns, (small_spawns, large_spawns)

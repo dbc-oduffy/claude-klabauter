@@ -28,7 +28,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("LESSON_PROMOTE_OUTBOX_ROOT", str(outbox))
     monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
     monkeypatch.setattr(
-        claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], [])
+        claims, "list_claims_by_session_checked", lambda sid, cwd=None, classes=None: ([("handoff", "b.md")], [])
     )
     return repo, script
 

@@ -255,11 +255,80 @@ def test_forward_failure_is_a_reason_not_a_raise(home, boxes, monkeypatch):
     monkeypatch.setattr(
         box_transport, "invoke_remote", lambda *a, **k: {"ok": False, "state": "unknown", "reason": "ssh_timeout"}
     )
-    assert _reply("rc-1", origin_box="boxz") == {"ok": False, "reason": "forward_failed:ssh_timeout"}
+    out = _reply("rc-1", origin_box="boxz")
+    assert out["ok"] is True and out["stored_locally"] is True
+    assert out["forward_reason"] == "forward_failed:ssh_timeout"
     monkeypatch.setattr(
         box_transport, "invoke_remote", lambda *a, **k: {"ok": False, "state": "unknown", "reason": "not_ssh_transport"}
     )
-    assert _reply("rc-1", origin_box="boxz")["reason"] == "forward_unsupported_transport"
+    assert _reply("rc-2", origin_box="boxz")["forward_reason"] == "forward_unsupported_transport"
+
+
+def test_forward_with_no_invoke_path_stores_the_reply_locally(home, boxes, monkeypatch):
+    from coordinator_core.group_em import box_transport
+
+    monkeypatch.setattr(
+        box_transport, "invoke_remote", lambda *a, **k: {"ok": False, "state": "unknown", "reason": "no_invoke_path"}
+    )
+    out = _reply("rc-far", key="b1:s1", origin_box="boxz")
+    assert out["result"] == "stored" and out["forward_reason"] == "forward_failed:no_invoke_path"
+    assert roll_call.load_record("rc-far")["replies"]["b1:s1"]["goals"][0]["goal_id"] == "G1"
+
+
+def test_session_key_defaults_to_the_callers_own_session(home, boxes, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "my-sid")
+    rc = ops._groupem_roll_call({"dry_run": True})["roll_call_id"]
+    out = ops._groupem_roll_call_reply({"roll_call_id": rc, "eta": "2026-12-01"})
+    assert out["result"] == "stored"
+    assert ops._groupem_roll_call_status({"roll_call_id": rc})["replied"] == ["my-sid"]
+    monkeypatch.delenv("COORDINATOR_SESSION_ID")
+    for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+    with pytest.raises(CallerFacingValidationError):
+        ops._groupem_roll_call_reply({"roll_call_id": rc, "eta": "2026-12-01"})
+
+
+def test_defaulted_key_for_an_unknown_roll_call_travels_box_qualified(home, boxes, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "my-sid")
+    out = ops._groupem_roll_call_reply({"roll_call_id": "rc-far", "eta": "2026-12-01"})
+    assert out == {"ok": True, "result": "stored", "late": False}
+    ((box_id, op, params),) = boxes
+    assert (box_id, op) == ("boxz", "groupem.roll_call_reply")
+    assert params["session_key"] == "boxa:my-sid" and params["forwarded_by"] == "boxa"
+
+
+def test_minimal_reply_without_goals_is_stored_and_shown(home, boxes):
+    rc = ops._groupem_roll_call({"dry_run": True})["roll_call_id"]
+    jobs = [{"id": "j1", "pid": 42, "cores": 2, "hard_stop": "2026-11-28T00:00:00Z"}]
+    out = ops._groupem_roll_call_reply(
+        {"roll_call_id": rc, "session_key": "sid-1", "jobs": jobs, "queued": ["plan-x"], "eta": "2026-11-28"}
+    )
+    assert out["result"] == "stored"
+    status = ops._groupem_roll_call_status({"roll_call_id": rc})
+    assert status["replied"] == ["sid-1"] and status["goals"] == []
+    assert status["reports"] == [
+        {"session_key": "sid-1", "late": False, "jobs": jobs, "queued": ["plan-x"], "eta": "2026-11-28"}
+    ]
+    again = ops._groupem_roll_call_reply(
+        {"roll_call_id": rc, "session_key": "sid-1", "jobs": jobs, "queued": ["plan-x"], "eta": "2026-11-28"}
+    )
+    assert again["result"] == "unchanged"
+
+
+def test_empty_reply_and_malformed_extras_are_refused(home, boxes):
+    rc = ops._groupem_roll_call({"dry_run": True})["roll_call_id"]
+    out = ops._groupem_roll_call_reply({"roll_call_id": rc, "session_key": "sid-1"})
+    assert out["error"] == "RollCallReplyRefused"
+    assert {(r["field"], r["reason"]) for r in out["refusals"]} == {("reply", "missing")}
+    bad = ops._groupem_roll_call_reply({"roll_call_id": rc, "session_key": "sid-1", "jobs": "x"})
+    assert {(r["field"], r["reason"]) for r in bad["refusals"]} == {("jobs", "not_a_list")}
+    assert ops._groupem_roll_call_status({"roll_call_id": rc})["replied"] == []
+
+
+def test_goals_still_refuse_when_supplied_incomplete(home, boxes):
+    rc = ops._groupem_roll_call({"dry_run": True})["roll_call_id"]
+    out = _reply(rc, goals=[_goal(gap="")], eta="2026-12-01")
+    assert out["error"] == "RollCallReplyRefused"
 
 
 def test_forwarded_reply_lands_only_for_a_far_addressee(home, boxes):

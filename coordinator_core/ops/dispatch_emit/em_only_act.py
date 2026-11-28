@@ -39,6 +39,7 @@ import re
 from typing import Any, Dict, Iterator, Optional
 
 from coordinator_core.bash_guards.guard_subagent_heavy_ue_launch import launches_heavy
+from coordinator_core.ops.dispatch_emit import stage_family
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _INLINE = re.compile(r"`([^`\n]+)`")
@@ -247,16 +248,29 @@ def code_deliverable(raw: Dict[str, Any]) -> bool:
     return False
 
 
+def _names_family_runner(raw: Dict[str, Any]) -> bool:
+    """True when the row's `family` is non-claude: the family names the runner.
+
+    An invalid family is True too, so the declared legs yield False and
+    `spine_read._row_family_dispatch` raises its refusal rather than the row going EM-owed.
+    """
+    try:
+        return stage_family.resolve(raw.get("family")) != stage_family.FALLBACK
+    except ValueError:
+        return True
+
+
 def row_is_em_performed(raw: Dict[str, Any]) -> bool:
     """True for a declared `performer: em` or `em_run: true` row, an `agent_type` in
     `EM_OWNED_AGENT_TYPES`, a ruling-ask row, one whose only act is agent-forbidden, or one blocked on
     a capability only the EM session has.
 
     INVARIANT: the declared-field legs (performer, em_run, agent_type) yield False for a
-    `code_deliverable` row: code routes to an executor. `forbidden_sole_act` and `em_only_capability`
+    `code_deliverable` row (code routes to an executor) and for a row naming a non-claude `family`
+    (the family runner). `forbidden_sole_act` and `em_only_capability`
     still hold: a genuine EM-only capability stays EM.
     """
-    declared = not code_deliverable(raw) and (
+    declared = not code_deliverable(raw) and not _names_family_runner(raw) and (
         raw.get("performer") == "em"
         or raw.get("em_run") is True
         or raw.get("agent_type") in EM_OWNED_AGENT_TYPES
