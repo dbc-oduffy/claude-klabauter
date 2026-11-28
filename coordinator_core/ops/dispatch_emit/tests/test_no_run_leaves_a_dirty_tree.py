@@ -293,7 +293,7 @@ def _author_review_edit(root: Path) -> None:
     agent_dir.mkdir(parents=True)
     (agent_dir / "em-session-id.txt").write_text(SESSION + "\n", encoding="utf-8")
     ledger = hub / SESSION / "dispatched-agents.txt"
-    ledger.write_text(f"{_REVIEW_AGENT}\thost\tcoordinator:code-reviewer\t1\n", encoding="utf-8")
+    ledger.write_text(f"{_REVIEW_AGENT}\thost\tcoordinator:code-reviewer\t9999999999\n", encoding="utf-8")
     with (agent_dir / touch_record.RECORD_FILENAME).open("ab") as fh:
         fh.write(
             touch_record.encode_line(

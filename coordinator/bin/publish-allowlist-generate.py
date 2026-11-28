@@ -779,10 +779,20 @@ def main(argv=None) -> int:
         metavar="COMMIT",
         help="with --check: judge the portable, declarations and tracked set as of COMMIT",
     )
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        metavar="DIR",
+        help="derive and write against the tree at DIR instead of the one holding this script",
+    )
     args = parser.parse_args(argv)
     if args.ref and not args.check:
         parser.error("--ref requires --check")
-    global _SOURCE_REF
+    global _SOURCE_REF, _REPO_ROOT, _PORTABLE_PATH, _DECLARATIONS_PATH
+    if args.repo_root:
+        _REPO_ROOT = args.repo_root.resolve()
+        _PORTABLE_PATH = _REPO_ROOT / "setup" / "publish-targets.portable"
+        _DECLARATIONS_PATH = _REPO_ROOT / "setup" / "publish-allowlist-declarations.yaml"
     _SOURCE_REF = args.ref
     _fill_commit_clone()
     pending = tuple(p.replace("\\", "/") for p in args.pending)

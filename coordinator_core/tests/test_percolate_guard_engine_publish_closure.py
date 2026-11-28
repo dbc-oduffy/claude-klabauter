@@ -95,11 +95,11 @@ def _closure(root: str) -> set[str]:
     return seen
 
 
-def test_admitted_percolate_set_is_exactly_the_guard_closure_modules():
+def test_admitted_percolate_set_is_the_guard_closure_plus_shadow_store():
     admitted = _declared_admit()
-    assert len(admitted) == 8
     percolate_closure = {m for m in _closure(f"{_PKG}.guards") if m.startswith(_PKG)}
-    assert percolate_closure == admitted
+    assert admitted - percolate_closure == {f"{_PKG}.shadow_store"}
+    assert percolate_closure <= admitted
 
 
 def test_field7_carries_exactly_the_admitted_percolate_entries_and_not_the_bare_name():

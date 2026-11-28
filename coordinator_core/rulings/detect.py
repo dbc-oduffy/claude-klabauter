@@ -44,10 +44,11 @@ from coordinator_core.rulings.contract import GATE_ROUTE, STATUS_ACCEPTED, Rulin
 
 _ACTOR = r"(?:(?:the|a|an|our|their)\s+)?(?:PM|human|(?:product\s+)?owner)(?:'s)?\b"
 _GAP = r"[^.?!\n]{0,40}?"
+_HANDOFF_GAP = r"(?:(?!\b(?:ends?|when|whenever|once|after|as\s+soon\s+as)\b)[^.?!\n]){0,40}?"
 DEFER_RE = re.compile(
     r"pending\s+an?\s+PM\s+ruling|PM\s+to\s+decide|needs?\s+an?\s+PM\s+ruling"
     r"|deferred\s+to\s+the\s+PM"
-    rf"|\b(?:defer\w*|park(?:ed|ing|s)?|punt\w*|await\w*|wait(?:s|ing)?\s+(?:on|for)){_GAP}\b{_ACTOR}"
+    rf"|\b(?:defer\w*|park(?:ed|ing|s)?|punt\w*|await\w*|wait(?:s|ing)?\s+(?:on|for)){_HANDOFF_GAP}\b{_ACTOR}"
     rf"|\bleav(?:e|es|ing)\b{_GAP}\b(?:to|with|for|up\s+to)\s+{_ACTOR}"
     rf"|\b{_ACTOR}\s+(?:should|must|needs?\s+to|to|will|can)\s+(?:weigh\s+in|decide|rule|call|choose|confirm|approve)"
     r"|\bTBD\b|\bopen\s+questions?\b",
@@ -343,8 +344,19 @@ def detect(text: str, rulings: Iterable[Ruling], root: Path) -> dict:
             continue
         if "?" not in para:
             unnamed.extend(_line_of(para, m.start()) for m in phrases)
+        lines = para.split("\n")
+        near_idx = {
+            j
+            for m in phrases
+            for j in range(para.count("\n", 0, m.start()) - 1, para.count("\n", 0, m.start()) + 2)
+        }
+        near = "\n".join(ln for j, ln in enumerate(lines) if j in near_idx)
+        near_rest = "\n".join(ln for j, ln in enumerate(lines) if j in near_idx and not (scoped_out and _scope_out(ln)))
         for r in accepted:
-            if r.id not in deferred and r.id not in cleared and _scope_hit(rest if r.id in scoped_out else para, r):
+            if r.id in deferred or r.id in cleared:
+                continue
+            whole, local = (rest, near_rest) if r.id in scoped_out else (para, near)
+            if _cites_id(whole, r.id) or _scope_hit(local, r):
                 deferred.append(r.id)
 
     contradicted: list[str] = []

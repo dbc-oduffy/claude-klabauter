@@ -21,7 +21,8 @@ def _store(root: Path) -> Path:
 
 
 def _agent(
-    hub: Path, agent_id: str, subagent_type: str, events, *, owner: str = SID, ledger: str = SID
+    hub: Path, agent_id: str, subagent_type: str, events, *, owner: str = SID, ledger: str = SID,
+    dispatched: float = 1001.0,
 ) -> None:
     adir = hub / ".agents" / agent_id
     adir.mkdir(parents=True, exist_ok=True)
@@ -29,7 +30,7 @@ def _agent(
     ledger_file = hub / ledger / "dispatched-agents.txt"
     ledger_file.parent.mkdir(parents=True, exist_ok=True)
     with ledger_file.open("a", encoding="utf-8") as fh:
-        fh.write(f"{agent_id}\thost\t{subagent_type}\t1\n")
+        fh.write(f"{agent_id}\thost\t{subagent_type}\t{dispatched}\n")
     with (adir / touch_record.RECORD_FILENAME).open("ab") as fh:
         for path, ts, kind in events:
             fh.write(
@@ -179,3 +180,62 @@ def test_an_agent_whose_sink_family_is_older_than_since_is_skipped_without_an_ow
     assert src._written_since(str(fresh), 2000.0)
     assert not src._written_since(str(bare), 2000.0)
     assert not src._written_since(str(tmp_path / "missing"), 2000.0)
+
+
+def test_quiet_agents_are_settled_without_listing_their_dirs(tmp_path: Path, monkeypatch) -> None:
+    hub = _store(tmp_path)
+    for i in range(40):
+        _agent(hub, f"q{i}", "coordinator:code-reviewer", [("old.py", 10.0, touch_record.KIND_WRITE)])
+    _agent(hub, "live", "coordinator:code-reviewer", [("new.py", 2000.0, touch_record.KIND_WRITE)])
+    import os as _os
+    os = _os
+
+    real, listed = _os.scandir, []
+
+    def spy(path="."):
+        listed.append(str(path))
+        return real(path)
+
+    monkeypatch.setattr(review_edit_source.os, "scandir", spy)
+    old = 1.0
+    for i in range(40):
+        _os.utime(hub / ".agents" / f"q{i}" / touch_record.RECORD_FILENAME, (old, old))
+    assert review_edit_source.session_review_writes(tmp_path, SID, SINCE) == {"new.py": "live"}
+    assert not [p for p in listed if _os.path.basename(p).startswith("q")]
+
+
+def test_agent_ledger_parse_is_linear_in_rows(tmp_path: Path) -> None:
+    import time
+
+    sdir = tmp_path / "s"
+    sdir.mkdir()
+    rows = "".join(f"a{i}\thost\tcoordinator:code-reviewer\t1\n" for i in range(40000))
+    (sdir / "dispatched-agents.txt").write_text(rows, encoding="utf-8")
+    t = time.perf_counter()
+    ids = review_edit_source._agent_ids(str(sdir))
+    assert len(ids) == 40000
+    assert time.perf_counter() - t < 1.0
+
+
+def test_agents_dispatched_before_since_are_never_opened(tmp_path: Path, monkeypatch) -> None:
+    hub = _store(tmp_path)
+    for i in range(30):
+        _agent(hub, f"old{i}", "coordinator:code-reviewer", [("x.py", 2000.0, touch_record.KIND_WRITE)], dispatched=10.0)
+    _agent(hub, "mine", "coordinator:code-reviewer", [("new.py", 2000.0, touch_record.KIND_WRITE)])
+    opened: list[str] = []
+    real = review_edit_source._written_since
+    monkeypatch.setattr(
+        review_edit_source, "_written_since", lambda d, s: (opened.append(Path(d).name), real(d, s))[1]
+    )
+    assert review_edit_source.session_review_writes(tmp_path, SID, SINCE) == {"new.py": "mine"}
+    assert opened == ["mine"]
+
+
+def test_agent_ids_keeps_rows_with_an_unparsable_or_missing_epoch(tmp_path: Path) -> None:
+    sdir = tmp_path / "s"
+    sdir.mkdir()
+    kind = "coordinator:code-reviewer"
+    rows = [f"a\th\t{kind}\tnotanumber", f"b\th\t{kind}", f"c\th\t{kind}\t5", f"d\th\t{kind}\t2000"]
+    (sdir / "dispatched-agents.txt").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    assert review_edit_source._agent_ids(str(sdir), 1000.0) == ["a", "b", "d"]
+    assert review_edit_source._agent_ids(str(sdir)) == ["a", "b", "c", "d"]

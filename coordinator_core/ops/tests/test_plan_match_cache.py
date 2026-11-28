@@ -41,7 +41,7 @@ def test_body_beyond_the_frontmatter_is_never_read(tmp_path, monkeypatch):
     reads: list[int] = []
     real_text = Path.read_text
     monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: (reads.append(1), real_text(self, *a, **k))[1])
-    real_open = Path.open
+    real_open = plan_match._open_binary
 
     class _Spy:
         def __init__(self, fh):
@@ -58,6 +58,6 @@ def test_body_beyond_the_frontmatter_is_never_read(tmp_path, monkeypatch):
         def __exit__(self, *exc):
             self._fh.close()
 
-    monkeypatch.setattr(Path, "open", lambda self, *a, **k: _Spy(real_open(self, *a, **k)))
+    monkeypatch.setattr(plan_match, "_open_binary", lambda *a, **k: _Spy(real_open(*a, **k)))
     assert plan_match._collect_plans(plans)[0]["title"] == "Big"
     assert sum(reads) <= plan_match._HEAD_CHUNK * 2

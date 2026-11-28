@@ -1,6 +1,7 @@
 """Which comments in a commit range were added by agent-trailered commits."""
 from __future__ import annotations
 
+import functools
 import re
 import subprocess
 from pathlib import Path
@@ -52,6 +53,7 @@ def default_runner(args: list[str], cwd: Path, stdin: Optional[bytes]) -> Option
     return proc.stdout if proc.returncode == 0 else None
 
 
+@functools.lru_cache(maxsize=4)
 def _agent_added_lines(log_out: str) -> dict[str, list[str]]:
     """Per path, the added lines of agent commits in a `%x1e%H%x1f%B%x1f` + `-p -U0` log."""
     by_path: dict[str, list[str]] = {}
@@ -95,6 +97,25 @@ def _parse_cat_file(out: bytes, count: int) -> list[Optional[str]]:
     return results
 
 
+_CLIKE_SUFFIXES = frozenset({".ts", ".tsx", ".js", ".mjs", ".cpp", ".h", ".hpp", ".cs", ".jsonc"})
+
+
+def may_hold_comment(path: str, added: list[str]) -> bool:
+    """Whether any agent-added line carries a comment or docstring opener for ``path``'s language."""
+    # invariant: an agent comment has every line added, its opener line included.
+    suffix = Path(path).suffix.lower()
+    if suffix == ".py":
+        openers: tuple[str, ...] = ("#", '"""', "'''")
+    elif suffix in _CLIKE_SUFFIXES:
+        openers = ("//", "/*")
+    else:
+        openers = ("#",)
+    return any(o in line for line in added for o in openers)
+
+
+_CODE_PATHSPECS = tuple(f"*{suffix}" for suffix in sorted(SUFFIXES))
+
+
 def agent_added_comments(
     repo_root: Path | str,
     base: str,
@@ -111,6 +132,7 @@ def agent_added_comments(
         [
             "log", "-p", "-U0", "--no-color", "--no-ext-diff", "--no-renames",
             f"--format={_COMMIT_MARK}%H{_FIELD_MARK}%B{_FIELD_MARK}", rng,
+            "--", *_CODE_PATHSPECS,
         ],
         root,
         None,
@@ -118,8 +140,11 @@ def agent_added_comments(
     if not log_raw:
         return []
     added = _agent_added_lines(log_raw.decode("utf-8", errors="replace"))
-    paths = sorted(p for p in added if Path(p).suffix.lower() in SUFFIXES)
+    code = [p for p in added if Path(p).suffix.lower() in SUFFIXES]
+    paths = sorted(p for p in code if may_hold_comment(p, added[p]))
     if not paths:
+        if code and runner is not None:
+            run(["cat-file", "--batch"], root, b"")
         return []
     if comments_fn is None:
         from .added import added_comments as comments_fn

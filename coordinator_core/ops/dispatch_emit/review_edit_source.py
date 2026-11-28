@@ -45,25 +45,35 @@ def _bare_type(subagent_type: str) -> str:
     return subagent_type.strip().rsplit(":", 1)[-1]
 
 
-def _agent_ids(session_dir: str) -> Optional[list[str]]:
-    """Agent ids dispatched by the session whose type is not in the denylist; None when
-    the dispatch ledger is unreadable; an absent ledger means no agent was dispatched."""
+def _dispatched_before(epoch: str, since: float) -> bool:
+    # invariant: a review agent is dispatched after the snapshot it writes against, so an agent
+    # dispatched before ``since`` holds no write of this run; an unparsable epoch keeps the agent.
+    try:
+        return float(epoch) < since
+    except ValueError:
+        return False
+
+
+def _agent_ids(session_dir: str, since: Optional[float] = None) -> Optional[list[str]]:
+    """Agent ids dispatched by the session, at or after ``since`` when given, whose type is not in the
+    denylist; None when the dispatch ledger is unreadable; an absent ledger means no agent was dispatched."""
     try:
         text = Path(session_dir, _DISPATCHED_AGENTS).read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
     except OSError:
         return None
-    ids: list[str] = []
+    ids: dict[str, None] = {}
     for row in text.splitlines():
         fields = row.split("\t")
         if len(fields) < 3 or not fields[0]:
             continue
         if _bare_type(fields[2]) in NON_REVIEW_SUBAGENT_TYPES:
             continue
-        if fields[0] not in ids:
-            ids.append(fields[0])
-    return ids
+        if since is not None and len(fields) > 3 and _dispatched_before(fields[3], since):
+            continue
+        ids.setdefault(fields[0])
+    return list(ids)
 
 
 def session_review_writes(
@@ -117,6 +127,16 @@ def _written_since(agent_dir: str, since: float) -> bool:
     owner pointer of such an agent (one open per dispatched agent, ~1.7k per session) need not be read.
     An unreadable member counts as written: the owner read then decides, as before."""
     try:
+        live = touch_record.sink_path(agent_dir)
+        live_mtime = os.stat(live).st_mtime
+        # invariant: a live sink is newer than every rotated generation, so a quiet live file
+        # settles the family without listing the directory.
+        return live_mtime >= since
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return True
+    try:
         for member in touch_record.discover_family(touch_record.sink_path(agent_dir)):
             if os.stat(member).st_mtime >= since:
                 return True
@@ -135,7 +155,7 @@ def _collect(
     hub = core.sessions_dir(str(worktree_root))
     if not hub:
         return None
-    ids = _agent_ids(os.path.join(hub, session_id))
+    ids = _agent_ids(os.path.join(hub, session_id), since)
     if ids is None:
         return None
     writes: dict[str, str] = {}

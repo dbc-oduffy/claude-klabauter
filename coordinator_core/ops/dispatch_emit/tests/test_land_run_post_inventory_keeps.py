@@ -54,7 +54,7 @@ def _agent_write(root, rel: str, text: str, at: float) -> None:
     hub = hub_for_common(root / ".git")
     (hub / SELF).mkdir(parents=True, exist_ok=True)
     (hub / SELF / "dispatched-agents.txt").write_text(
-        f"{AGENT}\thost\tcoordinator:code-reviewer\t1\n", encoding="utf-8"
+        f"{AGENT}\thost\tcoordinator:code-reviewer\t9999999999\n", encoding="utf-8"
     )
     agent_dir = hub / ".agents" / AGENT
     agent_dir.mkdir(parents=True, exist_ok=True)

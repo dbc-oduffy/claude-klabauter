@@ -136,6 +136,7 @@ import json
 import re
 import os
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -145,6 +146,7 @@ from coordinator_core.commenting import authorship
 from coordinator_core.commenting.added import added_comments
 from coordinator_core.commenting.allow import strip_marker
 from coordinator_core.commenting.authorship import agent_added_comments
+from coordinator_core.commenting.windowed import OVERSIZE_CHARS, windowed_added_comments
 from coordinator_core.ops.ceremony import governed_by
 from coordinator_core.git import git_objects, git_state
 from coordinator_core.git.content_hash import eol_folded_sha256
@@ -1130,8 +1132,13 @@ def _open_probe(
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 
-def _land_findings(repo_root: Path, base: str) -> Tuple[List[dict], List[dict]]:
-    """Major ``(comment rows, provenance rows)`` for ``base..HEAD``; both empty unless ``base`` is a full sha."""
+_LAND_SCAN_BUDGET_S = 0.3
+
+
+def _land_findings(
+    repo_root: Path, base: str, notes: Optional[List[str]] = None
+) -> Tuple[List[dict], List[dict]]:
+    """Major ``(comment rows, provenance rows)`` for ``base..HEAD``; ``notes`` receives why a scan was cut short or failed."""
     if not _FULL_SHA_RE.fullmatch(base):
         return [], []
     sink: List[bytes] = []
@@ -1156,10 +1163,40 @@ def _land_findings(repo_root: Path, base: str) -> Tuple[List[dict], List[dict]]:
             sink.append(out)
         return out
 
+    agent_lines: Dict[str, List[str]] = {}
+    started = time.thread_time()
+    skipped: List[str] = []
+
+    def comments_fn(path: str, before: str, after: str) -> list:
+        nonlocal agent_lines
+        if not agent_lines and sink:
+            agent_lines = authorship._agent_added_lines(sink[0].decode("utf-8", errors="replace"))
+        tails = [ln.rstrip() for ln in agent_lines.get(path, ())]
+        if time.thread_time() - started > _LAND_SCAN_BUDGET_S:
+            skipped.append(path)
+            return []
+
+        def on_agent_lines(text: str) -> bool:
+            norm = [n for n in (authorship._norm(ln) for ln in text.split("\n")) if n]
+            return bool(norm) and all(any(authorship._ends_at_boundary(a, n) for a in tails) for n in norm)
+
+        if path.endswith(".py") and len(after) > OVERSIZE_CHARS:
+            stripped = {t.strip() for t in tails}
+            hits = windowed_added_comments(path, after, stripped.__contains__, on_agent_lines)
+            if hits is None:
+                skipped.append(path)
+                return []
+            return hits
+        return added_comments(path, before, after, keep=on_agent_lines)
+
     try:
-        found = agent_added_comments(repo_root, base, "HEAD", runner=runner)
-    except (OSError, subprocess.SubprocessError, ValueError):
+        found = agent_added_comments(repo_root, base, "HEAD", runner=runner, comments_fn=comments_fn)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        if notes is not None:
+            notes.append(f"comment scan failed: {type(exc).__name__}")
         return [], []
+    if skipped and notes is not None:
+        notes.append(f"comment scan incomplete: {len(skipped)} file(s) over the {_LAND_SCAN_BUDGET_S}s budget not lexed")
     log_text = sink[0].decode("utf-8", errors="replace") if sink else ""
     provenance = governed_by.provenance_findings(repo_root, log_text, folded[0] if folded else None) if sink else []
     return _present_comments(repo_root, found, heads), provenance
@@ -1178,6 +1215,20 @@ def _present_comments(repo_root: Path, found: list, heads: Dict[str, str]) -> Li
         except OSError:
             continue
         open_keys = {_comment_key(c.text) for c in found if c.path == path}
+        if len(current) > OVERSIZE_CHARS and path.endswith(".py"):
+            firsts = [c.text.split(chr(10), 1)[0].strip() for c in found if c.path == path]
+            head_lines = {ln.strip() for ln in heads.get(path, "").split(chr(10))} if path in heads else set()
+            fresh = {ln.strip() for ln in current.split(chr(10))} - head_lines if path in heads else set()
+            hits = windowed_added_comments(
+                path, current, lambda ln: ln in fresh or any(f in ln for f in firsts)
+            )
+            rows.extend(
+                {"path": path, "line": c.line, "text": c.text, "severity": "major", "scope": "default-path"}
+                for c in hits or ()
+                if _comment_key(c.text) in open_keys
+                or any(ln.strip() in fresh for ln in c.text.split(chr(10)))
+            )
+            continue
         if path in heads:
             open_keys |= {_comment_key(c.text) for c in added_comments(path, heads[path], current)}
         for comment in added_comments(path, "", current):
@@ -1275,7 +1326,9 @@ def review_reverify(
         except TripwireScanUnavailable as exc:
             picked = {"owned": [], "tripwires": [], "tripwires_not_selected": [], "notice": ""}
             scan_error = f"tripwire scan unavailable: {exc}"
-        land_comments, land_provenance = _land_findings(repo_root, base)
+        scan_notes: List[str] = []
+        land_comments, land_provenance = _land_findings(repo_root, base, scan_notes)
+        scan_error = "; ".join(filter(None, [scan_error, *scan_notes])) or None
         out = {
             "edited": edited,
             "created": created,

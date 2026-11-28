@@ -132,3 +132,34 @@ def test_multi_word_quantity_matches_across_separators(sep):
     assert rx.search(f"the wall{sep}thickness is set")
     assert rx.search("the wallthickness is set") is None
     assert rx.search("the wall thicknesses") is None
+
+
+MECHANISM = "The wait always ends: an attention park ends when the PM answers, and it surfaces to the PM."
+
+
+def test_pm_as_subject_of_awaited_event_is_not_a_deferral(tmp_path):
+    out = _run(MECHANISM, tmp_path)
+    assert out["verdict"] == "pass"
+    assert out["unnamed_deferrals"] == []
+
+
+def test_real_unnamed_deferral_still_refuses_with_no_deferred_ids(tmp_path):
+    out = _run("Open item: parked awaiting the PM.", tmp_path)
+    assert out["verdict"] == "refuse"
+    assert out["deferred"] == []
+    assert out["unnamed_deferrals"]
+
+
+def test_unnamed_deferral_far_from_scope_does_not_name_a_ruling(tmp_path):
+    filler = "\n".join(f"line {i}" for i in range(6))
+    text = f"Touches plan.prep_gate here.\n{filler}\nOpen item: awaiting the PM."
+    out = _run(text, tmp_path)
+    assert out["verdict"] == "refuse"
+    assert out["deferred"] == []
+
+
+def test_named_ruling_deferral_names_only_that_id(tmp_path):
+    other = Ruling(id="other", pm_turn="x", scope=("logo",), text="logo is red", recorded="2026-11-21")
+    text = "The logo colour is settled.\n" + "\n".join(f"l{i}" for i in range(5)) + "\nplan.prep_gate is awaiting PM."
+    out = _run(text, tmp_path, rulings=(R, other))
+    assert out["deferred"] == ["no-pending-pm"]

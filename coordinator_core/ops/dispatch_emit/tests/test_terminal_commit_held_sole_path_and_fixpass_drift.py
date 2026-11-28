@@ -132,7 +132,7 @@ def test_a_held_chunk_with_a_disjoint_landed_chunk_commits_only_the_landed_paths
 def _agent_write(repo: Path, rel: str, text: str, at: float) -> None:
     hub = hub_for_common(repo / ".git")
     (hub / SELF).mkdir(parents=True, exist_ok=True)
-    (hub / SELF / "dispatched-agents.txt").write_text(f"{AGENT}\thost\tcoordinator:code-reviewer\t1\n", encoding="utf-8")
+    (hub / SELF / "dispatched-agents.txt").write_text(f"{AGENT}\thost\tcoordinator:code-reviewer\t9999999999\n", encoding="utf-8")
     agent_dir = hub / ".agents" / AGENT
     agent_dir.mkdir(parents=True, exist_ok=True)
     touch_record.append_event(

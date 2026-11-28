@@ -1,4 +1,5 @@
 """Tests for unimatrix-install.py: version gate, install copy, hooks, peer doctrine, platform parity."""
+import functools
 import importlib.util
 import io
 import json
@@ -37,6 +38,19 @@ _REAL_OPENSSH_REPORT = ui.openssh_receive_report
 _REAL_IS_SCRATCH_ROOT = ui._seed().is_scratch_root
 
 
+@functools.cache
+def _registry_file():
+    """The real host_registry.py, resolved once before any test repoints the installer's lookup."""
+    return Path(ui._load_host_registry().__file__)
+
+
+def _ship_registry(engine_root):
+    """Give a fixture engine the host declaration the installer reads from an engine tree."""
+    target = Path(engine_root).joinpath(*ui.HOST_REGISTRY_REL)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_registry_file(), target)
+
+
 @pytest.fixture(autouse=True)
 def _engine(monkeypatch, tmp_path):
     root = tmp_path / "engine"
@@ -50,9 +64,7 @@ def _engine(monkeypatch, tmp_path):
     (package.parent / "host_hooks" / "codex_lifecycle.py").write_text("# capability fixture", encoding="utf-8")
     (package.parent / "codex_status").mkdir(exist_ok=True)
     (package.parent / "codex_status" / "hook.py").write_text("# capability fixture", encoding="utf-8")
-    registry_dir = root / "coordinator_core" / "install"
-    registry_dir.mkdir()
-    shutil.copy2(ui._load_host_registry().__file__, registry_dir / ui.HOST_REGISTRY_REL[-1])
+    _ship_registry(root)
     _write_stubs(_engine_bin(tmp_path))
     monkeypatch.setattr(ui, "resolve_engine_root", lambda: (str(root), "published-target"))
     return root
@@ -421,7 +433,7 @@ def test_install_seeds_hooks_json_when_absent(monkeypatch, tmp_path):
     assert entry["matcher"] == ui.AGY_TOOL_MATCHER
     cmd = _hook_cmd(hp)
     assert _fwd(sys.executable) in cmd and _fwd(dest / ui.AGY_HOOK_SCRIPT) in _shown(cmd)
-    assert "coordinator/bin" not in cmd.replace("\\", "/")
+    assert _fwd(ui._BIN_DIR) not in cmd.replace("\\", "/")
 
 
 def test_install_leaves_existing_key_byte_identical(monkeypatch, tmp_path):
@@ -1353,6 +1365,11 @@ def test_default_install_registers_guards_doctrine_and_skills(monkeypatch, tmp_p
 
 
 def test_unresolved_engine_root_refuses_the_install_and_copies_nothing(monkeypatch, tmp_path):
+    ui._seed()
+    carried = tmp_path / "carried" / "bin"
+    (carried / "lib").mkdir(parents=True)
+    shutil.copy2(_registry_file(), carried / "lib" / ui.HOST_REGISTRY_REL[-1])
+    monkeypatch.setattr(ui, "_BIN_DIR", carried)
     monkeypatch.setattr(ui, "resolve_engine_root", lambda: (None, "unresolved"))
     home, rc, out = _default_install(monkeypatch, tmp_path)
     assert rc == 7 and "REFUSE: engine root unresolved (unresolved)" in out
@@ -1407,6 +1424,7 @@ def test_reinstall_with_changed_engine_root_updates_guard(monkeypatch, tmp_path)
     (package.parent / "host_hooks" / "codex_lifecycle.py").write_text("# capability fixture", encoding="utf-8")
     (package.parent / "codex_status").mkdir(exist_ok=True)
     (package.parent / "codex_status" / "hook.py").write_text("# capability fixture", encoding="utf-8")
+    _ship_registry(other)
     _write_stubs(_engine_bin(tmp_path, "engine2"))
     monkeypatch.setattr(ui, "resolve_engine_root", lambda: (str(other), "published-target"))
     buf = io.StringIO()
@@ -1904,11 +1922,12 @@ def test_trust_reaps_the_codex_daemon_left_under_its_codex_home(monkeypatch, tmp
     monkeypatch.setattr(ui.shutil, "which", lambda n: sys.executable)
     real_popen = ui.subprocess.Popen
     monkeypatch.setattr(ui.subprocess, "Popen", lambda argv, **k: real_popen([sys.executable, str(stub), *argv[1:]], **k))
-    tripwire = sys.modules["coordinator_core.conftest"]
-    own_tree = tripwire._is_own_process_tree
-    monkeypatch.setattr(
-        tripwire, "_is_own_process_tree",
-        lambda pid: own_tree(pid) or (pidfile.exists() and pid == int(pidfile.read_text(encoding="utf-8"))))
+    tripwire = sys.modules.get("coordinator_core.conftest")  # trap: absent where no coordinator_core tree sits beside bin/
+    if tripwire is not None:
+        own_tree = tripwire._is_own_process_tree
+        monkeypatch.setattr(
+            tripwire, "_is_own_process_tree",
+            lambda pid: own_tree(pid) or (pidfile.exists() and pid == int(pidfile.read_text(encoding="utf-8"))))
     try:
         ok, note = ui.trust_codex_hook(chp, dest_dir=tmp_path)
         assert ok is (mode == "ok"), note
@@ -2034,6 +2053,7 @@ def test_default_install_resolves_engine_root_through_settings_home_door(monkeyp
     (root / "coordinator_core" / "host_hooks" / "codex_lifecycle.py").write_text("# capability fixture", encoding="utf-8")
     (root / "coordinator_core" / "codex_status").mkdir(exist_ok=True)
     (root / "coordinator_core" / "codex_status" / "hook.py").write_text("# capability fixture", encoding="utf-8")
+    _ship_registry(root)
     _write_stubs(_engine_bin(tmp_path, "door-root"))
     monkeypatch.setattr(ui, "resolve_engine_root", _REAL_RESOLVE)
     monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
@@ -3220,6 +3240,7 @@ def _fake_engine(tmp_path):
     (pkg.parent / "__init__.py").write_text("")
     (pkg / "__init__.py").write_text("")
     (pkg / "__main__.py").write_text("import sys\nprint('host=' + ' '.join(sys.argv[1:]))\n")
+    _ship_registry(tmp_path / "eng")
     _write_stubs(_engine_bin(tmp_path, "eng"))
     return tmp_path / "eng"
 
@@ -4062,14 +4083,41 @@ def test_host_names_come_from_the_registry_not_a_literal():
     assert ui.HOST_NAMES == registry.ids() == ("claude", "codex", "agy", "grok")
 
 
-def test_install_scripts_ships_the_host_registry_and_the_installed_copy_loads_it(tmp_path):
-    ui.install_scripts(ui._BIN_DIR, tmp_path)
-    shipped = tmp_path / "lib" / "host_registry.py"
-    assert shipped.is_file()
-    spec = importlib.util.spec_from_file_location("installed_ui_probe", tmp_path / "unimatrix-install.py")
+@pytest.mark.parametrize("source", ["engine-tree", "bin-lib"])
+def test_install_scripts_ships_the_host_registry_and_the_installed_copy_loads_it(tmp_path, source):
+    src = tmp_path / "src" / "coordinator" / "bin"
+    src.mkdir(parents=True)
+    _write_stubs(src)
+    shutil.copy2(_SRC, src / "unimatrix-install.py")
+    if source == "engine-tree":
+        _ship_registry(tmp_path / "src")
+    else:
+        (src / "lib").mkdir()
+        shutil.copy2(_registry_file(), src / "lib" / ui.HOST_REGISTRY_REL[-1])
+    dest = tmp_path / "dest"
+    ui.install_scripts(src, dest)
+    assert (dest / "lib" / "host_registry.py").is_file()
+    spec = importlib.util.spec_from_file_location("installed_ui_probe", dest / "unimatrix-install.py")
     installed = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(installed)  # import (--help) needs no registry
     assert installed.HOST_NAMES == ui.HOST_NAMES
+
+
+def _missing_vendored(bin_dir):
+    wanted = list(ui.VENDORED_SCRIPTS) + sorted(ui.script_closure(bin_dir) - set(ui.VENDORED_SCRIPTS))
+    return [n for n in wanted if not (Path(bin_dir) / n).is_file()]
+
+
+def test_every_vendored_script_is_a_file_in_the_bin_dir_under_test():
+    missing = _missing_vendored(ui._BIN_DIR)
+    assert not missing, f"vendored scripts absent from {ui._BIN_DIR}: {', '.join(missing)}"
+
+
+def test_the_vendored_mirror_check_names_the_script_a_bin_dir_lacks(tmp_path):
+    _write_stubs(tmp_path)
+    assert _missing_vendored(tmp_path) == []
+    (tmp_path / ui.VENDORED_SCRIPTS[-1]).unlink()
+    assert _missing_vendored(tmp_path) == [ui.VENDORED_SCRIPTS[-1]]
 
 
 def test_missing_host_registry_is_a_typed_refusal_at_use_not_at_import(tmp_path, monkeypatch):
@@ -4618,3 +4666,11 @@ def test_install_repoints_a_checkout_forced_relay_at_the_installed_copy(monkeypa
     assert lines[0].endswith(f'{installed}" {_KEY}') and "claude-klabauter" not in lines[0]
     assert lines[1:] == [other, filekey]
     assert ui.rewrite_forced_relay_paths(keys, tmp_path / "home" / "unimatrix") == 0
+
+
+def test_bin_lib_host_registry_fallback_target_is_tracked_and_equals_the_engine_source():
+    lib_copy = ui._BIN_DIR / "lib" / ui.HOST_REGISTRY_REL[-1]
+    engine_copy = ui._BIN_DIR.parent.parent.joinpath(*ui.HOST_REGISTRY_REL)
+    assert lib_copy.is_file(), f"the bin/lib fallback target {lib_copy} is absent from the published layout"
+    if engine_copy.is_file():
+        assert lib_copy.read_bytes() == engine_copy.read_bytes()

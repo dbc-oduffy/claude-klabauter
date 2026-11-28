@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import io
 import re
-from collections import Counter
+import threading
+import tokenize
+from collections import Counter, OrderedDict
 from dataclasses import dataclass
+from typing import Callable, Optional
 
 from coordinator_core.attribution import is_exempt_path
 from coordinator_core.comment_strip import lang_clike, lang_hash, lang_python
@@ -40,16 +45,47 @@ def _suffix(rel_path: str) -> str:
     return name[dot:].lower() if dot > 0 else ""
 
 
-def _python(text: str) -> list[_Found]:
+_BODY_FIELDS = ("body", "orelse", "finalbody", "handlers", "cases")
+
+
+def _docstring_spans(tree: ast.AST) -> list[tuple[int, int]]:
+    """Docstring line spans, visiting statement lists only: defs never nest inside expressions."""
+    spans: set[tuple[int, int]] = set()
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            first = node.body[0] if node.body else None
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(
+                first.value.value, str
+            ):
+                spans.add((first.lineno, first.end_lineno or first.lineno))
+        for name in _BODY_FIELDS:
+            children = getattr(node, name, None)
+            if isinstance(children, list):
+                stack.extend(c for c in children if isinstance(c, ast.AST))
+    return sorted(spans)
+
+
+def _python(text: str) -> list[_Found] | None:
+    """One parse and one tokenize; None when `text` does not parse."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
     lines = text.splitlines()
-    found = []
-    for c in lang_python.collect_candidates(text):
-        raw = c.text.rstrip("\r\n")
-        if c.kind == "docstring":
-            found.append(_Found(c.line_start, raw, "docstring", False, c.line_end > c.line_start))
-        else:
-            standalone = lines[c.line_start - 1].lstrip().startswith("#")
-            found.append(_Found(c.line_start, raw.rstrip(), "comment", standalone, False))
+    kept = text.splitlines(keepends=True)
+    found = [
+        _Found(start, "".join(kept[start - 1:end]).rstrip("\r\n"), "docstring", False, end > start)
+        for start, end in _docstring_spans(tree)
+    ]
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type == tokenize.COMMENT:
+                line = tok.start[0]
+                found.append(_Found(line, tok.string.rstrip(), "comment", lines[line - 1].lstrip().startswith("#"), False))
+    except tokenize.TokenError:
+        pass
     return found
 
 
@@ -64,12 +100,36 @@ def _spans(text: str, spans) -> list[_Found]:
     return found
 
 
-def _lex(suffix: str, text: str) -> list[_Found]:
+def _lex(suffix: str, text: str) -> list[_Found] | None:
+    """Comments in `text`; None when a `.py` text does not parse."""
     if suffix == ".py":
         return _python(text)
     if suffix in _CLIKE:
         return _spans(text, lang_clike.find_comment_spans(text))
     return _spans(text, lang_hash.find_comment_spans(text, shell_heredocs=suffix in _SHELL))
+
+
+_LEX_CACHE_MAX = 256
+_lex_cache: "OrderedDict[tuple[str, bytes], tuple[_Found, ...] | None]" = OrderedDict()
+_lex_cache_lock = threading.Lock()
+
+
+def _lexed(suffix: str, text: str) -> tuple[_Found, ...] | None:
+    """`_lex` memoised per content, so a file is lexed once however many callers ask for it."""
+    if not text:
+        return ()
+    key = (suffix, hashlib.blake2b(text.encode("utf-8", "surrogatepass"), digest_size=16).digest())
+    with _lex_cache_lock:
+        if key in _lex_cache:
+            _lex_cache.move_to_end(key)
+            return _lex_cache[key]
+    found = _lex(suffix, text)
+    result = None if found is None else tuple(found)
+    with _lex_cache_lock:
+        _lex_cache[key] = result
+        if len(_lex_cache) > _LEX_CACHE_MAX:
+            _lex_cache.popitem(last=False)
+    return result
 
 
 def _identity(f: _Found) -> tuple[str, str]:
@@ -105,21 +165,34 @@ def _judged(found: list[_Found]) -> list[_Found]:
     return flagged
 
 
-def added_comments(rel_path: str, before: str, after: str) -> list[AddedComment]:
-    """Comments added between `before` and `after`; suffixes outside SUFFIXES, exempt paths, generated files and lexer failures return []."""
+def added_comments(
+    rel_path: str,
+    before: str,
+    after: str,
+    *,
+    keep: Optional[Callable[[str], bool]] = None,
+) -> list[AddedComment]:
+    """Comments added between `before` and `after`; suffixes outside SUFFIXES, exempt paths, generated files and lexer failures return [].
+
+    `before` is lexed only when a flagged comment of `after` (that `keep` accepts, when given) survives to be compared against it."""
     suffix = _suffix(rel_path)
     if suffix not in SUFFIXES or is_exempt_path(rel_path) or _is_fixture_path(rel_path):
         return []
     if is_generated_file(after):
         return []
     try:
-        if suffix == ".py" and before.strip():
-            ast.parse(before)
-        after_found = _lex(suffix, after)
-        before_found = _lex(suffix, before)
+        after_found = _lexed(suffix, after)
+        if not after_found:
+            return []
+        flagged = [f for f in _judged(list(after_found)) if keep is None or keep(f.text)]
+        if not flagged:
+            return []
+        before_found = _lexed(suffix, before)
     except Exception:
         return []
-    seen = Counter(_identity(f) for f in before_found)
+    if before_found is None and before.strip():
+        return []
+    seen = Counter(_identity(f) for f in before_found or ())
     new: list[_Found] = []
     for f in after_found:
         key = _identity(f)
@@ -128,8 +201,4 @@ def added_comments(rel_path: str, before: str, after: str) -> list[AddedComment]
         else:
             new.append(f)
     new_ids = {id(f) for f in new}
-    return [
-        AddedComment(rel_path, f.line, f.text, f.kind)
-        for f in _judged(after_found)
-        if id(f) in new_ids
-    ]
+    return [AddedComment(rel_path, f.line, f.text, f.kind) for f in flagged if id(f) in new_ids]

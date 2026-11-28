@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+
 import re
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
@@ -141,6 +143,7 @@ def unresolved_shas(root: Path, shas: Iterable[str]) -> List[str]:
     return sorted({s for s in wanted for m in missing if m == f"{s}^{{commit}}"})
 
 
+@functools.lru_cache(maxsize=4)
 def pending_rows(log_text: str) -> List[dict]:
     """``[{commit, paths, shas}]`` for each agent commit in ``log_text`` that touches code."""
     from coordinator_core.commenting.added_types import SUFFIXES

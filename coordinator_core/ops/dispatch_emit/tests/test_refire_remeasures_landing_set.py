@@ -142,7 +142,7 @@ def _review_agent_writes(root: Path, rel: str, text: str, at: float) -> None:
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "em-session-id.txt").write_text(SELF + "\n", encoding="utf-8")
     (hub / SELF / "dispatched-agents.txt").write_text(
-        f"{_AGENT}\thost\tcoordinator:code-reviewer\t1\n", encoding="utf-8"
+        f"{_AGENT}\thost\tcoordinator:code-reviewer\t9999999999\n", encoding="utf-8"
     )
     with (agent_dir / touch_record.RECORD_FILENAME).open("ab") as fh:
         fh.write(

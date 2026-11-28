@@ -469,8 +469,9 @@ def install_scripts(src_dir, dest_dir, on_copy=None):
         if (Path(src_dir) / "lib" / name).is_file():
             _mkdir_0755(dest / "lib")
             _copy_if_changed(Path(src_dir) / "lib" / name, dest / "lib" / name, on_copy)
-    registry_src = Path(src_dir).parent.parent.joinpath(*HOST_REGISTRY_REL)
-    if registry_src.is_file():  # the one host declaration ships beside the scripts; _load_host_registry reads dest/lib first
+    registry_src = next((p for p in (Path(src_dir).parent.parent.joinpath(*HOST_REGISTRY_REL),
+                                     Path(src_dir) / "lib" / HOST_REGISTRY_REL[-1]) if p.is_file()), None)
+    if registry_src:  # the one host declaration ships beside the scripts; _load_host_registry reads dest/lib first
         _mkdir_0755(dest / "lib")
         _copy_if_changed(registry_src, dest / "lib" / HOST_REGISTRY_REL[-1], on_copy)
     core_pkg = Path(src_dir) / "_unimatrix"
@@ -1710,6 +1711,7 @@ from _unimatrix.install_toml import (  # noqa: E402, F401
     seed_codex_status_line,
 )
 from _unimatrix.codex_reap import reap_codex_home  # noqa: E402
+from _unimatrix.off_switch import is_off as _unimatrix_off  # noqa: E402
 
 
 def _tui_field_edit(text, value, field) -> str:
@@ -2788,7 +2790,7 @@ def _refuse_real_agent_dir(root):
         raise guard.TestHomeRefusal("login_agent_dir", root) from None
 
 
-def register_login_agent(dest_dir, agent_dir=None, schtasks=None, launchctl=None, uid=None):
+def register_login_agent(dest_dir, agent_dir=None, schtasks=None, launchctl=None, uid=None) -> tuple:
     """Register one run-once-at-login agent for the installed autolink; return (state, where).
 
     state is "created", "updated" or "present" (plist / systemd unit), "registered" (Windows HKCU Run value,
@@ -2798,7 +2800,10 @@ def register_login_agent(dest_dir, agent_dir=None, schtasks=None, launchctl=None
     loaded is booted out and bootstrapped again: launchd keeps running the old ProgramArguments until logout,
     and an interpreter swap there leaves the job on a binary without the Local Network grant ("No route to
     host" from the agent while every ssh-session context links).
+    A present DISABLED marker arms nothing: the result is "skipped".
     """
+    if _unimatrix_off():
+        return "skipped", "Unimatrix is switched off (DISABLED marker present)"
     if sys.platform == "win32":
         wr = _winreg()
         _refuse_real_run_key(wr)
