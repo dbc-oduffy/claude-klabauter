@@ -1315,9 +1315,29 @@ def check_inbox_host(mode):
 class Mirror:
     """One registered inbox name: its bound socket and the registry files it owns."""
 
-    def __init__(self, srv, path, our_ino, entry_path, key_path):
+    def __init__(self, srv, path, our_ino, entry_path, key_path, entry=None):
         self.srv, self.path, self.our_ino = srv, path, our_ino
         self.entry_path, self.key_path = entry_path, key_path
+        self.entry = entry
+
+    def refresh_far_liveness(self, now):
+        """Re-stamp the entry file by atomic replace when its stamp is older than LEASE_SECONDS / 2."""
+        field = _core_module("protocol").FAR_LIVE_AT_FIELD
+        if self.entry is None or now - self.entry.get(field, 0) <= LEASE_SECONDS / 2:
+            return
+        stamped = {**self.entry, field: now}
+        tmp = self.entry_path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+                json.dump(stamped, fh)
+            os.replace(tmp, self.entry_path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return
+        self.entry = stamped
 
     def release(self):
         release(self.path, self.our_ino, [self.entry_path, self.key_path])
@@ -1328,7 +1348,7 @@ class Mirror:
         self.srv.close()
 
 
-def register_name(name, raw, key_body, export_reply=False, mux=False):
+def register_name(name, raw, key_body, export_reply=False, mux=False, now=None):
     """Register mirror `name`: free-check, stale-marker clear, socket, registry entry and peer key.
 
     Both `inbox` (one name per process) and `inbox-mux` (many) run exactly this. `mux` names the
@@ -1371,6 +1391,9 @@ def register_name(name, raw, key_body, export_reply=False, mux=False):
             # This field is intentionally absent from MIRROR_FIELDS: only explicit mode
             # selection can opt in, never an untrusted registration payload.
             entry["unimatrixReplyInbox"] = True
+        if mux:
+            import time
+            entry[_core_module("protocol").FAR_LIVE_AT_FIELD] = time.time() if now is None else now
         base = os.path.expanduser(SESS)
         entry_path = os.path.join(base, f"{pid}.{name_digest(name)}.json" if mux else f"{pid}.json")
         key_path = os.path.join(base, key_file_name(pid, path))
@@ -1388,7 +1411,7 @@ def register_name(name, raw, key_body, export_reply=False, mux=False):
             except OSError:
                 pass
         raise
-    return Mirror(srv, path, our_ino, entry_path, key_path)
+    return Mirror(srv, path, our_ino, entry_path, key_path, entry)
 
 
 def inbox(name, export_reply=False):
@@ -1411,8 +1434,8 @@ def _emit_frame(out, name, frame=None, error=None):
     out.flush()
 
 
-def _mux_apply(frame, mirrors, out):
-    """Apply one add/drop/data frame from the near client to the `mirrors` table."""
+def _mux_apply(frame, mirrors, out, now=None):
+    """Apply one add/drop/data frame from the near client to the `mirrors` table; an add stamps far-liveness."""
     if not isinstance(frame, dict):
         return
     op, name = frame.get("op"), frame.get("name")
@@ -1425,7 +1448,7 @@ def _mux_apply(frame, mirrors, out):
     if op == "drop":
         return
     try:
-        mirrors[name] = register_name(name, frame.get("entry"), str(frame.get("key") or ""), mux=True)
+        mirrors[name] = register_name(name, frame.get("entry"), str(frame.get("key") or ""), mux=True, now=now)
     except SystemExit as e:
         _emit_frame(out, name, error=str(e.code))
     except Exception as e:  # one name's bind/ps/write failure must not end the process hosting every name
@@ -1444,12 +1467,14 @@ def _wrap_line(name, out):
     return emit
 
 
-def serve_mux(stdin_fd, out, lease=LEASE_SECONDS, clock=None):
+def serve_mux(stdin_fd, out, lease=LEASE_SECONDS, clock=None, wall=None):
     """Serve every registered name's socket and the add/drop frame stream; return at stdin EOF or lease lapse.
 
+    Each heartbeat re-stamps far-liveness on every held mirror (`wall` is epoch seconds).
     Single-threaded: a sender that holds a connection open stalls every name and the frame stream."""
     import time
     clock = clock or time.monotonic
+    wall = wall or time.time
     mirrors, pending, last = {}, b"", None
     try:
         while True:
@@ -1461,14 +1486,19 @@ def serve_mux(stdin_fd, out, lease=LEASE_SECONDS, clock=None):
                 chunk = os.read(stdin_fd, 65536)
                 if not chunk:
                     return
-                last = _heartbeat_seen(chunk, last, clock) or last
+                beat = _heartbeat_seen(chunk, last, clock)
+                last = beat or last
                 pending += chunk
                 *lines, pending = pending.split(b"\n")
                 for line in lines:
                     try:
-                        _mux_apply(json.loads(line), mirrors, out)
+                        _mux_apply(json.loads(line), mirrors, out, now=wall())
                     except ValueError:
                         continue
+                if beat is not None:
+                    now = wall()
+                    for m in mirrors.values():
+                        m.refresh_far_liveness(now)
                 continue
             for srv in ready:
                 if srv in socks:
@@ -1624,6 +1654,61 @@ def peer_arg(argv):
     return argv[1] if len(argv) >= 2 and argv[0] == "--peer" and valid_inbox_name(argv[1]) else None
 
 
+def fold_box_id(name):
+    """The box-identity fold of `box_registry.fold_box_id`, inlined: the forced command can run with no engine."""
+    folded = name.lower()
+    for suffix in (".local", "-lan"):
+        if folded.endswith(suffix) and len(folded) > len(suffix):
+            folded = folded[: -len(suffix)]
+    return folded
+
+
+_PEER_TAIL_RE = re.compile(r"\s--peer\s+(\S+)\s*$")
+
+
+def _pinned_key_bodies(pin, path):
+    """Key bodies of the managed `authorized_keys` lines at `path` whose forced command ends `--peer <pin>`."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    bodies = set()
+    for raw in text.splitlines():
+        body = managed_key_body(raw)
+        cmd = _COMMAND_RE.search(raw) if body else None
+        tail = _PEER_TAIL_RE.search(cmd.group(1)) if cmd else None
+        if tail and tail.group(1) == pin:
+            bodies.add(body)
+    return bodies
+
+
+def resolve_peer(peer, issuer_box, home=None, authorized_keys=None, run=None):
+    """The member box name `issuer_box` is accepted as under the `--peer` pin, else None; every failure refuses."""
+    if not isinstance(peer, str) or not isinstance(issuer_box, str) or not issuer_box:
+        return None
+    if fold_box_id(peer) == fold_box_id(issuer_box):
+        return peer
+    try:
+        path = authorized_keys or effective_authorized_keys(Path.home() / ".ssh" / "authorized_keys")[0]
+        pinned = _pinned_key_bodies(peer, path)
+        membership = load_membership()
+        if not pinned or membership is None:
+            return None
+        members = membership.verified_members(Path(home) if home is not None else settings_home(),
+                                              **({"run": run} if run is not None else {}))
+        row = next((m for m in members if fold_box_id(m["box"]) == fold_box_id(issuer_box)), None)
+        if row is not None and pinned & set(membership.member_key_bodies(row)):
+            return row["box"]
+    except Exception:  # noqa: BLE001 -- an unreadable or unverifiable membership refuses
+        pass
+    return None
+
+
+def peer_accepts(peer, issuer_box, home=None, authorized_keys=None, run=None):
+    """True when `issuer_box` is accepted under the forced command's `--peer` pin; see `resolve_peer`."""
+    return resolve_peer(peer, issuer_box, home, authorized_keys, run) is not None
+
+
 def _read_envelope(line):
     try:
         env = json.loads(line)
@@ -1640,7 +1725,7 @@ def revoke(args, line, receive=None, peer=None):
     env = _read_envelope(line)
     if env is None:
         return {"ok": False, "reason": "bad_envelope"}
-    if peer is not None and env.get("issuer_box_id") != peer:
+    if peer is not None and not peer_accepts(peer, env.get("issuer_box_id")):
         return {"ok": False, "reason": "issuer_not_peer"}
     sid = str(env.get("grantee_session_id", ""))
     if args["grantee"] not in (sid, f'{env.get("grantee_box_id")}:{sid}'):
@@ -1651,17 +1736,19 @@ def revoke(args, line, receive=None, peer=None):
 def keypin(args, line, peer=None, receive=None):
     """Pin the key on `line` (``{"box_id", "key_b64"}``) for the forced command's `peer`.
 
-    Fails closed: no `peer` is `no_peer`; a claimed box other than the peer is `issuer_not_peer`."""
+    Fails closed: no `peer` is `no_peer`; a claimed box the peer pin does not accept is `issuer_not_peer`.
+    The key is pinned under the accepted member's box name, never the claimed one."""
     if peer is None:
         return {"ok": False, "reason": "no_peer"}
     body = _read_envelope(line)
     if body is None:
         return {"ok": False, "reason": "bad_envelope"}
-    if body.get("box_id") != peer:
+    member = resolve_peer(peer, body.get("box_id"))
+    if member is None:
         return {"ok": False, "reason": "issuer_not_peer"}
-    if args["box_id"] != peer:
+    if fold_box_id(args["box_id"]) != fold_box_id(member):
         return {"ok": False, "reason": "argv_mismatch:box_id"}
-    return (receive or receive_keypin())(peer, body.get("key_b64"), peer)
+    return (receive or receive_keypin())(member, body.get("key_b64"), member)
 
 
 def grant(args, line, receive=None, peer=None):
@@ -1677,7 +1764,7 @@ def grant(args, line, receive=None, peer=None):
         env = None
     if not isinstance(env, dict):
         return {"ok": False, "reason": "bad_envelope"}
-    if peer is not None and env.get("issuer_box_id") != peer:
+    if peer is not None and not peer_accepts(peer, env.get("issuer_box_id")):
         return {"ok": False, "reason": "issuer_not_peer"}
     sid = str(env.get("grantee_session_id", ""))
     if args["grantee"] not in (sid, f'{env.get("grantee_box_id")}:{sid}'):

@@ -140,3 +140,143 @@ def test_keypin_fails_closed_without_a_peer_and_refuses_a_claim_for_another_box(
     assert seen == []
     assert relay.keypin(arg, line, peer="box-a", receive=receive)["ok"] is True
     assert seen == [("box-a", "a2V5", "box-a")]
+
+
+KEY = {"Machine-a": "AAAAC3NzaC1lZDI1NTE5AAAAIMachineaMachineaMachineaMachineaStrike",
+       "Gipsy": "AAAAC3NzaC1lZDI1NTE5AAAAIGipsyGipsyGipsyGipsyGipsyGipsyGipsyG"}
+
+
+class _HeldMembership:
+    class MembershipError(Exception):
+        pass
+
+    def __init__(self, boxes):
+        self._members = [{"box": b, "host": f"{b}.local", "user": "example-operator", "relay_pub": f"ssh-ed25519 {KEY[b]}"}
+                         for b in boxes]
+        self.reads = 0
+
+    def verified_members(self, home, run=None):
+        self.reads += 1
+        return list(self._members)
+
+    @staticmethod
+    def member_key_bodies(m):
+        return [m["relay_pub"].split()[1]]
+
+
+def _keys_file(tmp_path, pins):
+    """An authorized_keys file with one managed relay line per (pin, key body)."""
+    lines = [f'restrict,command="python /x/unimatrix-relay.py --peer {pin}" ssh-ed25519 {body} unimatrix'
+             for pin, body in pins]
+    path = tmp_path / "authorized_keys"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _with_membership(relay, monkeypatch, tmp_path, boxes, pins=(("stale-pin", KEY["Machine-a"]),)):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    held = _HeldMembership(boxes)
+    monkeypatch.setattr(relay, "load_membership", lambda: held)
+    monkeypatch.setattr(relay, "effective_authorized_keys", lambda user_file, *a, **k: (_keys_file(tmp_path, pins), False))
+    return held
+
+
+@pytest.fixture(autouse=True)
+def _isolated_settings_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+
+
+def test_grant_accepts_an_issuer_box_that_differs_from_the_pinned_peer_only_in_case():
+    relay, seen = load(), []
+    reply = relay.grant(relay.parse_mode(CMD)[1], json.dumps(envelope(issuer_box_id="machine-a")),
+                        receive=lambda e: seen.append(e) or {"ok": True}, peer="Machine-a")
+    assert reply == {"ok": True} and len(seen) == 1
+
+
+def test_grant_re_resolves_a_stale_pin_through_the_held_verified_membership(monkeypatch, tmp_path):
+    relay, seen = load(), []
+    _with_membership(relay, monkeypatch, tmp_path, ["Machine-a", "Gipsy"])
+    receive = lambda e: seen.append(e) or {"ok": True}
+    args = relay.parse_mode(CMD)[1]
+    reply = relay.grant(args, json.dumps(envelope(issuer_box_id="Machine-a")), receive=receive, peer="stale-pin")
+    assert reply == {"ok": True} and len(seen) == 1
+
+
+def test_grant_refuses_an_issuer_the_held_verified_membership_does_not_name(monkeypatch, tmp_path):
+    relay = load()
+    _with_membership(relay, monkeypatch, tmp_path, ["Machine-a", "Gipsy"])
+    args = relay.parse_mode(CMD)[1]
+    reply = relay.grant(args, json.dumps(envelope(issuer_box_id="mallory")),
+                        receive=lambda e: pytest.fail("engine reached"), peer="stale-pin")
+    assert reply == {"ok": False, "reason": "issuer_not_peer"}
+
+
+def test_a_pin_whose_key_is_another_members_never_signs_for_the_issuer(monkeypatch, tmp_path):
+    relay = load()
+    _with_membership(relay, monkeypatch, tmp_path, ["Machine-a", "Gipsy"], pins=(("stale-pin", KEY["Gipsy"]),))
+    assert relay.peer_accepts("stale-pin", "Machine-a") is False
+    assert relay.peer_accepts("stale-pin", "Gipsy") is True
+
+
+def test_a_pin_with_no_managed_line_is_refused_even_when_the_issuer_is_a_member(monkeypatch, tmp_path):
+    relay = load()
+    _with_membership(relay, monkeypatch, tmp_path, ["Machine-a"], pins=(("other-pin", KEY["Machine-a"]),))
+    assert relay.peer_accepts("stale-pin", "Machine-a") is False
+
+
+def test_peer_accepts_fails_closed_without_a_usable_held_membership(monkeypatch, tmp_path):
+    relay = load()
+    held = _with_membership(relay, monkeypatch, tmp_path, ["Machine-a"])
+    assert relay.peer_accepts("stale-pin", "Machine-a") is True
+    monkeypatch.setattr(relay, "load_membership", lambda: None)
+    assert relay.peer_accepts("stale-pin", "Machine-a") is False
+    monkeypatch.setattr(relay, "load_membership", lambda: held)
+    held._members = []
+    assert relay.peer_accepts("stale-pin", "Machine-a") is False
+    held._members = [{"box": "Machine-a"}]
+    assert relay.peer_accepts("stale-pin", "Machine-a") is False
+
+    def unverified(home, run=None):
+        raise held.MembershipError("bad signature")
+
+    held.verified_members = unverified
+    assert relay.peer_accepts("stale-pin", "Machine-a") is False
+
+
+def test_a_fold_equal_pin_never_reads_the_membership_and_a_mismatch_reads_it_once(monkeypatch, tmp_path):
+    relay = load()
+    held = _with_membership(relay, monkeypatch, tmp_path, ["Machine-a"])
+    assert relay.peer_accepts("Machine-a.local", "machine-a") is True
+    assert held.reads == 0
+    assert relay.peer_accepts("stale-pin", "Machine-a") is True
+    assert held.reads == 1
+
+
+def test_inline_fold_matches_box_registry_fold_box_id():
+    from coordinator_core.group_em import box_registry
+
+    relay = load()
+    for name in ("Machine-a", "machine-a.local", "Machine-a-LAN", "box-lan.local", ".local", "-lan", "a.local-lan", "x.localx", ""):
+        assert relay.fold_box_id(name) == box_registry.fold_box_id(name), name
+
+
+def test_revoke_re_resolves_a_stale_pin_and_refuses_a_stranger(monkeypatch, tmp_path):
+    relay, seen = load(), []
+    _with_membership(relay, monkeypatch, tmp_path, ["Machine-a", "Gipsy"])
+    receive = lambda env: seen.append(env) or {"ok": True}
+    ok = relay.revoke({"grantee": "box-b:sess1"}, json.dumps(revoke_env(issuer_box_id="Machine-a")), receive=receive, peer="stale-pin")
+    bad = relay.revoke({"grantee": "box-b:sess1"}, json.dumps(revoke_env(issuer_box_id="mallory")), receive=receive, peer="stale-pin")
+    assert ok == {"ok": True} and bad["reason"] == "issuer_not_peer" and len(seen) == 1
+
+
+def test_keypin_pins_under_the_verified_member_name_not_the_claimed_spelling(monkeypatch, tmp_path):
+    relay, seen = load(), []
+    _with_membership(relay, monkeypatch, tmp_path, ["Machine-a", "Gipsy"])
+    receive = lambda box_id, key, peer: seen.append((box_id, key, peer)) or {"ok": True, "reason": "pinned"}
+    line = json.dumps({"box_id": "machine-a", "key_b64": "a2V5"})
+    assert relay.keypin({"box_id": "machine-a"}, line, peer="stale-pin", receive=receive)["ok"] is True
+    assert seen == [("Machine-a", "a2V5", "Machine-a")]
+    assert relay.keypin({"box_id": "gipsy"}, line, peer="stale-pin", receive=receive)["reason"] == "argv_mismatch:box_id"
+    stranger = json.dumps({"box_id": "mallory", "key_b64": "a2V5"})
+    assert relay.keypin({"box_id": "mallory"}, stranger, peer="stale-pin", receive=receive)["reason"] == "issuer_not_peer"
+    assert len(seen) == 1

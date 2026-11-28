@@ -16,7 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import tempfile
 import time
 import threading
@@ -50,7 +50,7 @@ from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV
 from coordinator_core.ops.workflow_fire.headless_agents import fill_omitted_nullable, unwrap_rpc_envelope
 from coordinator_core.ops.workflow_fire.worker_preamble import with_worker_preamble
 from coordinator_core._settings_home import settings_home
-from coordinator_core.locked_write import held_lock
+from coordinator_core.locked_write import LockTimeout, held_lock
 
 DEFAULT_AGENT_PEAK_GIB = 1.0
 _OWN_IDENTITY_ENV = (
@@ -77,6 +77,30 @@ class StageStalled(AgentFailed):
 STALL_WINDOW_S = 900.0
 STALL_RETRIES = 1
 _STALL_POLL_S = 1.0
+_AGY_STARTUP_LOCK = "agy-worker-mcp-cache-startup"
+_AGY_STARTUP_LOCK_WAIT_S = 30.0
+_AGY_STARTUP_SETTLE_S = 2.0
+
+
+def _enter_agy_startup_gate(stack: ExitStack, backend: str) -> None:
+    """Take the cross-process agy startup lock; a lock not taken in time is skipped, never a refusal."""
+    if backend != "agy":
+        return
+    try:
+        stack.enter_context(held_lock(settings_home() / _AGY_STARTUP_LOCK, timeout=_AGY_STARTUP_LOCK_WAIT_S,
+                                      holder_label="agy-worker-startup"))
+    except LockTimeout:
+        return
+
+
+def _agy_startup_settle(proc: subprocess.Popen, backend: str) -> None:
+    """Wait out agy's MCP cache load, or the child's exit, while the startup gate is held."""
+    if backend != "agy":
+        return
+    try:
+        proc.wait(timeout=_AGY_STARTUP_SETTLE_S)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _stream_bytes(*handles) -> int:
@@ -523,12 +547,15 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
             capture = observed_output
         else:
             capture = stdout
-        proc = subprocess.Popen(
-            argv, cwd=repo_root, env=env, stdin=subprocess.PIPE,
-            stdout=capture, stderr=stderr, shell=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            **_worker_priority(argv, backend, options.get("agentType")),
-        )
+        with ExitStack() as startup_gate:
+            _enter_agy_startup_gate(startup_gate, backend)
+            proc = subprocess.Popen(
+                argv, cwd=repo_root, env=env, stdin=subprocess.PIPE,
+                stdout=capture, stderr=stderr, shell=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **_worker_priority(argv, backend, options.get("agentType")),
+            )
+            _agy_startup_settle(proc, backend)
         posted = admission_post.post("START", sid, pids=[proc.pid], run=key,
                                      declared_peak_mb=actual_peak_mb)
         admission_post.record_undelivered(artifact_dir, {"phase": "START", **posted})
@@ -1787,7 +1814,7 @@ def run_agent(
     elif backend == "grok":
         stdin_text = ""
     stall_window_s = None
-    if backend == "codex":
+    if backend in ("codex", "agy"):
         try:
             stall_window_s = float(options.get("stallWindowS", STALL_WINDOW_S))
         except (TypeError, ValueError) as exc:

@@ -42,6 +42,12 @@ def test_pins_a_member_peer_with_no_pin(homes) -> None:
     assert box_key.pinned_fingerprint(ISSUER, homes["far"]) == box_key.own_fingerprint(homes["near"])
 
 
+def test_fold_equal_claim_and_peer_pin_the_key_under_the_verified_member_name(homes) -> None:
+    out = relayed_grant_peer.receive_key_pin(ISSUER.upper(), homes["key"], ISSUER, homes["far"])
+    assert out == {"ok": True, "reason": "pinned"}
+    assert box_key.pinned_fingerprint(ISSUER, homes["far"]) == box_key.own_fingerprint(homes["near"])
+
+
 @pytest.mark.parametrize(
     ("box_id", "peer", "reason"),
     [(ISSUER, None, "no_peer"), (ISSUER, "", "no_peer"), (ISSUER, "box-other", "issuer_not_peer"), ("../x", "../x", "bad_box")],

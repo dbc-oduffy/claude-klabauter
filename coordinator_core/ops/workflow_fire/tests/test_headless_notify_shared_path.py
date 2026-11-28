@@ -102,6 +102,7 @@ def test_shared_kernel_claim_serializes_owner_and_recovery_actors(tmp_path: Path
 def test_pid_reuse_rejects_old_birth_and_unreadable_identity_defers(monkeypatch: pytest.MonkeyPatch) -> None:
     process = SimpleNamespace(create_time=lambda: 20, is_running=lambda: True, status=lambda: "running")
     monkeypatch.setattr(psutil, "Process", lambda pid: process)
+    monkeypatch.setattr(fire, "_pid_birth", lambda pid: 20)
     assert not notify._headless_owner_live(record(pid=123, pid_birth=10))
     assert notify._headless_owner_live(record(pid=123, pid_birth=20))
     def denied(pid):

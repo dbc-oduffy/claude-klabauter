@@ -719,6 +719,33 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
+_BIRTH_TOLERANCE_S = 0.000001
+
+
+def _pid_birth(pid: int) -> Optional[float]:
+    """Creation time of ``pid`` without importing psutil on Windows, or None when unreadable."""
+    from coordinator_core.ask_spool.record import pid_create_time
+
+    return pid_create_time(pid)
+
+
+def _birth_matches(pid: int, birth: object) -> bool:
+    """True only when ``pid`` was born at ``birth``; a malformed birth is some other process."""
+    if type(birth) not in (int, float):
+        return False
+    current = _pid_birth(pid)
+    return current is None or abs(current - birth) <= _BIRTH_TOLERANCE_S
+
+
+def _driver_live(record: dict) -> bool:
+    pid = record["pid"]
+    if not _pid_alive(pid):
+        return False
+    if record.get("pid_birth") is None and record.get("pid_birth_denied") is True:
+        return True
+    return _birth_matches(pid, record.get("pid_birth"))
+
+
 def _log_size_bytes(log_path: str) -> Optional[int]:
     """Cheap, honest, NON-authoritative signal -- current byte size of the
     child's log file. Never parsed for content (see ``fire_status``
@@ -1047,7 +1074,7 @@ def _refresh_record_state(record: dict) -> dict:
         return annotated if annotated != record else record
     current_log_size = _log_size_bytes(record.get("log_path", ""))
     needs_update = current_log_size != record.get("log_size_bytes")
-    died = record.get("state") == "running" and not _pid_alive(record["pid"])
+    died = record.get("state") == "running" and not _driver_live(record)
     if died or needs_update:
         record = dict(record)
         record["log_size_bytes"] = current_log_size
@@ -1071,7 +1098,12 @@ def count_live_fires(cwd: Optional[str] = None, *, notify: bool = True) -> int:
         path = _record_path(registry_dir, record["fire_id"])
         # The cap needs only a conservative live count, not persistence or delivery.
         # Avoid one lock/write per historical terminal record in the arbitration path.
-        refreshed = refresh_record(path, record) if notify else _refresh_record_state(record)
+        if notify:
+            refreshed = refresh_record(path, record)
+        else:
+            refreshed = _refresh_record_state(record)
+            if record.get("state") == "running" and refreshed.get("state") == "exited":
+                refresh_record(path, record, notify=False)
         if refreshed.get("state") in ("running", "pending"):
             live += 1
     return live
@@ -1343,9 +1375,12 @@ def fire_workflow(
     # for failures, so retry cannot silently launch the same workflow twice.
     state = "exited" if exit_code is not None else "running"
     publish_lag_message = _publish_lag_message(resolved_cwd)
+    launch_birth = _pid_birth(process.pid)
     record = {
         "fire_id": fire_id,
         "pid": process.pid,
+        "pid_birth": launch_birth,
+        **({"pid_birth_denied": True} if launch_birth is None and exit_code is None else {}),
         "script_path": str(script),
         "sha256": script_sha256,
         "execution_started": True,

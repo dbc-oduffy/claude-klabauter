@@ -29,40 +29,44 @@ def _refuse(reason: str) -> dict:
     return {"ok": False, "reason": reason}
 
 
-def _is_member(box_id: str, home: Path) -> Optional[str]:
-    """None when ``box_id`` is in this box's verified membership, else the refusal reason."""
+def _member_box(box_id: object, home: Path) -> tuple[Optional[str], Optional[str]]:
+    """``(member box name, None)`` when ``box_id`` fold-equals a verified member, else ``(None, refusal reason)``."""
     mem = member_box._membership()
     try:
         members = mem.verified_members(home)
     except mem.MembershipError as exc:
-        return f"membership_unverified:{str(exc)[:120]}"
+        return None, f"membership_unverified:{str(exc)[:120]}"
     if not members:
-        return "membership_unverified:no_snapshot"
-    return None if any(m.get("box") == box_id for m in members) else "not_member"
+        return None, "membership_unverified:no_snapshot"
+    found = next((m["box"] for m in members if box_registry.same_box(m.get("box"), box_id)), None)
+    return (found, None) if found else (None, "not_member")
 
 
 def receive_key_pin(box_id: object, key_b64: object, peer: object, home: Optional[Path] = None) -> dict:
     """Pin ``box_id``'s key on this box, or refuse with a named reason.
 
-    Refusals: ``no_peer`` (no forced-command peer), ``issuer_not_peer`` (claimed box is not the peer),
+    Box names compare under ``box_registry.fold_box_id``; the key is pinned under the verified member's
+    box name. Refusals: ``no_peer`` (no forced-command peer), ``issuer_not_peer`` (claimed box is not the peer),
     ``bad_box``, ``bad_key``, ``not_member`` / ``membership_unverified:<why>``, ``pin_exists``.
     """
     try:
         if not isinstance(peer, str) or not peer:
             return _refuse("no_peer")
-        if box_id != peer:
+        if not box_registry.same_box(box_id, peer):
             return _refuse("issuer_not_peer")
         if not box_registry._valid_id(box_id):
             return _refuse("bad_box")
         if not isinstance(key_b64, str) or box_key._decode_key(key_b64) is None:
             return _refuse("bad_key")
         home_path = Path(home) if home is not None else box_registry.settings_home()
-        why = _is_member(box_id, home_path)
-        if why is not None:
-            return _refuse(why)
-        if box_key.pinned_fingerprint(box_id, home_path) is not None:
+        member, why = _member_box(box_id, home_path)
+        if member is None:
+            return _refuse(why or "not_member")
+        if not box_registry._valid_id(member):
+            return _refuse("bad_box")
+        if box_key.pinned_fingerprint(member, home_path) is not None:
             return _refuse("pin_exists")
-        box_key.pin_peer_key(box_id, key_b64, home_path)
+        box_key.pin_peer_key(member, key_b64, home_path)
         return {"ok": True, "reason": "pinned"}
     except Exception as exc:  # noqa: BLE001 -- the receive contract is never-raise
         return _refuse(f"keypin_failed:{type(exc).__name__}")

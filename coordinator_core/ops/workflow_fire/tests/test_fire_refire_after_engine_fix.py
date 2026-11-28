@@ -18,6 +18,7 @@ def target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(fire, "resolve_plugin_dir", lambda: str(tmp_path))
     monkeypatch.setattr(fire, "_publish_lag_message", lambda *a: None)
     monkeypatch.setattr(fire, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(fire, "_birth_matches", lambda pid, birth: True)
     monkeypatch.setattr(fire.time, "sleep", lambda *a: None)
     started = []
 

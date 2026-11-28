@@ -52,11 +52,25 @@ def test_unavailable_scan_is_an_error_with_other_fields_kept(root, monkeypatch):
     monkeypatch.setattr(rr, "tracked_test_bytes", unavailable)
     out = _list(root)
     assert out["error"] == "tripwire scan unavailable: split index"
+    assert out["degraded"] == []
     assert out["tripwires"] == []
     assert out["edited"] == ["pkg/mod.py"]
     assert out["created"] == []
     assert out["foreign"] == []
     assert out["snapshot"].endswith(f"{PREFIX}.pre-review/manifest.json")
+
+
+def test_a_failed_comment_scan_stays_an_error_beside_a_degraded_overrun(root, monkeypatch):
+    def land(_root, _base, notes=None, degraded=None, paths=None):
+        notes.append("comment scan failed: OSError")
+        degraded.append("comment scan incomplete: 1 file(s) over the 0.3s budget not lexed")
+        return [], []
+
+    monkeypatch.setattr(rr, "tracked_test_bytes", lambda *_a, **_k: [])
+    monkeypatch.setattr(rr, "_land_findings", land)
+    out = _list(root)
+    assert out["error"] == "comment scan failed: OSError"
+    assert out["degraded"] == ["comment scan incomplete: 1 file(s) over the 0.3s budget not lexed"]
 
 
 def test_available_scan_has_no_error(root, monkeypatch):
@@ -104,6 +118,17 @@ def test_unavailable_tree_scan_is_an_error(root, monkeypatch):
     out = _list(root)
     assert out["error"] == "tripwire scan unavailable: split index"
     assert out["tripwires"] == []
+
+
+def test_a_fix_legs_later_write_is_judged_from_its_live_bytes_not_the_manifest_digest(root, monkeypatch):
+    monkeypatch.setattr(rr, "tracked_test_bytes", lambda *_a, **_k: [])
+    # `root` already holds the review edit (VALUE = 2); the fix leg then rewrites the same path.
+    (root / "pkg/mod.py").write_text("VALUE = 3\n", encoding="utf-8")
+    assert _list(root)["edited"] == ["pkg/mod.py"]
+
+    # A fix leg that returns the file to the snapshot's own bytes leaves nothing edited.
+    (root / "pkg/mod.py").write_bytes(b"VALUE = 1\n")
+    assert _list(root)["edited"] == []
 
 
 def test_implication_names_created_paths_under_walked_dir(tmp_path, monkeypatch):

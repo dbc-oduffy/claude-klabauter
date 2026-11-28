@@ -20,6 +20,7 @@ def target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # This fixture's fake driver has no real OS pid; exercise idempotency
     # without making Windows tasklist pass through its mocked Popen.
     monkeypatch.setattr(fire, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(fire, "_birth_matches", lambda pid, birth: True)
     monkeypatch.setattr(fire.time, "sleep", lambda *a: None)
     started = []
 

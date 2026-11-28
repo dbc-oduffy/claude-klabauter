@@ -122,3 +122,50 @@ def test_relay_outcome_lines(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(suite_grant, "issue_suite_grant", lambda *a, **k: _result(False, "BOX_UNKNOWN"))
     code, msg = gd.run_grant_directive(["group-em-grant", "box-x:sid-g", "ruled"])
     assert code == gd.EXIT_FALSE and "register" in msg
+
+
+def _load_cli():
+    import importlib.machinery
+    import importlib.util
+    from types import SimpleNamespace
+
+    path = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "tier-u-grant-cli.py"
+    loader = importlib.machinery.SourceFileLoader("tier_u_grant_cli_group_em", str(path))
+    spec = importlib.util.spec_from_loader("tier_u_grant_cli_group_em", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    mod._import_module = lambda: SimpleNamespace()
+    return mod
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "RELAY_FAILED:issuer_not_peer",
+        "RELAY_FAILED:no_reply",
+        f"RELAY_FAILED:{suite_grant.NO_PIN_REASON}:keypin_refused:issuer_not_peer",
+        suite_grant.BOX_UNKNOWN,
+        suite_grant.NOT_GROUP_EM,
+    ],
+)
+def test_cli_main_exits_one_for_every_refused_group_em_grant(
+    reason, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    cli = _load_cli()
+    monkeypatch.setattr(suite_grant, "harness_issuer_sid", lambda: None)
+    monkeypatch.setattr(suite_grant, "issue_suite_grant", lambda *a, **k: _result(False, reason))
+    rc = cli.main(["group-em-grant", "gipsy:6e46574c-65ae-4c2f-a79e-fec5f2cfcc01", "note"])
+    assert rc == 1
+    assert reason.partition(":")[0] in capsys.readouterr().err
+
+
+def test_cli_main_exits_zero_for_an_accepted_group_em_grant(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    cli = _load_cli()
+    rec = {"grantee_session_id": "sid-g", "grantee_box_id": "gipsy", "expires_at": "2026-10-21T10:00:00Z",
+           "issuer_session_id": "sid-i"}
+    monkeypatch.setattr(suite_grant, "harness_issuer_sid", lambda: None)
+    monkeypatch.setattr(suite_grant, "issue_suite_grant", lambda *a, **k: _result(True, "issued", rec))
+    assert cli.main(["group-em-grant", "gipsy:sid-g", "note"]) == 0
+    assert "relayed to box gipsy" in capsys.readouterr().err

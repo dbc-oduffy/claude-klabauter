@@ -368,3 +368,42 @@ def test_help_flag_exits_0(stub_import_module):
     for flag in ("--help", "-h", "help"):
         rc = _cli.main([flag])
         assert rc == 0
+
+
+def test_group_em_grant_refused_by_the_grantee_box_exits_nonzero(
+    stub_import_module, tmp_path, monkeypatch, capsys
+):
+    from coordinator_core.group_em import box_registry, member_box, node_transport, nomination, suite_grant
+
+    holder = "sid-holder"
+    directory = tmp_path / "state" / "group-em"
+    directory.mkdir(parents=True)
+    monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "verified"})
+    monkeypatch.setattr(
+        nomination, "is_live", lambda rec: nomination.LivenessResult(rec.get("session_id") == holder, "live")
+    )
+    monkeypatch.setattr(nomination, "_session_is_real", lambda sid: True)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", holder)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    nomination.claim(str(tmp_path), holder, directory=directory, prompt_id="p-1")
+
+    class _NoMembers:
+        class MembershipError(Exception):
+            pass
+
+        def verified_members(self, home, run=None):
+            return []
+
+    class _RefusingTransport:
+        def deliver_grant(self, box, envelope):
+            return {"ok": False, "reason": "issuer_not_peer"}
+
+    monkeypatch.setattr(member_box, "_membership", lambda: _NoMembers())
+    monkeypatch.setattr(node_transport, "select", lambda box, directory=None: _RefusingTransport())
+    box_registry.register(tmp_path, {}, directory=directory, box_id="farbox", transport={"kind": "ssh", "host": "alias"})
+    stub_import_module(_StubGrant())
+
+    rc = _cli.main(["group-em-grant", "farbox:6e46574c-65ae-4c2f-a79e-fec5f2cfcc01", "note", "--ttl-minutes", "90"])
+    err = capsys.readouterr().err
+    assert suite_grant.RELAY_FAILED in err and "issuer_not_peer" in err
+    assert rc == 1

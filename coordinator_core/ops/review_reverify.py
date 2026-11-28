@@ -1136,9 +1136,13 @@ _LAND_SCAN_BUDGET_S = 0.3
 
 
 def _land_findings(
-    repo_root: Path, base: str, notes: Optional[List[str]] = None
+    repo_root: Path,
+    base: str,
+    notes: Optional[List[str]] = None,
+    degraded: Optional[List[str]] = None,
+    paths: Optional[List[str]] = None,
 ) -> Tuple[List[dict], List[dict]]:
-    """Major ``(comment rows, provenance rows)`` for ``base..HEAD``; ``notes`` receives why a scan was cut short or failed."""
+    """Major ``(comment rows, provenance rows)`` for ``base..HEAD`` over ``paths``; ``notes`` gets a failed scan, ``degraded`` (else ``notes``) a budget overrun."""
     if not _FULL_SHA_RE.fullmatch(base):
         return [], []
     sink: List[bytes] = []
@@ -1190,13 +1194,16 @@ def _land_findings(
         return added_comments(path, before, after, keep=on_agent_lines)
 
     try:
-        found = agent_added_comments(repo_root, base, "HEAD", runner=runner, comments_fn=comments_fn)
+        found = agent_added_comments(
+            repo_root, base, "HEAD", runner=runner, comments_fn=comments_fn, paths=paths
+        )
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
         if notes is not None:
             notes.append(f"comment scan failed: {type(exc).__name__}")
         return [], []
-    if skipped and notes is not None:
-        notes.append(f"comment scan incomplete: {len(skipped)} file(s) over the {_LAND_SCAN_BUDGET_S}s budget not lexed")
+    overrun = degraded if degraded is not None else notes
+    if skipped and overrun is not None:
+        overrun.append(f"comment scan incomplete: {len(skipped)} file(s) over the {_LAND_SCAN_BUDGET_S}s budget not lexed")
     log_text = sink[0].decode("utf-8", errors="replace") if sink else ""
     provenance = governed_by.provenance_findings(repo_root, log_text, folded[0] if folded else None) if sink else []
     return _present_comments(repo_root, found, heads), provenance
@@ -1327,7 +1334,10 @@ def review_reverify(
             picked = {"owned": [], "tripwires": [], "tripwires_not_selected": [], "notice": ""}
             scan_error = f"tripwire scan unavailable: {exc}"
         scan_notes: List[str] = []
-        land_comments, land_provenance = _land_findings(repo_root, base, scan_notes)
+        scan_degraded: List[str] = []
+        land_comments, land_provenance = _land_findings(
+            repo_root, base, scan_notes, scan_degraded, sorted({*edited, *created})
+        )
         scan_error = "; ".join(filter(None, [scan_error, *scan_notes])) or None
         out = {
             "edited": edited,
@@ -1343,6 +1353,7 @@ def review_reverify(
             "comment_findings": land_comments,
             "provenance_findings": land_provenance,
             "error": scan_error,
+            "degraded": scan_degraded,
         }
         if derived:
             out["derived_from"] = derived

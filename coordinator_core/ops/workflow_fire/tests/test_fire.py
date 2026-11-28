@@ -30,6 +30,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import psutil
 import pytest
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -398,6 +399,7 @@ def test_fire_workflow_refuses_once_cap_reached(repo, script, monkeypatch):
     monkeypatch.setattr(fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
     monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
     monkeypatch.setattr(fire, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(fire, "_birth_matches", lambda pid, birth: True)
 
     for _ in range(2):
         fire.fire_workflow(str(script), cwd=str(repo), concurrency_cap=2)
@@ -450,6 +452,7 @@ def test_fire_status_leaves_live_pid_running(repo, script, monkeypatch):
 
     record = fire.fire_workflow(str(script), cwd=str(repo))
     monkeypatch.setattr(fire, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(fire, "_birth_matches", lambda pid, birth: True)
     refreshed = fire.fire_status(record["fire_id"], cwd=str(repo))
     assert refreshed["state"] == "running"
 
@@ -663,7 +666,8 @@ def test_a_dead_child_that_never_wrote_an_envelope_is_failed(repo):
 
 def test_a_running_child_with_a_live_pid_is_not_failed(repo):
     live = fire._refresh_record_state(
-        {**_exited_record(repo, log_text="partial\n"), "state": "running", "pid": os.getpid()}
+        {**_exited_record(repo, log_text="partial\n"), "state": "running", "pid": os.getpid(),
+         "pid_birth": psutil.Process().create_time()}
     )
 
     assert live["state"] == "running"
@@ -810,11 +814,84 @@ def test_a_running_record_with_no_log_yet_keeps_re_checking(repo, monkeypatch):
     live = _exited_record(repo, log_text="")
     live["state"] = "running"
     monkeypatch.setattr(fire, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(fire, "_birth_matches", lambda pid, birth: True)
 
     refreshed = fire._refresh_record_state(live)
 
     assert refreshed["outcome"] == "unknown"
     assert "not been observed to end" in refreshed["outcome_basis"]
+
+
+def _running_on_disk(repo, fire_id, **fields):
+    path = fire._record_path(fire._registry_dir(str(repo)), fire_id)
+    record = _exited_record(repo, fire_id=fire_id, state="running", pid=os.getpid(), **fields)
+    fire._write_record(path, record)
+    return path
+
+
+@pytest.mark.parametrize("notify", [True, False])
+def test_a_running_record_without_pid_birth_is_not_live_and_is_reaped(repo, notify):
+    path = _running_on_disk(repo, "a" * 32)
+
+    assert fire.count_live_fires(str(repo), notify=notify) == 0
+    assert fire._read_record(path)["state"] == "exited"
+
+
+@pytest.mark.parametrize("notify", [True, False])
+def test_a_running_record_with_a_mismatched_pid_birth_is_not_live_and_is_reaped(repo, notify):
+    path = _running_on_disk(repo, "b" * 32, pid_birth=psutil.Process().create_time() - 100.0)
+
+    assert fire.count_live_fires(str(repo), notify=notify) == 0
+    assert fire._read_record(path)["state"] == "exited"
+
+
+@pytest.mark.parametrize("notify", [True, False])
+def test_a_running_record_with_a_matching_pid_birth_is_still_live(repo, notify):
+    path = _running_on_disk(repo, "c" * 32, pid_birth=psutil.Process().create_time())
+
+    assert fire.count_live_fires(str(repo), notify=notify) == 1
+    assert fire._read_record(path)["state"] == "running"
+
+
+@pytest.mark.parametrize("notify", [True, False])
+def test_a_launch_whose_birth_was_access_denied_stays_live_while_its_pid_lives(repo, notify):
+    path = _running_on_disk(repo, "9" * 32, pid_birth=None, pid_birth_denied=True)
+
+    assert fire.count_live_fires(str(repo), notify=notify) == 1
+    assert fire._read_record(path)["state"] == "running"
+
+
+@pytest.mark.parametrize("notify", [True, False])
+def test_a_live_pid_whose_current_birth_is_unreadable_stays_live(repo, monkeypatch, notify):
+    path = _running_on_disk(repo, "8" * 32, pid_birth=psutil.Process().create_time() - 100.0)
+    monkeypatch.setattr(fire, "_pid_birth", lambda pid: None)
+
+    assert fire.count_live_fires(str(repo), notify=notify) == 1
+    assert fire._read_record(path)["state"] == "running"
+
+
+def test_fire_workflow_marks_a_launch_whose_birth_read_is_access_denied(repo, script, monkeypatch):
+    _patch_plugin_dir(monkeypatch)
+    monkeypatch.setattr(fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(fire, "_pid_birth", lambda pid: None)
+
+    record = fire.fire_workflow(str(script), cwd=str(repo))
+
+    assert record["pid_birth"] is None
+    assert record["pid_birth_denied"] is True
+
+
+def test_a_cap_fire_is_not_blocked_by_a_recycled_pid(repo, script, monkeypatch):
+    _patch_plugin_dir(monkeypatch)
+    monkeypatch.setattr(fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+    for tag in "def":
+        _running_on_disk(repo, tag * 32, pid_birth=psutil.Process().create_time() - 100.0)
+
+    record = fire.fire_workflow(str(script), cwd=str(repo))
+
+    assert record["state"] == "running"
 
 
 def test_the_banner_text_quoted_in_agent_output_is_not_a_truncation(repo):
@@ -1065,3 +1142,14 @@ def test_fire_workflow_stores_run_id_on_the_record(repo, script, monkeypatch):
     monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
     record = fire.fire_workflow(str(script), cwd=str(repo), run_id="run-f")
     assert record["run_id"] == "run-f"
+
+
+@pytest.mark.parametrize(
+    "extra, live",
+    [({"pid_birth": None}, False), ({"pid_birth": None, "pid_birth_denied": True}, True),
+     ({"pid_birth": "x"}, False), ({"pid_birth": psutil.Process().create_time()}, True)],
+)
+def test_headless_owner_liveness_follows_the_driver_birth_rules(extra, live):
+    from coordinator_core.ops.workflow_fire import notify
+
+    assert notify._headless_owner_live({"pid": os.getpid(), **extra}) is live

@@ -38,7 +38,7 @@ class CountingRunner:
 
     def __call__(self, args, cwd, stdin):
         self.calls.append(list(args))
-        return authorship._default_runner(args, cwd, stdin)
+        return authorship.default_runner(args, cwd, stdin)
 
 
 def _repo(tmp_path: Path) -> tuple[Path, str]:
@@ -108,6 +108,35 @@ def test_crlf_blobs_and_non_comment_suffix(tmp_path):
     _commit(root, "notes.txt", "# not source\n", "w\n\nSession-Id: s1")
     got = authorship.agent_added_comments(root, base, "HEAD", comments_fn=fake_comments)
     assert [c.path for c in got] == ["a.py"]
+
+
+def test_paths_limit_the_scan_to_the_named_files(tmp_path):
+    root, base = _repo(tmp_path)
+    _commit(root, "own.py", "# own note\n", "w\n\nSession-Id: s1")
+    _commit(root, "peer.py", "# peer note\n", "w\n\nSession-Id: s2")
+    seen: list[str] = []
+
+    def spy(path, before, after):
+        seen.append(path)
+        return fake_comments(path, before, after)
+
+    run = CountingRunner()
+    got = authorship.agent_added_comments(root, base, "HEAD", runner=run, comments_fn=spy, paths=["own.py"])
+    assert [c.path for c in got] == ["own.py"]
+    assert seen == ["own.py"]
+    assert len(run.calls) == 2
+    assert not any("peer.py" in a for a in run.calls[0])
+    unscoped = authorship.agent_added_comments(root, base, "HEAD", comments_fn=fake_comments)
+    assert sorted(c.path for c in unscoped) == ["own.py", "peer.py"]
+
+
+def test_empty_or_non_code_paths_spawn_nothing(tmp_path):
+    root, base = _repo(tmp_path)
+    _commit(root, "own.py", "# own note\n", "w\n\nSession-Id: s1")
+    run = CountingRunner()
+    assert authorship.agent_added_comments(root, base, "HEAD", runner=run, comments_fn=fake_comments, paths=[]) == []
+    assert authorship.agent_added_comments(root, base, "HEAD", runner=run, comments_fn=fake_comments, paths=["x.txt"]) == []
+    assert run.calls == []
 
 
 def test_git_failure_returns_empty(tmp_path):

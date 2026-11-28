@@ -343,6 +343,44 @@ def test_directory_artifact_is_inlined_with_headers(env) -> None:
     assert name == "art" and "--- a.py ---\nA_BODY" in text and "--- sub/b.py ---\nB_BODY" in text
 
 
+@pytest.fixture
+def startup_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from coordinator_core.codex_runner import workflow
+    from coordinator_core.locked_write import held_lock as real
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(workflow, "held_lock", lambda target, **kw: real(target, anchor_root=tmp_path, **kw))
+    monkeypatch.setattr(workflow, "_AGY_STARTUP_LOCK_WAIT_S", 0.1)
+    return workflow, lambda: real(workflow.settings_home() / workflow._AGY_STARTUP_LOCK, anchor_root=tmp_path, timeout=0.1)
+
+
+def test_second_agy_worker_launch_waits_on_the_startup_gate(startup_lock) -> None:
+    from contextlib import ExitStack
+
+    from coordinator_core.locked_write import LockTimeout
+
+    workflow, probe = startup_lock
+    with ExitStack() as first:
+        workflow._enter_agy_startup_gate(first, "agy")
+        with pytest.raises(LockTimeout):
+            with probe():
+                pass
+        with ExitStack() as second:
+            workflow._enter_agy_startup_gate(second, "agy")
+    with probe():
+        pass
+
+
+def test_non_agy_launch_never_takes_the_startup_gate(startup_lock) -> None:
+    from contextlib import ExitStack
+
+    workflow, probe = startup_lock
+    with ExitStack() as stack:
+        workflow._enter_agy_startup_gate(stack, "codex")
+        with probe():
+            pass
+
+
 def test_oversize_artifact_is_refused(env, monkeypatch: pytest.MonkeyPatch) -> None:
     tmp_path, run_dir, req, mp = env
     mp.setattr(agy, "MAX_ARTIFACT_CHARS", 5)

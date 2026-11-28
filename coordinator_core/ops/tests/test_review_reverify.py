@@ -129,6 +129,51 @@ def test_list_mode_reports_modified_deleted_and_created(world, monkeypatch: pyte
     assert "pkg/mod.py" in out["scope_files"]
 
 
+def test_list_mode_surfaces_land_findings_and_scan_notes(world, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, _orig, _ = world
+    comment = {"path": "pkg/mod.py", "text": "# x"}
+    provenance = {"sha": "a" * 40}
+
+    seen: dict = {}
+
+    def land(_root, _base, notes=None, degraded=None, paths=None):
+        seen["paths"] = paths
+        degraded.append("comment scan incomplete: 2 file(s) over the 0.3s budget not lexed")
+        notes.append("comment scan failed: OSError")
+        return [comment], [provenance]
+
+    (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
+    monkeypatch.setattr(rr, "_land_findings", land)
+    out = _list(root)
+    assert out["comment_findings"] == [comment]
+    assert out["provenance_findings"] == [provenance]
+    assert out["degraded"] == ["comment scan incomplete: 2 file(s) over the 0.3s budget not lexed"]
+    assert out["error"] == "comment scan failed: OSError"
+    assert seen["paths"] == ["pkg/mod.py"]
+
+
+def test_list_mode_budget_overrun_is_not_an_error(world, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, _orig, _ = world
+    (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
+    monkeypatch.setattr(rr, "_LAND_SCAN_BUDGET_S", -1.0)
+    monkeypatch.setattr(rr, "_FULL_SHA_RE", rr.re.compile(r".+"))
+    monkeypatch.setattr(rr.authorship, "default_runner", _overrun_runner)
+    monkeypatch.setattr(rr.governed_by, "provenance_findings", lambda *_a, **_k: [])
+    out = _list(root)
+    assert out["error"] is None
+    assert len(out["degraded"]) == 1 and out["degraded"][0].startswith("comment scan incomplete: 1 file(s)")
+
+
+def _overrun_runner(args, _cwd, _stdin):
+    if args[:1] == ["log"]:
+        return (
+            f"\x1e{'b' * 40}\x1f edit\n\nSession-Id: abc-123\n\x1f\n"
+            "diff --git a/pkg/mod.py b/pkg/mod.py\n+++ b/pkg/mod.py\n@@ -1,0 +2 @@\n+# note\n"
+        ).encode()
+    blob = lambda text: b"%s blob %d\n%s\n" % (b"c" * 40, len(text), text)  # noqa: E731
+    return blob(b"VALUE = 1\n") + blob(b"VALUE = 2\n# note\n")
+
+
 def _ledger(monkeypatch, *rows) -> list[str]:
     """Patch the findings ledger to ``rows`` (applied rows) and return the sidecars param."""
     monkeypatch.setattr(review_findings_ledger, "read_ledger", lambda _p: (True, list(rows)))

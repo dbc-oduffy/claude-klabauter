@@ -90,3 +90,80 @@ def test_speaking_stage_is_not_retried(stage_env) -> None:
     marker = install(silent_attempts=0)
     agents.run_agent("x", {"stallWindowS": 0.5}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
     assert marker.read_text() == "1"
+
+
+def _silent_agy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    marker = tmp_path / "agy-attempts"
+    script = tmp_path / "agy.py"
+    script.write_text(
+        "import pathlib,sys,time\n"
+        f"m=pathlib.Path({str(marker)!r})\n"
+        "m.write_text(str(int(m.read_text())+1 if m.exists() else 1))\n"
+        "sys.stdin.read()\n"
+        "time.sleep(60)\n", encoding="utf-8")
+    monkeypatch.setattr(agents, "resolve_agy", lambda: [sys.executable, str(script)])
+    monkeypatch.setattr(agents, "_AGY_STARTUP_SETTLE_S", 0.05)
+    return marker
+
+
+def test_silent_agy_stage_is_killed_retried_and_fails_stalled(stage_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path, _install = stage_env
+    marker = _silent_agy(monkeypatch, tmp_path)
+    with pytest.raises(agents.StageStalled):
+        agents.run_agent("x", {"stallWindowS": 0.5}, repo_root=tmp_path, artifact_dir=tmp_path / "agent", backend="agy")
+    assert marker.read_text() == str(agents.STALL_RETRIES + 1)
+    assert (tmp_path / "agent" / "stage-idle-timeout.json").is_file()
+
+
+def test_agy_stage_without_option_gets_the_default_window(stage_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path, _install = stage_env
+    _silent_agy(monkeypatch, tmp_path)
+    seen: list[float | None] = []
+
+    def fake_run(*_a, stall_window_s=None, **_kw):
+        seen.append(stall_window_s)
+        raise agents.AgentFailed("stop")
+
+    monkeypatch.setattr(agents, "_run_admitted", fake_run)
+    with pytest.raises(agents.AgentFailed):
+        agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent", backend="agy")
+    assert seen == [agents.STALL_WINDOW_S]
+
+
+def test_grok_stage_stays_without_a_stall_window(stage_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path, _install = stage_env
+    seen: list[float | None] = []
+
+    def fake_run(*_a, stall_window_s=None, **_kw):
+        seen.append(stall_window_s)
+        raise agents.AgentFailed("stop")
+
+    monkeypatch.setattr(agents, "resolve_grok", lambda: ["grok"])
+    monkeypatch.setattr(agents, "_run_admitted", fake_run)
+    with pytest.raises(agents.AgentFailed):
+        agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent", backend="grok")
+    assert seen == [None]
+
+
+def test_agy_popen_runs_under_the_startup_lock_and_other_backends_do_not(stage_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.locked_write import LockTimeout, held_lock as real_lock
+
+    tmp_path, _install = stage_env
+    monkeypatch.setattr(agents, "settings_home", lambda: tmp_path / "home")
+    monkeypatch.setattr(agents, "held_lock", lambda target, **kw: real_lock(target, anchor_root=tmp_path, **kw))
+    _silent_agy(monkeypatch, tmp_path)
+    real_popen = agents.subprocess.Popen
+    held: list[bool] = []
+
+    def probing_popen(*a, **kw):
+        try:
+            with real_lock(tmp_path / "home" / agents._AGY_STARTUP_LOCK, anchor_root=tmp_path, timeout=0.1):
+                held.append(False)
+        except LockTimeout:
+            held.append(True)
+        return real_popen(*a, **kw)
+
+    monkeypatch.setattr(agents.subprocess, "Popen", probing_popen)
+    with pytest.raises(agents.StageStalled):
+        agents.run_agent("x", {"stallWindowS": 0.3}, repo_root=tmp_path, artifact_dir=tmp_path / "agent", backend="agy")
+    assert held and all(held)

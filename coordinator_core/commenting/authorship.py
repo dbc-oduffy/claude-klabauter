@@ -5,7 +5,7 @@ import functools
 import re
 import subprocess
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from coordinator_core.git.provider_attribution import ATTRIBUTIONS
 from coordinator_core.win_portability import no_console_creationflags
@@ -123,16 +123,25 @@ def agent_added_comments(
     *,
     runner: Optional[GitRunner] = None,
     comments_fn: Optional[Callable[[str, str, str], list[AddedComment]]] = None,
+    paths: Optional[Sequence[str]] = None,
 ) -> list[AddedComment]:
-    """Comments at `head` absent at `base` whose text sits in an agent commit's added lines; at most two git spawns, [] on git failure."""
+    """Comments at `head` absent at `base` whose text sits in an agent commit's added lines; at most two git spawns, [] on git failure. `paths` (repo-relative) limits the log to those code files; empty spawns nothing."""
     root = Path(repo_root)
     run = runner or default_runner
     rng = f"{base}..{head}"
+    if paths is None:
+        pathspecs: tuple[str, ...] = _CODE_PATHSPECS
+    else:
+        pathspecs = tuple(
+            f":(literal){p}" for p in dict.fromkeys(paths) if Path(p).suffix.lower() in SUFFIXES
+        )
+        if not pathspecs:
+            return []
     log_raw = run(
         [
             "log", "-p", "-U0", "--no-color", "--no-ext-diff", "--no-renames",
             f"--format={_COMMIT_MARK}%H{_FIELD_MARK}%B{_FIELD_MARK}", rng,
-            "--", *_CODE_PATHSPECS,
+            "--", *pathspecs,
         ],
         root,
         None,

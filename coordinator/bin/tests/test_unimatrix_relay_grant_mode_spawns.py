@@ -94,6 +94,57 @@ def test_relay_without_engine_replies_through_the_door(tmp_path, door, ok, reaso
         assert reply["reason"] == reason
 
 
+def _signed_membership(tmp_path):
+    """A real signed one-member snapshot adopted under tmp_path/held; returns (membership lib, home, member key body)."""
+    import importlib.util
+
+    def lib(name):
+        spec = importlib.util.spec_from_file_location(name.replace("-", "_") + "_spawns", BIN / f"{name}.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    m, home = lib("unimatrix-membership"), tmp_path / "held"
+    keys = {}
+    for n in ("signer", "machine-a"):
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(tmp_path / n)], check=True, capture_output=True)
+        keys[n] = (tmp_path / n, Path(str(tmp_path / n) + ".pub").read_text().strip())
+    m.write_pin(home, keys["signer"][1])
+    member = {"box": "Machine-a", "host": "machine-a.local", "user": "me", "relay_pub": keys["machine-a"][1], "from_cidrs": []}
+    snap = m.next_snapshot(None, {"op": "join", "member": member})
+    sig = m.FakeSigner(keys["signer"][0], environ={}).sign(m.canonical_bytes(snap))
+    m.adopt(home, snap, sig, notifier=lambda h, e: None)
+    return m, home, keys["machine-a"][1].split()[1]
+
+
+@pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="ssh-keygen required")
+def test_peer_accepts_spawns_once_on_a_verification_cache_miss_and_never_on_a_hit(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("unimatrix_relay_spawns", RELAY)
+    relay = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(relay)
+    m, home, body = _signed_membership(tmp_path)
+    relay.load_membership = lambda: m
+    keys_file = tmp_path / "authorized_keys"
+    keys_file.write_text(f'restrict,command="python /x/unimatrix-relay.py --peer stale-pin" ssh-ed25519 {body} unimatrix\n')
+    spawned = []
+
+    def counting(cmd, *a, **kw):
+        spawned.append(cmd[0])
+        return subprocess.run(cmd, *a, **kw)
+
+    assert relay.peer_accepts("Machine-a", "machine-a", home=home, authorized_keys=keys_file, run=counting) is True
+    assert spawned == []
+    (home / "unimatrix" / "membership" / "verified.json").unlink()
+    assert relay.peer_accepts("stale-pin", "Machine-a", home=home, authorized_keys=keys_file, run=counting) is True
+    assert len(spawned) == 1
+    assert relay.peer_accepts("stale-pin", "Machine-a", home=home, authorized_keys=keys_file, run=counting) is True
+    assert len(spawned) == 1
+    assert relay.peer_accepts("stale-pin", "mallory", home=home, authorized_keys=keys_file, run=counting) is False
+    assert len(spawned) == 1
+
+
 def test_main_runs_keypin_under_the_forced_command_peer(tmp_path):
     env = {k: v for k, v in os.environ.items() if k != "SSH_ORIGINAL_COMMAND"}
     env.update(SSH_ORIGINAL_COMMAND="keypin box-a", COORDINATOR_SETTINGS_HOME=str(tmp_path))

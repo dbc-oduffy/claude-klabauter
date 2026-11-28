@@ -307,3 +307,80 @@ def test_a_pre_pinned_issuer_key_is_never_overwritten(world, capsys):
     again = relayed_grant_peer.receive_key_pin(w["ids"]["a"], a_key, w["ids"]["a"], w["home_b"])
     assert again == {"ok": False, "reason": "pin_exists"}
     assert box_key.pinned_fingerprint(w["ids"]["a"], w["home_b"]) == pinned
+
+
+def _pinned_world(w, peer, pin_key_of):
+    """Rewire B's relay to run under `--peer <peer>`, pinned to the relay key of member `pin_key_of`."""
+    relay = _load("unimatrix_relay_e2e_pinned", "unimatrix-relay.py")
+    mem = relay.load_membership()
+    row = next(m for m in mem.verified_members(w["home_b"]) if m["box"] == pin_key_of)
+    keys = w["home_b"] / "authorized_keys"
+    keys.write_text(
+        f'restrict,command="python /x/unimatrix-relay.py --peer {peer}" ssh-ed25519 '
+        f"{mem.member_key_bodies(row)[0]} unimatrix\n",
+        encoding="utf-8",
+    )
+    w["mp"].setattr(relay, "effective_authorized_keys", lambda user_file, *a, **k: (keys, False))
+    home_b, calls = w["home_b"], w["calls"]
+    replies: list = []
+
+    def runner(argv, timeout, stdin_text):
+        calls.append(argv[-1])
+        mode, arg = relay.parse_mode(argv[-1])
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("COORDINATOR_SETTINGS_HOME", str(home_b))
+            if mode == "grant":
+                reply = relay.grant(
+                    arg, stdin_text, peer=peer,
+                    receive=lambda env: suite_grant.receive_relayed_grant(env, home=home_b),
+                )
+            else:
+                reply = relay.keypin(
+                    arg, stdin_text, peer=peer,
+                    receive=lambda box, key, p: relayed_grant_peer.receive_key_pin(box, key, p, home_b),
+                )
+        replies.append((mode, reply))
+        return subprocess.CompletedProcess(argv, 0 if reply.get("ok") is True else 1, json.dumps(reply) + "\n", "")
+
+    w["mp"].setattr(
+        node_transport.SshTransport, "__init__",
+        lambda self, r=None, directory=None: setattr(self, "runner", runner) or setattr(self, "directory", directory),
+    )
+    return replies
+
+
+def test_a_pin_spelled_differently_from_the_issuer_box_id_is_accepted_and_b_checks_granted(world, capsys):
+    w = world
+    spelled = w["ids"]["a"].upper() + "-LAN"
+    replies = _pinned_world(w, spelled, w["ids"]["a"])
+    _no_spawn(w)
+    code, out = _grant(w, capsys)
+    assert code == 0, out
+    assert [(m, r.get("ok")) for m, r in replies] == [("grant", False), ("keypin", True), ("grant", True)]
+    assert _relayed_file(w).is_file()
+    code, out = _check(w, capsys)
+    assert code == 0 and "basis: group-em-grant" in out
+
+
+def test_a_stale_pin_is_re_resolved_through_the_restored_membership_and_b_checks_granted(world, capsys):
+    w = world
+    replies = _pinned_world(w, "box-renamed0000", w["ids"]["a"])
+    _no_spawn(w)
+    code, out = _grant(w, capsys)
+    assert code == 0, out
+    assert [(m, r.get("ok")) for m, r in replies] == [("grant", False), ("keypin", True), ("grant", True)]
+    assert _relayed_file(w).is_file()
+    assert box_key.pinned_fingerprint(w["ids"]["a"], w["home_b"]) == box_key.own_fingerprint(w["home_a"])
+    code, out = _check(w, capsys)
+    assert code == 0 and "basis: group-em-grant" in out
+
+
+def test_a_stale_pin_whose_key_belongs_to_another_member_still_refuses_and_stores_nothing(world, capsys):
+    w = world
+    replies = _pinned_world(w, "box-renamed0000", w["ids"]["b"])
+    _no_spawn(w)
+    code, out = _grant(w, capsys)
+    assert code != 0, out
+    assert replies and all(r.get("reason") == "issuer_not_peer" for _, r in replies)
+    assert not _relayed_file(w).exists()
+    assert box_key.pinned_fingerprint(w["ids"]["a"], w["home_b"]) is None

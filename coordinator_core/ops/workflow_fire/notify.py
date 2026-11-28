@@ -52,6 +52,7 @@ def _text(record: dict) -> str:
 def _headless_owner_live(record: dict) -> bool:
     """Defer to an active writer; an explicit release transfers notification ownership."""
     import psutil
+    from coordinator_core.ops.workflow_fire import fire
 
     if record.get("notify_owner_released") is True:
         return False
@@ -63,12 +64,9 @@ def _headless_owner_live(record: dict) -> bool:
         owner = psutil.Process(pid)
         if not owner.is_running() or owner.status() == psutil.STATUS_ZOMBIE:
             return False
-        if birth is not None:
-            if type(birth) not in (int, float):
-                return True  # Malformed identity is unknown, not proof the writer died.
-            if owner.create_time() != birth:
-                return False
-        return True
+        if birth is None:
+            return record.get("pid_birth_denied") is True
+        return fire._birth_matches(pid, birth)
     except psutil.NoSuchProcess:
         return False
     except psutil.AccessDenied:
